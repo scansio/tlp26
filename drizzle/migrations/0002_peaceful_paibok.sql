@@ -1,0 +1,2 @@
+ALTER TABLE "user_notifications" ADD COLUMN "timezone" varchar(64) DEFAULT 'UTC';--> statement-breakpoint
+ALTER TABLE "user_notifications" ADD COLUMN "updated_at" timestamp with time zone DEFAULT now();
