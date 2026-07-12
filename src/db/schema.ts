@@ -77,24 +77,49 @@ export const userNotifications = pgTable('user_notifications', {
 });
 
 // ---------------------------------------------------------------------------
+// signal_publishers (copy trading — schema only, feature post-launch)
+// Defined before trade_signals so the FK reference resolves cleanly.
+// ---------------------------------------------------------------------------
+export const signalPublishers = pgTable('signal_publishers', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: text('user_id').notNull().unique(),
+  displayName: varchar('display_name', { length: 100 }),
+  strategyDescription: text('strategy_description'),
+  isPublic: boolean('is_public').default(false),
+  totalSignals: integer('total_signals').default(0),
+  winRate: numeric('win_rate', { precision: 5, scale: 2 }),
+  sharpeRatio: numeric('sharpe_ratio', { precision: 8, scale: 4 }),
+  avgRR: numeric('avg_rr', { precision: 8, scale: 4 }),
+  feePercent: numeric('fee_percent', { precision: 5, scale: 2 }).default('0.00'),
+  subscriberCount: integer('subscriber_count').default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
 // trade_signals
 // ---------------------------------------------------------------------------
 export const tradeSignals = pgTable('trade_signals', {
   id: uuid('id').defaultRandom().primaryKey(),
-  userId: varchar('user_id', { length: 255 }).notNull(),
-  symbol: varchar('symbol', { length: 30 }).notNull(),
+  userId: text('user_id').notNull(),
+  symbol: text('symbol').notNull(),
   timeframe: varchar('timeframe', { length: 10 }).notNull(),
-  direction: varchar('direction', { length: 10 }).notNull(), // LONG | SHORT
+  direction: text('direction').notNull(), // LONG | SHORT
   entryPrice: numeric('entry_price', { precision: 20, scale: 8 }),
+  // TS names stopLoss/takeProfit kept to avoid breaking existing callers;
+  // DB columns are stop_loss / take_profit — semantically equivalent to sl/tp in the AC.
   stopLoss: numeric('stop_loss', { precision: 20, scale: 8 }),
   takeProfit: numeric('take_profit', { precision: 20, scale: 8 }),
-  confidence: numeric('confidence', { precision: 5, scale: 2 }),
+  // confidence changed from numeric to text (LOW | MEDIUM | HIGH)
+  confidence: text('confidence'), // LOW | MEDIUM | HIGH
   reasoning: text('reasoning'),
-  source: varchar('source', { length: 20 }).default('ai'), // ai | tradingview
-  status: varchar('status', { length: 20 }).default('pending'), // pending | executed | cancelled | expired
-  publisherId: uuid('publisher_id'),
+  strategySource: text('strategy_source'),
+  source: text('source').default('ai'), // ai | tradingview | manual | copy
+  status: text('status').default('pending'), // pending | approved | rejected | executed | cancelled | expired
+  // publisherId: nullable FK — set when this signal is a copy of a publisher's signal
+  publisherId: uuid('publisher_id').references(() => signalPublishers.id),
   rawPayload: jsonb('raw_payload'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true }),
 }, (table) => [
   index('ts_user_id_idx').on(table.userId),
@@ -124,26 +149,13 @@ export const tradeExecutions = pgTable('trade_executions', {
 ]);
 
 // ---------------------------------------------------------------------------
-// signal_publishers (copy trading — schema only, feature post-launch)
-// ---------------------------------------------------------------------------
-export const signalPublishers = pgTable('signal_publishers', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  userId: varchar('user_id', { length: 255 }).notNull().unique(),
-  displayName: varchar('display_name', { length: 100 }),
-  description: text('description'),
-  feePercent: numeric('fee_percent', { precision: 5, scale: 2 }).default('0.00'),
-  isPublic: boolean('is_public').default(false),
-  subscriberCount: integer('subscriber_count').default(0),
-  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
-});
-
-// ---------------------------------------------------------------------------
 // signal_subscriptions (copy trading — schema only, feature post-launch)
 // ---------------------------------------------------------------------------
 export const signalSubscriptions = pgTable('signal_subscriptions', {
   id: uuid('id').defaultRandom().primaryKey(),
-  subscriberId: varchar('subscriber_id', { length: 255 }).notNull(),
+  subscriberId: text('subscriber_id').notNull(),
   publisherId: uuid('publisher_id').notNull().references(() => signalPublishers.id),
+  copyRatioPct: integer('copy_ratio_pct').notNull().default(100), // 1–100
   isActive: boolean('is_active').default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (table) => [
