@@ -9,12 +9,13 @@ import {
 import { weatherWorkflow } from './workflows/weather-workflow';
 import { weatherAgent } from './agents/weather-agent';
 import { marketDataTool } from './tools/market-data-tool';
+import { indicatorsTool } from './tools/indicators-tool';
 import { mastraStorage } from './storage';
 
 export const mastra = new Mastra({
   workflows: { weatherWorkflow },
   agents: { weatherAgent },
-  tools: { marketDataTool },
+  tools: { marketDataTool, indicatorsTool },
   storage: mastraStorage,
   logger: new PinoLogger({
     name: 'Mastra',
