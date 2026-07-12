@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "youtrack": {
+      "type": "http",
+      "url": "https://spatialoc.youtrack.cloud/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_YOUTRACK_PERMANENT_TOKEN_HERE"
+      }
+    }
+  },
+  "github": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github@latest"],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "your_github_personal_token"
+    }
+  }
+}

@@ -39,3 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local MCP config (contains real API tokens)
+.mcp.json
+
+# runtime lock files
+.claude/scheduled_tasks.lock
+
+# database (SQLite legacy — project now uses PostgreSQL)
+storage.db
+storage.db-shm
+storage.db-wal
