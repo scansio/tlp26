@@ -1,9 +1,10 @@
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
+import { nanoid } from 'nanoid';
 import ccxt, { type Exchange } from 'ccxt';
 import { db } from '@/db';
-import { userExchanges } from '@/db/schema';
+import { userExchanges, userRiskProfiles } from '@/db/schema';
 import { encrypt } from '@/lib/crypto';
 
 // ---------------------------------------------------------------------------
@@ -167,14 +168,15 @@ export async function POST(req: Request) {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/exchanges — list connected exchanges (never returns keys)
+// GET /api/exchanges — list connected exchanges + webhook config (never returns keys)
 // ---------------------------------------------------------------------------
-export async function GET() {
+export async function GET(req: Request) {
   const { userId } = await auth();
   if (!userId) {
     return new NextResponse('Unauthorized', { status: 401 });
   }
 
+  // Fetch connected exchanges
   const rows = await db
     .select({
       id: userExchanges.id,
@@ -191,5 +193,29 @@ export async function GET() {
       EXCHANGE_PAIRS[(row.exchangeName as SupportedExchange)] ?? [],
   }));
 
-  return NextResponse.json(exchanges);
+  // Fetch or provision webhook token (upsert-on-read)
+  const profiles = await db
+    .select({ webhookToken: userRiskProfiles.webhookToken })
+    .from(userRiskProfiles)
+    .where(eq(userRiskProfiles.userId, userId))
+    .limit(1);
+
+  let webhookToken: string;
+  if (profiles.length === 0 || profiles[0].webhookToken == null) {
+    webhookToken = nanoid(32);
+    await db
+      .insert(userRiskProfiles)
+      .values({ userId, webhookToken })
+      .onConflictDoUpdate({
+        target: userRiskProfiles.userId,
+        set: { webhookToken, updatedAt: new Date() },
+      });
+  } else {
+    webhookToken = profiles[0].webhookToken;
+  }
+
+  const origin = new URL(req.url).origin;
+  const webhookUrl = `${origin}/api/webhooks/tradingview`;
+
+  return NextResponse.json({ exchanges, webhookUrl, webhookToken });
 }
