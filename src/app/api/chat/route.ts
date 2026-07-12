@@ -1,13 +1,19 @@
 import { handleChatStream } from '@mastra/ai-sdk'
 import { toAISdkV5Messages } from '@mastra/ai-sdk/ui'
 import { createUIMessageStreamResponse } from 'ai'
+import { auth } from '@clerk/nextjs/server'
 import { mastra } from '@/mastra'
 import { NextResponse } from 'next/server'
 
-const THREAD_ID = 'example-user-id'
-const RESOURCE_ID = 'weather-chat'
-
 export async function POST(req: Request) {
+  const { userId } = await auth();
+  if (!userId) {
+    return new NextResponse('Unauthorized', { status: 401 });
+  }
+
+  const THREAD_ID = userId
+  const RESOURCE_ID = `chat-${userId}`
+
   const params = await req.json()
   const stream = await handleChatStream({
     mastra,
@@ -25,6 +31,14 @@ export async function POST(req: Request) {
 }
 
 export async function GET() {
+  const { userId } = await auth();
+  if (!userId) {
+    return new NextResponse('Unauthorized', { status: 401 });
+  }
+
+  const THREAD_ID = userId
+  const RESOURCE_ID = `chat-${userId}`
+
   const memory = await mastra.getAgentById('weather-agent').getMemory()
   let response = null
 

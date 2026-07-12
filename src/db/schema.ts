@@ -12,6 +12,18 @@ import {
 } from 'drizzle-orm/pg-core';
 
 // ---------------------------------------------------------------------------
+// users
+// ---------------------------------------------------------------------------
+export const users = pgTable('users', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  clerkUserId: varchar('clerk_user_id', { length: 255 }).notNull().unique(),
+  email: varchar('email', { length: 320 }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index('users_clerk_user_id_idx').on(table.clerkUserId),
+]);
+
+// ---------------------------------------------------------------------------
 // user_risk_profiles
 // ---------------------------------------------------------------------------
 export const userRiskProfiles = pgTable('user_risk_profiles', {
