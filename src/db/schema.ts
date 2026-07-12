@@ -72,6 +72,8 @@ export const userNotifications = pgTable('user_notifications', {
   discordWebhookUrl: text('discord_webhook_url'),
   quietHoursStart: integer('quiet_hours_start'),
   quietHoursEnd: integer('quiet_hours_end'),
+  timezone: varchar('timezone', { length: 64 }).default('UTC'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
 
 // ---------------------------------------------------------------------------

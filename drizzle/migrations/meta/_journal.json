@@ -15,6 +15,13 @@
       "when": 1783894638162,
       "tag": "0001_tearful_norman_osborn",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783896212636,
+      "tag": "0002_peaceful_paibok",
+      "breakpoints": true
     }
   ]
 }
