@@ -22,6 +22,13 @@
       "when": 1783896212636,
       "tag": "0002_peaceful_paibok",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783896987742,
+      "tag": "0003_breezy_randall",
+      "breakpoints": true
     }
   ]
 }
