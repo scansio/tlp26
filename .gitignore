@@ -51,3 +51,4 @@ next-env.d.ts
 storage.db
 storage.db-shm
 storage.db-wal
+.claude/worktrees/
