@@ -28,6 +28,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import { NotificationsSection } from './_components/notifications-section';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -284,7 +285,7 @@ export default function ExchangesPage() {
       <div>
         <h1 className="text-2xl font-bold">Exchange Connections</h1>
         <p className="text-muted-foreground mt-1">
-          Manage your exchange API keys and configure your TradingView webhook.
+          Manage your exchange API keys, configure your TradingView webhook, and set up trade notifications.
         </p>
       </div>
 
@@ -663,6 +664,11 @@ export default function ExchangesPage() {
           </pre>
         </div>
       </Card>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Notifications section                                               */}
+      {/* ------------------------------------------------------------------ */}
+      <NotificationsSection />
     </div>
   );
 }
