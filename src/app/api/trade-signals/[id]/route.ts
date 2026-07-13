@@ -9,9 +9,9 @@
  *  - Runs circuit-breaker checks (applies to both paper and live mode).
  *  - In paper mode: simulates a fill at the signal's entry price with slippage applied,
  *    inserts a trade_execution with mode='paper', does NOT call any exchange API.
- *  - In live mode: the execute-trade-tool is not yet implemented (TLP-16); the signal
- *    is marked 'approved' and a TODO log entry is emitted.
- *  - Updates signal status to 'executed' (paper) or 'approved' (live pending tool).
+ *  - In live mode: decrypts user exchange credentials and places a market order via CCXT,
+ *    inserts a trade_execution with mode='live' and the exchange order ID.
+ *  - Updates signal status to 'executed' on success.
  *
  * DELETE /api/trade-signals/[id]
  *  - Cancels a pending signal (sets status='cancelled').
@@ -24,6 +24,8 @@ import ccxt, { type Exchange } from 'ccxt';
 import { db } from '@/db';
 import { tradeSignals, tradeExecutions, userRiskProfiles } from '@/db/schema';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
+import { executeTradeTool } from '@/mastra/tools/execute-trade-tool';
+import { noopObserve } from '@mastra/core/tools';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -227,23 +229,78 @@ export async function PATCH(
   }
 
   // -------------------------------------------------------------------------
-  // LIVE MODE: execute-trade-tool not yet implemented (TLP-16)
-  // Mark as approved; real execution is deferred.
+  // LIVE MODE: place a real market order via execute-trade-tool
   // -------------------------------------------------------------------------
-  console.warn(
-    `[trade-signals] Live execution deferred for signal ${signalId} — execute-trade-tool (TLP-16) not implemented.`,
-  );
+  const rawPayload = signal.rawPayload as Record<string, unknown> | null;
+  const exchangeName = ((rawPayload?.exchange as string | undefined) ?? 'binance') as
+    | 'binance'
+    | 'bybit'
+    | 'bingx';
 
-  await db
-    .update(tradeSignals)
-    .set({ status: 'approved', updatedAt: new Date() })
-    .where(eq(tradeSignals.id, signalId));
+  const signalEntry = signal.entryPrice ? Number(signal.entryPrice) : null;
+  let liveEntryPrice = signalEntry;
+  if (!liveEntryPrice) {
+    liveEntryPrice = await fetchLivePrice(signal.symbol, exchangeName);
+  }
+
+  if (!liveEntryPrice) {
+    return NextResponse.json(
+      { error: 'Cannot determine entry price — entry price missing and live price unavailable.' },
+      { status: 422 },
+    );
+  }
+
+  // Compute position size in USDT from risk profile
+  const paperBalance = profile?.paperBalanceUsd ? Number(profile.paperBalanceUsd) : 10_000;
+  const riskPct = profile?.riskPerTradePct ? Number(profile.riskPerTradePct) : 1;
+  const signalStopLoss = signal.stopLoss ? Number(signal.stopLoss) : null;
+  let positionSizeUsdt = 100; // fallback
+  if (signalStopLoss !== null && Math.abs(liveEntryPrice - signalStopLoss) > 0) {
+    const riskAmount = paperBalance * (riskPct / 100);
+    const slDistance = Math.abs(liveEntryPrice - signalStopLoss);
+    positionSizeUsdt = (riskAmount / slDistance) * liveEntryPrice;
+  }
+
+  const toolResult = await executeTradeTool.execute!(
+    {
+      userId,
+      signalId,
+      exchange: exchangeName,
+      symbol: signal.symbol,
+      direction: signal.direction as 'LONG' | 'SHORT',
+      entryPrice: liveEntryPrice,
+      positionSizeUsdt,
+      sl: signal.stopLoss ? Number(signal.stopLoss) : undefined,
+      tp: signal.takeProfit ? Number(signal.takeProfit) : undefined,
+      mode: 'live',
+      slippagePct,
+    },
+    { observe: noopObserve },
+  ) as {
+    success: boolean;
+    executionId: string | null;
+    exchangeOrderId: string | null;
+    fillPrice: number | null;
+    mode: 'paper' | 'live';
+    signalStatus: string;
+    message: string;
+  };
+
+  if (!toolResult.success) {
+    return NextResponse.json(
+      { error: toolResult.message, signalId, mode: 'live' },
+      { status: 422 },
+    );
+  }
 
   return NextResponse.json({
     signalId,
-    status: 'approved',
+    executionId: toolResult.executionId,
+    exchangeOrderId: toolResult.exchangeOrderId,
+    status: 'executed',
     mode: 'live',
-    message: 'Signal approved for live execution. Execute-trade integration (TLP-16) pending.',
+    fillPrice: toolResult.fillPrice,
+    message: toolResult.message,
   });
 }
 

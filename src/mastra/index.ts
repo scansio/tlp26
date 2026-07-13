@@ -19,6 +19,7 @@ import { orderbookTool } from './tools/orderbook-tool';
 import { newsTool } from './tools/news-tool';
 import { onchainTool } from './tools/onchain-tool';
 import { riskTool } from './tools/risk-tool';
+import { executeTradeTool } from './tools/execute-trade-tool';
 import { mastraStorage } from './storage';
 
 export const mastra = new Mastra({
@@ -33,6 +34,7 @@ export const mastra = new Mastra({
     newsTool,
     onchainTool,
     riskTool,
+    executeTradeTool,
   },
   storage: mastraStorage,
   logger: new PinoLogger({
