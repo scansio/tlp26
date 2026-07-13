@@ -24,7 +24,15 @@ npm install
 cp .env.example .env.local
 ```
 
-Edit `.env.local` and fill in the required values (Clerk keys, encryption secret, etc.). The `DATABASE_URL` is pre-configured for the Docker service below.
+Edit `.env.local` and fill in the required values. The `DATABASE_URL` is pre-configured for the Docker service below.
+
+**Generate the encryption secret** (required for storing exchange API keys):
+
+```bash
+openssl rand -hex 32
+```
+
+Copy the output and set it as `EXCHANGE_KEY_ENCRYPTION_SECRET` in `.env.local`. Keep this value secret and consistent — changing it will invalidate all stored exchange API keys.
 
 ### 3. Start dev services (PostgreSQL)
 
