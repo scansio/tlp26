@@ -74,10 +74,6 @@ const saveRiskProfileTool = createTool({
   },
 });
 
-// ---------------------------------------------------------------------------
-// Verify no stale profile exists (used during GET recall — no-op here, but
-// the agent can read from memory for subsequent sessions).
-// ---------------------------------------------------------------------------
 export const setupAgent = new Agent({
   id: 'setup-agent',
   name: 'Risk Profile Setup Agent',
