@@ -1,10 +1,10 @@
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { eq } from 'drizzle-orm';
+import { eq, and, count } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import ccxt, { type Exchange } from 'ccxt';
 import { db } from '@/db';
-import { userExchanges, userRiskProfiles } from '@/db/schema';
+import { userExchanges, userRiskProfiles, tradeExecutions } from '@/db/schema';
 import { encrypt } from '@/lib/crypto';
 
 // ---------------------------------------------------------------------------
@@ -187,10 +187,29 @@ export async function GET(req: Request) {
     .from(userExchanges)
     .where(eq(userExchanges.userId, userId));
 
+  // Fetch open position counts per exchange for pre-delete warning
+  const openCounts = await db
+    .select({
+      exchangeName: tradeExecutions.exchangeName,
+      openCount: count(tradeExecutions.id),
+    })
+    .from(tradeExecutions)
+    .where(
+      and(
+        eq(tradeExecutions.userId, userId),
+        eq(tradeExecutions.status, 'open'),
+      ),
+    )
+    .groupBy(tradeExecutions.exchangeName);
+
+  const openCountMap = Object.fromEntries(
+    openCounts.map((r) => [r.exchangeName, Number(r.openCount)]),
+  );
+
   const exchanges = rows.map((row) => ({
     ...row,
-    supportedPairs:
-      EXCHANGE_PAIRS[(row.exchangeName as SupportedExchange)] ?? [],
+    supportedPairs: EXCHANGE_PAIRS[(row.exchangeName as SupportedExchange)] ?? [],
+    openPositions: openCountMap[row.exchangeName] ?? 0,
   }));
 
   // Fetch or provision webhook token (upsert-on-read)
