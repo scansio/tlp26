@@ -18,6 +18,8 @@ export interface SignalFeeData {
   breakEvenDistance: number;
   slDistancePct?: number;
   riskReward?: number;
+  positionSizeUsdt?: number | null;
+  positionSizeUnits?: number | null;
 }
 
 export interface QueueSignal {
@@ -356,6 +358,21 @@ export function SignalApprovalCard({
             )}
           </div>
         </div>
+
+        {/* Estimated position size */}
+        {feeData?.positionSizeUsdt != null && (
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground text-xs">Est. Position</span>
+            <span className="font-medium">
+              ${fmt(feeData.positionSizeUsdt, 2)}
+              {feeData.positionSizeUnits != null && (
+                <span className="text-muted-foreground font-normal">
+                  {' '}({fmt(feeData.positionSizeUnits, feeData.positionSizeUnits >= 1 ? 2 : 6)} units)
+                </span>
+              )}
+            </span>
+          </div>
+        )}
 
         {/* Expected P&L net of fees */}
         {feeData && (
