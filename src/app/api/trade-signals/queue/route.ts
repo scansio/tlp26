@@ -25,6 +25,8 @@ function computeFeeData(
   stopLoss: string | null,
   takeProfit: string | null,
   slippagePct: number,
+  accountBalance: number | null,
+  riskPerTradePct: number | null,
 ) {
   const entry = Number(entryPrice);
   const sl = Number(stopLoss);
@@ -51,6 +53,20 @@ function computeFeeData(
   const r = (n: number, dp: number) =>
     Math.round(n * Math.pow(10, dp)) / Math.pow(10, dp);
 
+  // Position sizing — mirrors risk-tool.ts and backtester.ts formula:
+  // N = (balance × riskPerTradePct%) / (slDistanceRate + totalDragRate)
+  let positionSizeUsdt: number | null = null;
+  let positionSizeUnits: number | null = null;
+  if (accountBalance && accountBalance > 0 && riskPerTradePct && riskPerTradePct > 0) {
+    const totalDragRate = roundTripFeeRate + slippageRate;
+    const maxRiskUsdt = accountBalance * (riskPerTradePct / 100);
+    const rawPositionSizeUsdt = maxRiskUsdt / (slDistanceRate + totalDragRate);
+    if (rawPositionSizeUsdt > 0) {
+      positionSizeUsdt = r(rawPositionSizeUsdt, 2);
+      positionSizeUnits = r(rawPositionSizeUsdt / entry, 6);
+    }
+  }
+
   return {
     grossExpectedProfit: r(grossExpectedProfit * 100, 4),
     netExpectedProfit: r(netExpectedProfit * 100, 4),
@@ -60,6 +76,8 @@ function computeFeeData(
     breakEvenDistance: r((roundTripFeeRate + slippageRate) * 100, 4),
     slDistancePct: r(slDistanceRate * 100, 2),
     riskReward: r(rr, 2),
+    positionSizeUsdt,
+    positionSizeUnits,
   };
 }
 
@@ -69,12 +87,14 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // Fetch user's risk profile for tradingMode and slippage
+  // Fetch user's risk profile for tradingMode, slippage, and position sizing
   const [profile] = await db
     .select({
       tradingMode: userRiskProfiles.tradingMode,
       executionMode: userRiskProfiles.executionMode,
       slippagePct: userRiskProfiles.slippagePct,
+      riskPerTradePct: userRiskProfiles.riskPerTradePct,
+      paperBalanceUsd: userRiskProfiles.paperBalanceUsd,
     })
     .from(userRiskProfiles)
     .where(eq(userRiskProfiles.userId, userId))
@@ -84,6 +104,8 @@ export async function GET() {
   const slippagePct = profile?.slippagePct
     ? Number(profile.slippagePct)
     : DEFAULT_SLIPPAGE_PCT;
+  const riskPerTradePct = profile?.riskPerTradePct ? Number(profile.riskPerTradePct) : 1;
+  const accountBalance = profile?.paperBalanceUsd ? Number(profile.paperBalanceUsd) : 10_000;
 
   // For auto-execution users: return history (last 50 signals, any status)
   // For manual users: return only pending signals
@@ -143,6 +165,8 @@ export async function GET() {
       row.stopLoss,
       row.takeProfit,
       slippagePct,
+      accountBalance,
+      riskPerTradePct,
     ),
   }));
 
