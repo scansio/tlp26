@@ -64,6 +64,13 @@
       "when": 1783931124348,
       "tag": "0008_hard_invisible_woman",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1783930624095,
+      "tag": "0009_wild_scarlet_spider",
+      "breakpoints": true
     }
   ]
 }

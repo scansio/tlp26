@@ -6,6 +6,7 @@ import { patternTool } from '../tools/pattern-tool';
 import { orderbookTool } from '../tools/orderbook-tool';
 import { newsTool } from '../tools/news-tool';
 import { onchainTool } from '../tools/onchain-tool';
+import { riskTool } from '../tools/risk-tool';
 
 export const tradingAgent = new Agent({
   id: 'trading-agent',
@@ -52,6 +53,14 @@ Step 7 — Gather on-chain and derivatives data
 
 Step 8 — Synthesize and decide
   Combine all tool outputs. Apply the conflict rules below. Produce the structured output.
+
+Step 9 — Size the position and assess fee viability
+  If action is ENTER_LONG or ENTER_SHORT, call risk-tool with:
+  - exchange, accountBalance, riskPerTradePct, entryPrice (mid of entryZone), sl, tp, direction (LONG or SHORT)
+  - slippagePct from the user's profile if provided
+  The risk-tool returns netExpectedProfit, netExpectedLoss, totalFeeCost, and breakEvenDistance.
+  Include these in your reasoning. If netExpectedProfit is negative or breakEvenDistance exceeds the SL distance,
+  downgrade action to HOLD and explain the fee drag makes the trade unviable.
 
 ═══════════════════════════════════════════════════════
 CONFLICT RULES — AUTOMATIC CONFIDENCE DOWNGRADE
@@ -119,5 +128,6 @@ The user will provide in their message:
     orderbookTool,
     newsTool,
     onchainTool,
+    riskTool,
   },
 });

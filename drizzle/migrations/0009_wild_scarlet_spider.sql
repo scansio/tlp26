@@ -1,0 +1,1 @@
+ALTER TABLE "user_risk_profiles" ADD COLUMN "slippage_pct" numeric(5, 3) DEFAULT '0.050';
