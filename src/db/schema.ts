@@ -39,6 +39,7 @@ export const userRiskProfiles = pgTable('user_risk_profiles', {
   preferredTimeframes: jsonb('preferred_timeframes').$type<string[]>().default([]),
   allowedSymbols: jsonb('allowed_symbols').$type<string[]>().default([]),
   killSwitchActive: boolean('kill_switch_active').default(false),
+  maxOpenPositions: integer('max_open_positions').default(5),
   tradingMode: varchar('trading_mode', { length: 20 }).default('manual'),
   webhookToken: varchar('webhook_token', { length: 128 }),
   isActive: boolean('is_active').default(true),
