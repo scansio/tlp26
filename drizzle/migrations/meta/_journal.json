@@ -64,6 +64,13 @@
       "when": 1783931124348,
       "tag": "0008_hard_invisible_woman",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1783931588708,
+      "tag": "0009_lumpy_xorn",
+      "breakpoints": true
     }
   ]
 }
