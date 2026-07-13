@@ -255,7 +255,7 @@ export default function PublisherPublicPage() {
     loadProfile(publisherId)
       .catch(() => setError('Network error. Please try again.'))
       .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [publisherId]);
 
   async function handleSubscribe(form: SubscribeFormState) {

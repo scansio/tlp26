@@ -6,9 +6,11 @@ import {
   boolean,
   numeric,
   timestamp,
+  bigint,
   jsonb,
   uuid,
   index,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
 // ---------------------------------------------------------------------------
@@ -184,16 +186,16 @@ export const signalSubscriptions = pgTable('signal_subscriptions', {
 // ---------------------------------------------------------------------------
 export const ohlcvCache = pgTable('ohlcv_cache', {
   id: uuid('id').defaultRandom().primaryKey(),
-  symbol: varchar('symbol', { length: 30 }).notNull(),
-  timeframe: varchar('timeframe', { length: 10 }).notNull(),
-  timestamp: timestamp('timestamp', { withTimezone: true }).notNull(),
+  symbol: text('symbol').notNull(),
+  timeframe: text('timeframe').notNull(),
+  timestamp: bigint('timestamp', { mode: 'number' }).notNull(),
   open: numeric('open', { precision: 20, scale: 8 }).notNull(),
   high: numeric('high', { precision: 20, scale: 8 }).notNull(),
   low: numeric('low', { precision: 20, scale: 8 }).notNull(),
   close: numeric('close', { precision: 20, scale: 8 }).notNull(),
   volume: numeric('volume', { precision: 30, scale: 8 }).notNull(),
 }, (table) => [
-  index('oc_symbol_tf_ts_idx').on(table.symbol, table.timeframe, table.timestamp),
+  uniqueIndex('oc_symbol_tf_ts_idx').on(table.symbol, table.timeframe, table.timestamp),
 ]);
 
 // ---------------------------------------------------------------------------
