@@ -8,6 +8,8 @@ const isPublicRoute = createRouteMatcher([
   '/api/auth/webhook',
   // Public API for publisher profiles (no auth needed for read)
   '/api/copy/publishers/(.*)',
+  // Cron routes are authenticated via CRON_SECRET header, not Clerk session
+  '/api/cron/(.*)',
 ]);
 
 export default clerkMiddleware(async (auth, request) => {
