@@ -277,8 +277,16 @@ export const publisherEarnings = pgTable('publisher_earnings', {
   tradeId: uuid('trade_id').references(() => tradeExecutions.id),
   profitAmount: numeric('profit_amount', { precision: 20, scale: 8 }).notNull(),
   feeAmount: numeric('fee_amount', { precision: 20, scale: 8 }).notNull(),
+  // Platform's cut of the publisher's performance fee (e.g. 20% of feeAmount)
+  platformCutAmount: numeric('platform_cut_amount', { precision: 20, scale: 8 }).notNull().default('0'),
+  // Net amount the publisher actually earns after platform cut
+  publisherNetAmount: numeric('publisher_net_amount', { precision: 20, scale: 8 }).notNull().default('0'),
+  // YYYY-MM bucket for monthly settlement grouping
   period: varchar('period', { length: 20 }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (table) => [
   index('pe_publisher_id_idx').on(table.publisherId),
+  index('pe_subscriber_id_idx').on(table.subscriberId),
+  // Ensures idempotency: one earnings record per closed trade
+  uniqueIndex('pe_trade_id_unique_idx').on(table.tradeId),
 ]);

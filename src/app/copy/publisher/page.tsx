@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -263,11 +264,20 @@ export default function PublisherProfilePage() {
 
   return (
     <div className="max-w-2xl mx-auto py-10 px-4 space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold">Publisher Profile</h1>
-        <p className="text-muted-foreground mt-1">
-          Share your AI signals publicly and build a track record for performance-fee income.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">Publisher Profile</h1>
+          <p className="text-muted-foreground mt-1">
+            Share your AI signals publicly and build a track record for performance-fee income.
+          </p>
+        </div>
+        {profile && (
+          <Link href="/copy/publisher/earnings">
+            <Button variant="outline" size="sm" className="shrink-0">
+              View Earnings
+            </Button>
+          </Link>
+        )}
       </div>
 
       {/* ------------------------------------------------------------------ */}
@@ -433,14 +443,14 @@ export default function PublisherProfilePage() {
               <Input
                 type="number"
                 min="0"
-                max="50"
+                max="30"
                 step="0.01"
                 placeholder="0.00"
                 value={form.feePercent}
                 onChange={(e) => setField('feePercent', e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Fee charged on profitable trades. Range: 0–50%.
+                Fee charged on profitable copied trades only. Range: 0–30%.
               </p>
             </div>
           </>

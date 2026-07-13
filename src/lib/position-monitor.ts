@@ -47,6 +47,7 @@ import {
 } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
 import { sendNotification } from '@/lib/notifications';
+import { accruePublisherFee } from '@/lib/publisher-fee';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -157,8 +158,11 @@ function computePnl(
   entryPrice: number,
   exitPrice: number,
   positionSize: number,
+  direction: string = 'LONG',
 ): number {
-  return (exitPrice - entryPrice) * positionSize;
+  return direction === 'LONG'
+    ? (exitPrice - entryPrice) * positionSize
+    : (entryPrice - exitPrice) * positionSize;
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +330,7 @@ async function closePosition(
   executionId: string,
   exitPrice: number,
   fillType: FillType,
+  realizedPnl: number = 0,
 ): Promise<void> {
   await db
     .update(tradeExecutions)
@@ -334,8 +339,12 @@ async function closePosition(
       exitAt: new Date(),
       status: 'closed',
       fillType,
+      realizedPnl: String(realizedPnl),
     })
     .where(eq(tradeExecutions.id, executionId));
+
+  // Accrue performance fee for copy trades with positive P&L (fire-and-forget)
+  void accruePublisherFee(executionId, realizedPnl);
 }
 
 async function updateTrailState(
@@ -454,9 +463,9 @@ async function applyTrailingLogic(
       : currentPrice >= updatedTrailSl;
 
     if (slHit) {
-      await closePosition(position.id, currentPrice, 'sl_hit');
       const positionSize = position.positionSize ? parseFloat(position.positionSize) : 0;
-      const pnl = computePnl(entry, currentPrice, positionSize);
+      const pnl = computePnl(entry, currentPrice, positionSize, direction);
+      await closePosition(position.id, currentPrice, 'sl_hit', pnl);
       void sendNotification(position.userId, {
         event: 'sl_hit',
         symbol: position.symbol,
@@ -522,9 +531,9 @@ async function applyTrailingLogic(
           : currentPrice >= activeFloor;
 
         if (tpFloorBreached) {
-          await closePosition(position.id, currentPrice, 'tp_hit');
           const positionSize = position.positionSize ? parseFloat(position.positionSize) : 0;
-          const pnl = computePnl(entry, currentPrice, positionSize);
+          const pnl = computePnl(entry, currentPrice, positionSize, direction);
+          await closePosition(position.id, currentPrice, 'tp_hit', pnl);
           void sendNotification(position.userId, {
             event: 'tp_hit',
             symbol: position.symbol,
@@ -739,9 +748,10 @@ class PositionMonitorManager {
 
             const entryPrice = position.entryPrice ? parseFloat(position.entryPrice) : 0;
             const positionSize = position.positionSize ? parseFloat(position.positionSize) : 0;
-            const pnl = computePnl(entryPrice, fillPrice, positionSize);
+            const fillDirection = position.direction ?? 'LONG';
+            const pnl = computePnl(entryPrice, fillPrice, positionSize, fillDirection);
 
-            await closePosition(position.id, fillPrice, fillType);
+            await closePosition(position.id, fillPrice, fillType, pnl);
 
             const notifEvent =
               fillType === 'sl_hit'      ? 'sl_hit' as const :
@@ -926,9 +936,9 @@ class PositionMonitorManager {
 
             const entryPrice = position.entryPrice ? parseFloat(position.entryPrice) : 0;
             const positionSize = position.positionSize ? parseFloat(position.positionSize) : 0;
-            const pnl = computePnl(entryPrice, currentPrice, positionSize);
+            const pnl = computePnl(entryPrice, currentPrice, positionSize, direction);
 
-            await closePosition(position.id, currentPrice, fillType);
+            await closePosition(position.id, currentPrice, fillType, pnl);
 
             const notifEvent = fillType === 'sl_hit' ? 'sl_hit' as const : 'tp_hit' as const;
             void sendNotification(userId, {
