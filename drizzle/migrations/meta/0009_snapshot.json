@@ -1,6 +1,6 @@
 {
-  "id": "dde152a8-ea3d-4830-8ab8-405fd5f9c9d5",
-  "prevId": "96f083b0-b2ff-4376-bd3a-93a75825b33f",
+  "id": "fbd66ae7-c5ca-4fe4-a930-11ca8a8b6d45",
+  "prevId": "dde152a8-ea3d-4830-8ab8-405fd5f9c9d5",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -84,19 +84,19 @@
         },
         "symbol": {
           "name": "symbol",
-          "type": "text",
+          "type": "varchar(30)",
           "primaryKey": false,
           "notNull": true
         },
         "timeframe": {
           "name": "timeframe",
-          "type": "text",
+          "type": "varchar(10)",
           "primaryKey": false,
           "notNull": true
         },
         "timestamp": {
           "name": "timestamp",
-          "type": "bigint",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
         },
@@ -154,7 +154,7 @@
               "nulls": "last"
             }
           ],
-          "isUnique": true,
+          "isUnique": false,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -1092,13 +1092,6 @@
           "notNull": false,
           "default": false
         },
-        "max_open_positions": {
-          "name": "max_open_positions",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "default": 5
-        },
         "trading_mode": {
           "name": "trading_mode",
           "type": "varchar(20)",
@@ -1111,6 +1104,13 @@
           "type": "varchar(128)",
           "primaryKey": false,
           "notNull": false
+        },
+        "slippage_pct": {
+          "name": "slippage_pct",
+          "type": "numeric(5, 3)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'0.050'"
         },
         "is_active": {
           "name": "is_active",

@@ -21,6 +21,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Alert } from '@/components/ui/alert';
+import { CircuitBreakerPanel } from '@/components/circuit-breaker/circuit-breaker-panel';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -687,6 +688,9 @@ export default function RiskProfilePage() {
           )}
         </Card>
       )}
+
+      {/* Circuit Breaker */}
+      <CircuitBreakerPanel />
 
       {/* Main content */}
       <Card className="p-6">
