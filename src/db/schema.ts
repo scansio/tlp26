@@ -157,18 +157,24 @@ export const tradeExecutions = pgTable('trade_executions', {
 ]);
 
 // ---------------------------------------------------------------------------
-// signal_subscriptions (copy trading — schema only, feature post-launch)
+// signal_subscriptions (copy trading — subscription flow TLP-33)
 // ---------------------------------------------------------------------------
 export const signalSubscriptions = pgTable('signal_subscriptions', {
   id: uuid('id').defaultRandom().primaryKey(),
   subscriberId: text('subscriber_id').notNull(),
   publisherId: uuid('publisher_id').notNull().references(() => signalPublishers.id),
   copyRatioPct: integer('copy_ratio_pct').notNull().default(100), // 1–100
+  // auto-copy: execute immediately; review-copy: signal goes to approval queue
+  executionMode: varchar('execution_mode', { length: 20 }).notNull().default('review-copy'),
+  // Optional dollar cap per copied trade (null = no cap)
+  maxPositionSizeCap: numeric('max_position_size_cap', { precision: 20, scale: 2 }),
   isActive: boolean('is_active').default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => [
   index('ss_subscriber_id_idx').on(table.subscriberId),
   index('ss_publisher_id_idx').on(table.publisherId),
+  index('ss_sub_pub_idx').on(table.subscriberId, table.publisherId),
 ]);
 
 // ---------------------------------------------------------------------------

@@ -1,50 +1,80 @@
+import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '@/db';
-import { signalPublishers } from '@/db/schema';
+import { signalPublishers, signalSubscriptions } from '@/db/schema';
 
 // ---------------------------------------------------------------------------
-// GET /api/copy/publishers/[publisherId] — public publisher profile endpoint
-// No auth required — returns public-safe fields only.
+// GET /api/copy/publishers/[publisherId]
+// Returns the publisher's public profile plus the current user's subscription
+// status (if any). Merges public-safe fields from TLP-31 with the
+// subscription-awareness added in TLP-33.
 // ---------------------------------------------------------------------------
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ publisherId: string }> },
 ) {
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { publisherId } = await params;
 
   if (!publisherId) {
     return NextResponse.json({ error: 'publisherId is required' }, { status: 400 });
   }
 
-  const rows = await db
+  const [publisher] = await db
     .select()
     .from(signalPublishers)
-    .where(eq(signalPublishers.id, publisherId))
+    .where(
+      and(
+        eq(signalPublishers.id, publisherId),
+        eq(signalPublishers.isPublic, true),
+      ),
+    )
     .limit(1);
 
-  if (rows.length === 0) {
+  if (!publisher) {
     return NextResponse.json({ error: 'Publisher not found' }, { status: 404 });
   }
 
-  const p = rows[0];
+  // Check if the current user is already subscribed
+  const [existingSubscription] = await db
+    .select({
+      id: signalSubscriptions.id,
+      isActive: signalSubscriptions.isActive,
+      copyRatioPct: signalSubscriptions.copyRatioPct,
+      executionMode: signalSubscriptions.executionMode,
+    })
+    .from(signalSubscriptions)
+    .where(
+      and(
+        eq(signalSubscriptions.subscriberId, userId),
+        eq(signalSubscriptions.publisherId, publisherId),
+      ),
+    )
+    .limit(1);
 
-  // Return public-safe fields — no userId, no internal identifiers
   return NextResponse.json({
-    id: p.id,
-    displayName: p.displayName,
-    strategyDescription: p.strategyDescription,
-    isPublic: p.isPublic,
-    isActive: p.isActive,
-    shareIndividualTrades: p.shareIndividualTrades,
+    id: publisher.id,
+    displayName: publisher.displayName,
+    strategyDescription: publisher.strategyDescription,
+    isPublic: publisher.isPublic,
+    isActive: publisher.isActive,
+    shareIndividualTrades: publisher.shareIndividualTrades,
+    feePercent: publisher.feePercent,
     stats: {
-      totalSignals: p.totalSignals,
-      winRate: p.winRate,
-      avgRR: p.avgRR,
-      sharpeRatio: p.sharpeRatio,
-      maxDrawdown: p.maxDrawdown,
-      subscriberCount: p.subscriberCount,
+      totalSignals: publisher.totalSignals,
+      winRate: publisher.winRate,
+      avgRR: publisher.avgRR,
+      sharpeRatio: publisher.sharpeRatio,
+      maxDrawdown: publisher.maxDrawdown,
+      subscriberCount: publisher.subscriberCount,
     },
-    createdAt: p.createdAt,
+    createdAt: publisher.createdAt,
+    isSelf: publisher.userId === userId,
+    subscription: existingSubscription ?? null,
   });
 }
