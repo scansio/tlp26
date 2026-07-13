@@ -12,11 +12,10 @@
  *     fetchOnchainSignals   — funding rate + netflow + liquidation levels
  *  7. agentDecision         — trading-agent synthesizes everything
  *  8. calculateRisk         — position size + net P&L after fees/slippage
- *  9. routeSignal           — persist to trade_signals; auto-execute deferred
+ *  9. routeSignal           — persist to trade_signals; execute via execute-trade-tool
+ *                             when executionMode is 'auto' (live) or 'paper'
  *
  * Each step wraps its execute body in a 30-second Promise.race timeout.
- * The execute-trade-tool is not yet implemented (TLP-16); the auto-execute
- * branch in step 9 logs a warning and is marked deferred.
  */
 
 import { createStep, createWorkflow } from '@mastra/core/workflows';
@@ -25,6 +24,8 @@ import { db } from '@/db';
 import { tradeSignals, userRiskProfiles } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { propagatePublisherSignal } from '@/lib/copy-mirror-engine';
+import { executeTradeTool } from '../tools/execute-trade-tool';
+import { noopObserve } from '@mastra/core/tools';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -682,13 +683,23 @@ const step9OutputSchema = z.object({
   symbol: z.string(),
   userId: z.string(),
   executionMode: z.string(),
-  autoExecuteDeferred: z.boolean(),
+  executionResult: z
+    .object({
+      success: z.boolean(),
+      executionId: z.string().nullable(),
+      exchangeOrderId: z.string().nullable(),
+      fillPrice: z.number().nullable(),
+      mode: z.enum(['paper', 'live']),
+      signalStatus: z.string(),
+      message: z.string(),
+    })
+    .nullable(),
 });
 
 const routeSignal = createStep({
   id: 'routeSignal',
   description:
-    'Persist the trade signal to the database. Auto-execute branch is deferred pending TLP-16.',
+    'Persist the trade signal to the database and execute it when executionMode is auto (live) or paper.',
   inputSchema: step8OutputSchema,
   outputSchema: step9OutputSchema,
   execute: async ({ inputData }) => {
@@ -703,7 +714,7 @@ const routeSignal = createStep({
           symbol,
           userId,
           executionMode: 'n/a',
-          autoExecuteDeferred: false,
+          executionResult: null,
         };
       }
 
@@ -724,8 +735,9 @@ const routeSignal = createStep({
       const onChainFundingBias = onchain?.fundingBias ?? null;
       const onChainNetflow = onchain?.exchangeNetflow != null ? String(onchain.exchangeNetflow) : null;
 
-      // Look up the user's execution mode
+      // Look up the user's execution mode and slippage from risk profile
       let executionMode = 'paper';
+      let slippagePct = 0.05;
       try {
         const [profile] = await db
           .select()
@@ -734,6 +746,7 @@ const routeSignal = createStep({
           .limit(1);
         if (profile) {
           executionMode = profile.executionMode ?? 'paper';
+          slippagePct = profile.slippagePct ? parseFloat(profile.slippagePct) : 0.05;
         }
       } catch (err) {
         console.warn('routeSignal: could not load risk profile, defaulting to paper', err);
@@ -778,14 +791,44 @@ const routeSignal = createStep({
         void propagatePublisherSignal(signalId, userId);
       }
 
-      // Auto-execute branch: deferred until TLP-16 (execute-trade-tool) is implemented
-      let autoExecuteDeferred = false;
-      if (executionMode === 'auto') {
-        console.warn(
-          `routeSignal: executionMode=auto detected for signal ${signalId} but execute-trade-tool ` +
-            `is not yet implemented (TLP-16). Signal saved as pending — manual approval required.`,
-        );
-        autoExecuteDeferred = true;
+      // Auto-execute branch: call execute-trade-tool when mode is 'auto' or 'paper'
+      // 'auto' = place live order immediately without manual approval
+      // 'paper' = simulate fill immediately
+      let executionResult = null;
+      const shouldAutoExecute = executionMode === 'auto' || executionMode === 'paper';
+
+      if (shouldAutoExecute && signalId && entryPrice) {
+        const positionSizeUsdt = inputData.riskCalculation?.positionSizeUsdt ?? 100;
+        const toolMode = executionMode === 'auto' ? 'live' : 'paper';
+
+        try {
+          executionResult = await executeTradeTool.execute!(
+            {
+              userId,
+              signalId,
+              exchange: exchange as 'binance' | 'bybit' | 'bingx',
+              symbol,
+              direction: direction as 'LONG' | 'SHORT',
+              entryPrice,
+              positionSizeUsdt,
+              sl: inputData.sl ?? undefined,
+              tp: inputData.tp ?? undefined,
+              mode: toolMode,
+              slippagePct,
+            },
+            { observe: noopObserve },
+          ) as {
+            success: boolean;
+            executionId: string | null;
+            exchangeOrderId: string | null;
+            fillPrice: number | null;
+            mode: 'paper' | 'live';
+            signalStatus: string;
+            message: string;
+          };
+        } catch (err) {
+          console.error('routeSignal: execute-trade-tool threw unexpectedly', err);
+        }
       }
 
       return {
@@ -794,7 +837,7 @@ const routeSignal = createStep({
         symbol,
         userId,
         executionMode,
-        autoExecuteDeferred,
+        executionResult,
       };
     };
 
