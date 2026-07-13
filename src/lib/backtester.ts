@@ -64,6 +64,11 @@ export interface BacktestInput {
    * Starting account balance in USDT. Defaults to 10 000.
    */
   initialBalance?: number;
+  /**
+   * Override which strategies to simulate. When omitted the user's risk profile
+   * strategies are used.
+   */
+  strategies?: StrategyName[];
 }
 
 export interface EquityPoint {
@@ -85,6 +90,16 @@ export interface StrategyMetrics {
   equityCurve: EquityPoint[];
 }
 
+export interface TradeRecord {
+  date: string; // ISO timestamp of trade exit
+  symbol: string;
+  direction: 'LONG' | 'SHORT';
+  entry: number;
+  exit: number;
+  pnl: number;
+  strategy: StrategyName;
+}
+
 export interface BacktestResult {
   id: string;
   userId: string;
@@ -101,6 +116,7 @@ export interface BacktestResult {
     totalReturnPct: number;
     equityCurve: EquityPoint[];
     perStrategy: StrategyMetrics[];
+    trades: TradeRecord[];
   };
   equityCurve: EquityPoint[];
   createdAt: Date;
@@ -568,7 +584,10 @@ function computeATR(candles: OHLCVCandle[], period: number): number {
 // Main backtest runner
 // ---------------------------------------------------------------------------
 
-export async function runBacktest(input: BacktestInput): Promise<BacktestResult> {
+export async function runBacktest(
+  input: BacktestInput,
+  onProgress?: (percentComplete: number) => void,
+): Promise<BacktestResult> {
   const {
     userId,
     symbol,
@@ -577,6 +596,7 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
     endDate,
     exchange: exchangeId = 'binance',
     initialBalance = 10_000,
+    strategies: strategiesOverride,
   } = input;
 
   // -------------------------------------------------------------------------
@@ -592,7 +612,12 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
     throw new Error(`Risk profile not found for userId: ${userId}`);
   }
 
-  const strategies = (profile.strategies ?? []) as StrategyName[];
+  // Use caller-provided strategies if given; fall back to the risk profile
+  const strategies: StrategyName[] =
+    strategiesOverride && strategiesOverride.length > 0
+      ? strategiesOverride
+      : ((profile.strategies ?? []) as StrategyName[]);
+
   if (strategies.length === 0) {
     throw new Error('No strategies configured in risk profile.');
   }
@@ -660,7 +685,19 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
   let dailyTrades = 0;
   let dailyLoss = 0;
 
+  const totalLiveCandles = allCandles.length - firstLiveIdx;
+  let lastReportedPct = 0;
+
   for (let i = firstLiveIdx; i < allCandles.length; i++) {
+    // Report progress every ~2% to avoid flooding the callback
+    if (onProgress && totalLiveCandles > 0) {
+      const pct = Math.round(((i - firstLiveIdx) / totalLiveCandles) * 100);
+      if (pct > lastReportedPct) {
+        lastReportedPct = pct;
+        onProgress(pct);
+      }
+    }
+
     const candle = allCandles[i];
     const candleSlice = allCandles.slice(0, i + 1); // history up to and including this candle
 
@@ -884,6 +921,21 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
     };
   });
 
+  // Build the individual trade list for the UI trade-by-trade breakdown
+  const tradeRecords: TradeRecord[] = allTrades
+    .filter((t) => t.exitTimestamp !== undefined && t.exitPrice !== undefined && t.pnl !== undefined)
+    .map((t) => ({
+      date: new Date(t.exitTimestamp!).toISOString(),
+      symbol,
+      direction: t.direction,
+      entry: round2(t.entryPrice),
+      exit: round2(t.exitPrice!),
+      pnl: round2(t.pnl!),
+      strategy: t.strategy,
+    }));
+
+  if (onProgress) onProgress(100);
+
   const metrics = {
     totalTrades: globalMetrics.totalTrades,
     winRate: globalMetrics.winRate,
@@ -896,6 +948,7 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
     totalReturnPct: globalMetrics.totalReturnPct,
     equityCurve: globalEquityCurveOutput,
     perStrategy,
+    trades: tradeRecords,
   };
 
   // -------------------------------------------------------------------------
