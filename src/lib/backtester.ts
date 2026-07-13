@@ -187,7 +187,9 @@ function netPnl(
       ? (exitPrice - entryPrice) * units
       : (entryPrice - exitPrice) * units;
 
-  // Round-trip fees on notional (entry + exit) + one-way slippage on entry
+  // Round-trip fees on notional (entry + exit) + entry-side slippage cost.
+  // Exit-side slippage is already baked into exitPrice at the call site
+  // (exitPrice is adjusted adversely before being passed here).
   const roundTripFee = positionSizeUsdt * 2 * takerFeeRate;
   const slippageCost = positionSizeUsdt * slippageRate;
 
@@ -720,19 +722,23 @@ export async function runBacktest(
       if (position.direction === 'LONG') {
         // SL hit first (pessimistic)
         if (candle.low <= position.stopLoss) {
-          exitPrice = position.stopLoss;
+          // Market sell fills below the SL level (adverse slippage)
+          exitPrice = position.stopLoss * (1 - slippageRate);
           outcome = 'LOSS';
         } else if (candle.high >= position.takeProfit) {
-          exitPrice = position.takeProfit;
+          // Market sell fills below the TP level (adverse slippage)
+          exitPrice = position.takeProfit * (1 - slippageRate);
           outcome = 'WIN';
         }
       } else {
         // SHORT — SL is above, TP below
         if (candle.high >= position.stopLoss) {
-          exitPrice = position.stopLoss;
+          // Market buy fills above the SL level (adverse slippage)
+          exitPrice = position.stopLoss * (1 + slippageRate);
           outcome = 'LOSS';
         } else if (candle.low <= position.takeProfit) {
-          exitPrice = position.takeProfit;
+          // Market buy fills above the TP level (adverse slippage)
+          exitPrice = position.takeProfit * (1 + slippageRate);
           outcome = 'WIN';
         }
       }
