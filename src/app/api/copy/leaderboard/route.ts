@@ -14,9 +14,14 @@ import { db } from '@/db';
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
 
-  // Filter/sort query params
-  const timeframeFocus = searchParams.get('timeframeFocus'); // scalp | swing | position
-  const strategyType   = searchParams.get('strategyType');   // SMC | technical | pattern
+  // Filter/sort query params — enum inputs are whitelisted to prevent SQL injection
+  const VALID_TIMEFRAMES = new Set(['scalp', 'swing', 'position']);
+  const VALID_STRATEGIES = new Set(['SMC', 'technical', 'pattern']);
+
+  const rawTimeframe   = searchParams.get('timeframeFocus');
+  const rawStrategy    = searchParams.get('strategyType');
+  const timeframeFocus = rawTimeframe && VALID_TIMEFRAMES.has(rawTimeframe) ? rawTimeframe : null;
+  const strategyType   = rawStrategy  && VALID_STRATEGIES.has(rawStrategy)  ? rawStrategy  : null;
   const maxDrawdownMax = searchParams.get('maxDrawdownMax'); // e.g. "20" means max drawdown <= 20%
   const sortBy         = searchParams.get('sortBy') ?? 'sharpe'; // sharpe | winRate | totalReturn | subscribers
 
@@ -27,10 +32,10 @@ export async function GET(req: Request) {
   // Build dynamic WHERE clauses for publisher-level filters
   const publisherFilters: string[] = [`sp.is_public = true`];
   if (timeframeFocus) {
-    publisherFilters.push(`sp.timeframe_focus = '${timeframeFocus.replace(/'/g, "''")}'`);
+    publisherFilters.push(`sp.timeframe_focus = '${timeframeFocus}'`);
   }
   if (strategyType) {
-    publisherFilters.push(`sp.strategy_type = '${strategyType.replace(/'/g, "''")}'`);
+    publisherFilters.push(`sp.strategy_type = '${strategyType}'`);
   }
   if (maxDrawdownMax) {
     const val = parseFloat(maxDrawdownMax);
