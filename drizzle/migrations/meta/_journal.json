@@ -36,6 +36,13 @@
       "when": 1783926535833,
       "tag": "0004_crazy_thunderbolt",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1783928615691,
+      "tag": "0005_overjoyed_vulcan",
+      "breakpoints": true
     }
   ]
 }
