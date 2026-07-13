@@ -11,14 +11,22 @@
  * Trailing stop logic (server-side, cross-exchange):
  * - Exit mode is resolved per-position: signal override → user risk profile default → 'fixed'.
  * - TRAILING SL ratchet:
- *     LONG:  trailSlPrice only moves UP   (price × (1 - trailSlPct / 100))
- *     SHORT: trailSlPrice only moves DOWN (price × (1 + trailSlPct / 100))
- * - TRAILING TP: once price reaches the initial TP level, trailTpActive is set to true
- *   and the TP trails price by trailTpPct%. A separate exit fires when price pulls back
- *   below (LONG) or above (SHORT) the trailing TP level.
- * - Activation guard: trailing starts only after price has moved trailActivationPct% in
- *   the profit direction from entry.
- * - Every SL move is appended to trail_audit_log.
+ *     LONG:  trailSlPrice only moves UP   (price × (1 − trailSlPct/100))
+ *     SHORT: trailSlPrice only moves DOWN (price × (1 + trailSlPct/100))
+ * - TRAILING TP: activates once price reaches the initial TP level; TP then trails
+ *   by trailTpPct% — exit fires when price retreats below (LONG) or above (SHORT)
+ *   the trailing floor, allowing winners to run further.
+ * - Activation guard: trailing starts only after price has moved trailActivationPct%
+ *   in the profit direction from entry.
+ * - Every SL/TP movement is appended to trail_audit_log with timestamp and trigger price.
+ *
+ * Live mode trailing (ccxt.pro):
+ * - watchTicker drives continuous ratchet updates on each price tick.
+ * - watchOrders handles fill detection and position close on fixed-mode exits.
+ * - For trailing positions in live mode, exchange SL/TP orders remain at their original
+ *   levels as a safety net. Server-side trailing fires a market close when the ratcheted
+ *   SL/TP is breached (via watchTicker), ahead of the exchange's fixed order.
+ *   Full cancel/replace of exchange orders is outside this implementation scope.
  *
  * IMPORTANT — runtime requirement:
  * WebSocket connections require a long-running Node.js process. This monitor
@@ -174,22 +182,24 @@ function computeTrailSl(
 }
 
 /**
- * Compute the new trailing TP level given the current price.
- * LONG:  newTp = price × (1 + trailTpPct/100)  — TP is above price
- * SHORT: newTp = price × (1 - trailTpPct/100)  — TP is below price
- * Note: this is used to SET a protective re-exit level, not to move TP further from entry.
- * When trailing TP is active, position closes when price RETREATS below (LONG) or above
- * (SHORT) this trailing level.
+ * Compute the trailing TP floor level given the current price.
+ *
+ * This is the level price must RETREAT through to trigger the exit.
+ * LONG:  floor = price × (1 − trailTpPct/100)  — below current price
+ * SHORT: floor = price × (1 + trailTpPct/100)  — above current price
+ *
+ * The floor ratchets upward (LONG) / downward (SHORT) as price makes new
+ * extremes, locking in more profit.
  */
-function computeTrailTp(
+function computeTrailTpFloor(
   currentPrice: number,
   direction: string,
   trailTpPct: number,
 ): number {
   const pct = trailTpPct / 100;
   return direction === 'LONG'
-    ? currentPrice * (1 - pct)   // exit if price drops back more than trailTpPct%
-    : currentPrice * (1 + pct);  // exit if price rises back more than trailTpPct%
+    ? currentPrice * (1 - pct)   // exit if price drops below this floor
+    : currentPrice * (1 + pct);  // exit if price rises above this ceiling
 }
 
 /**
@@ -391,16 +401,16 @@ async function getExchangeCredentials(
 }
 
 // ---------------------------------------------------------------------------
-// Core trailing logic — called on each price tick for an open position
-// Returns true if the position should be closed immediately.
+// Core trailing logic — called on each price tick for a trailing-mode position.
+//
+// Handles ratchet updates and exit detection for both SL and TP.
+// Returns true if the position was closed (caller should skip further processing).
 // ---------------------------------------------------------------------------
 
 async function applyTrailingLogic(
   position: OpenPosition,
   currentPrice: number,
 ): Promise<boolean> {
-  if (position.exitMode !== 'trailing') return false;
-
   const direction = position.direction ?? 'LONG';
   const entry = position.entryPrice ? parseFloat(position.entryPrice) : null;
   if (!entry) return false;
@@ -418,12 +428,12 @@ async function applyTrailingLogic(
   let updatedTrailSl: number | null = null;
 
   if (currentTrailSl === null) {
-    // First time we set the trailing SL
+    // First tick: establish the initial trailing SL
     updatedTrailSl = newSlCandidate;
     await updateTrailState(position.id, { trailSlPrice: String(newSlCandidate) });
     await appendTrailAudit(position.id, position.userId, 'sl_move', currentPrice, newSlCandidate, null);
   } else {
-    // Ratchet: only move in the favorable direction
+    // Ratchet: LONG only moves up, SHORT only moves down
     const shouldMove = direction === 'LONG'
       ? newSlCandidate > currentTrailSl
       : newSlCandidate < currentTrailSl;
@@ -437,7 +447,7 @@ async function applyTrailingLogic(
     }
   }
 
-  // Check if trailing SL has been hit
+  // Check if trailing SL has been breached
   if (updatedTrailSl !== null) {
     const slHit = direction === 'LONG'
       ? currentPrice <= updatedTrailSl
@@ -463,50 +473,55 @@ async function applyTrailingLogic(
   const initialTp = position.takeProfit ? parseFloat(position.takeProfit) : null;
 
   if (initialTp !== null) {
-    // Activate once price reaches the initial TP level
     if (!position.trailTpActive) {
+      // Activate once price reaches the initial TP level
       const tpReached = direction === 'LONG'
         ? currentPrice >= initialTp
         : currentPrice <= initialTp;
 
       if (tpReached) {
-        // Activate trailing TP — set the initial trailing level
-        const newTpLevel = computeTrailTp(currentPrice, direction, trailTpPct);
+        // Set the initial trailing floor at the current price
+        const newFloor = computeTrailTpFloor(currentPrice, direction, trailTpPct);
         await updateTrailState(position.id, {
           trailTpActive: true,
-          trailTpPrice: String(newTpLevel),
+          trailTpPrice: String(newFloor),
         });
-        await appendTrailAudit(position.id, position.userId, 'tp_activate', currentPrice, newTpLevel, null);
-        // Update in-memory state for this tick
+        await appendTrailAudit(position.id, position.userId, 'tp_activate', currentPrice, newFloor, null);
+        // Update in-memory state so exit check below uses fresh values
         position.trailTpActive = true;
-        position.trailTpPrice = String(newTpLevel);
+        position.trailTpPrice = String(newFloor);
+        // Do NOT close here — the position stays open to run further
       }
-    } else {
-      // Trailing TP is active — ratchet the trailing level
-      const currentTpLevel = position.trailTpPrice ? parseFloat(position.trailTpPrice) : null;
-      const newTpCandidate = computeTrailTp(currentPrice, direction, trailTpPct);
+    }
 
-      if (currentTpLevel !== null) {
-        // For LONG: trailing TP exit level moves down closer to price as price rises
-        // — but we want it to stay at the highest "floor" the price established.
-        // The exit level (computed as price - trailTpPct%) moves UP when price rises.
-        const shouldMoveTp = direction === 'LONG'
-          ? newTpCandidate > currentTpLevel
-          : newTpCandidate < currentTpLevel;
+    // When trailing TP is active: ratchet the floor and check for retreat exit
+    if (position.trailTpActive) {
+      const currentFloor = position.trailTpPrice ? parseFloat(position.trailTpPrice) : null;
+      const newFloorCandidate = computeTrailTpFloor(currentPrice, direction, trailTpPct);
 
-        let activeTpLevel = currentTpLevel;
-        if (shouldMoveTp) {
-          activeTpLevel = newTpCandidate;
-          await updateTrailState(position.id, { trailTpPrice: String(newTpCandidate) });
-          await appendTrailAudit(position.id, position.userId, 'tp_move', currentPrice, newTpCandidate, currentTpLevel);
+      let activeFloor = currentFloor;
+
+      if (currentFloor !== null) {
+        // Ratchet: for LONG the floor only moves UP (higher prices → higher floor)
+        //          for SHORT the floor only moves DOWN (lower prices → lower ceiling)
+        const shouldMoveFloor = direction === 'LONG'
+          ? newFloorCandidate > currentFloor
+          : newFloorCandidate < currentFloor;
+
+        if (shouldMoveFloor) {
+          activeFloor = newFloorCandidate;
+          await updateTrailState(position.id, { trailTpPrice: String(newFloorCandidate) });
+          await appendTrailAudit(position.id, position.userId, 'tp_move', currentPrice, newFloorCandidate, currentFloor);
         }
+      }
 
-        // Check if price has retreated past the trailing TP exit level
-        const tpHit = direction === 'LONG'
-          ? currentPrice <= activeTpLevel
-          : currentPrice >= activeTpLevel;
+      // Exit when price retreats back through the trailing floor
+      if (activeFloor !== null) {
+        const tpFloorBreached = direction === 'LONG'
+          ? currentPrice <= activeFloor
+          : currentPrice >= activeFloor;
 
-        if (tpHit) {
+        if (tpFloorBreached) {
           await closePosition(position.id, currentPrice, 'tp_hit');
           const positionSize = position.positionSize ? parseFloat(position.positionSize) : 0;
           const pnl = computePnl(entry, currentPrice, positionSize);
@@ -633,13 +648,23 @@ class PositionMonitorManager {
 
   // -------------------------------------------------------------------------
   // Live WebSocket loop (ccxt.pro)
+  //
+  // Two concurrent loops run per {userId, exchangeName}:
+  //   1. runTickerLoop  — drives trailing ratchet updates for trailing-mode positions
+  //   2. runOrdersLoop  — detects exchange-side fills for fixed-mode exits
+  //
+  // Both share the same MonitorState; either loop can stop the monitor.
   // -------------------------------------------------------------------------
 
   private startWebSocketLoop(state: MonitorState): void {
-    void this.runWebSocketLoop(state);
+    void this.runOrdersLoop(state);
+    void this.runTickerLoop(state);
   }
 
-  private async runWebSocketLoop(state: MonitorState): Promise<void> {
+  /**
+   * Orders loop: watches exchange order fills and closes positions on fixed-mode SL/TP.
+   */
+  private async runOrdersLoop(state: MonitorState): Promise<void> {
     const { userId, exchangeName } = state;
 
     while (!state.stopped) {
@@ -648,7 +673,7 @@ class PositionMonitorManager {
         const creds = await getExchangeCredentials(userId, exchangeName);
         if (!creds) {
           console.warn(
-            `[position-monitor] No active exchange credentials for ${userId}/${exchangeName} — stopping monitor`,
+            `[position-monitor] No credentials for ${userId}/${exchangeName} — stopping orders loop`,
           );
           this.stopMonitor(userId, exchangeName);
           return;
@@ -701,13 +726,9 @@ class PositionMonitorManager {
 
             if (!position) continue;
 
-            // For trailing positions, apply trailing logic using fill price as current price.
-            // The fill price represents the latest market level at close.
-            if (position.exitMode === 'trailing') {
-              const closed = await applyTrailingLogic(position, fillPrice);
-              if (closed) continue;
-            }
-
+            // For trailing positions, the ticker loop handles exit logic.
+            // We still record the fill here in case the exchange SL/TP fired
+            // before our server-side trail (safety net).
             const fillType = classifyFill(
               fillPrice,
               position.stopLoss ? parseFloat(position.stopLoss) : null,
@@ -740,31 +761,22 @@ class PositionMonitorManager {
         if (state.stopped) return;
 
         console.error(
-          `[position-monitor] WebSocket error for ${userId}/${exchangeName} (retry ${state.retryCount}/${MAX_RETRIES}):`,
+          `[position-monitor] Orders WS error for ${userId}/${exchangeName} (retry ${state.retryCount}/${MAX_RETRIES}):`,
           err,
         );
 
-        try {
-          await exchange?.close();
-        } catch {
-          // ignore close errors
-        }
+        try { await exchange?.close(); } catch { /* ignore */ }
 
         if (state.retryCount >= MAX_RETRIES) {
           state.active = false;
           state.stopped = true;
           this.monitors.delete(this.monitorKey(userId, exchangeName));
-
-          void sendNotification(userId, {
-            event: 'monitor_disconnected',
-            symbol: exchangeName,
-          });
+          void sendNotification(userId, { event: 'monitor_disconnected', symbol: exchangeName });
           return;
         }
 
         const backoffMs = BACKOFF_MS[state.retryCount] ?? 60000;
         state.retryCount += 1;
-
         await new Promise<void>((resolve) => {
           state.retryTimeoutId = setTimeout(resolve, backoffMs);
         });
@@ -773,8 +785,80 @@ class PositionMonitorManager {
     }
   }
 
+  /**
+   * Ticker loop: drives trailing ratchet updates for all trailing-mode positions.
+   * Watches the ticker for each unique symbol that has a trailing-mode open position.
+   * Runs concurrently alongside the orders loop.
+   */
+  private async runTickerLoop(state: MonitorState): Promise<void> {
+    const { userId, exchangeName } = state;
+
+    while (!state.stopped) {
+      let exchange: Exchange | null = null;
+      try {
+        const creds = await getExchangeCredentials(userId, exchangeName);
+        if (!creds) return; // orders loop will handle stop
+
+        const ExchangeClass = (ccxt.pro as unknown as Record<string, new (config: object) => Exchange>)[exchangeName];
+        if (!ExchangeClass) return;
+
+        exchange = new ExchangeClass({
+          apiKey: creds.apiKey,
+          secret: creds.secret,
+          ...(creds.password ? { password: creds.password } : {}),
+        });
+
+        while (!state.stopped) {
+          // Identify unique symbols for trailing positions
+          const positions = await fetchOpenPositions(userId, exchangeName);
+          const trailingPositions = positions.filter((p) => p.exitMode === 'trailing');
+
+          if (trailingPositions.length === 0) {
+            // No trailing positions — wait before rechecking
+            await new Promise<void>((resolve) => setTimeout(resolve, PAPER_POLL_INTERVAL_MS));
+            continue;
+          }
+
+          const symbols = [...new Set(trailingPositions.map((p) => p.symbol))];
+
+          // Watch tickers for all trailing symbols simultaneously
+          const tickers = await (exchange as unknown as {
+            watchTickers: (symbols: string[]) => Promise<Record<string, { last?: number | null }>>;
+          }).watchTickers(symbols);
+
+          if (state.stopped) break;
+
+          for (const [symbol, ticker] of Object.entries(tickers)) {
+            const currentPrice = ticker.last ?? 0;
+            if (!currentPrice) continue;
+
+            const symbolPositions = trailingPositions.filter(
+              (p) => p.symbol === symbol,
+            );
+
+            for (const position of symbolPositions) {
+              await applyTrailingLogic(position, currentPrice);
+            }
+          }
+        }
+      } catch (err) {
+        if (state.stopped) return;
+        console.error(
+          `[position-monitor] Ticker WS error for ${userId}/${exchangeName}:`,
+          err,
+        );
+        try { await exchange?.close(); } catch { /* ignore */ }
+        // Wait briefly before retrying — the orders loop manages the main retry counter
+        await new Promise<void>((resolve) => setTimeout(resolve, 5000));
+      }
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Paper mode poller (REST price every 10 s)
+  //
+  // For trailing-mode positions: applyTrailingLogic handles all exit decisions.
+  // For fixed-mode positions: direct SL/TP price comparison.
   // -------------------------------------------------------------------------
 
   private startPaperPoller(state: MonitorState): void {
@@ -795,7 +879,6 @@ class PositionMonitorManager {
         if (!ExchangeClass) return;
 
         const publicExchange = new ExchangeClass({});
-
         const symbols = [...new Set(positions.map((p) => p.symbol))];
 
         for (const symbol of symbols) {
@@ -812,40 +895,30 @@ class PositionMonitorManager {
           const symbolPositions = positions.filter((p) => p.symbol === symbol);
 
           for (const position of symbolPositions) {
-            // Apply trailing logic first — may close the position
+            // Trailing mode: delegate entirely to applyTrailingLogic
             if (position.exitMode === 'trailing') {
-              const closed = await applyTrailingLogic(position, currentPrice);
-              if (closed) continue;
+              await applyTrailingLogic(position, currentPrice);
+              continue;
             }
 
-            // Fixed exit mode (or trailing activation not met / not triggered above)
+            // Fixed mode: compare current price against absolute SL/TP levels
             const stopLoss = position.stopLoss ? parseFloat(position.stopLoss) : null;
             const takeProfit = position.takeProfit ? parseFloat(position.takeProfit) : null;
             const direction = position.direction ?? 'LONG';
 
-            // For trailing mode, use trailSlPrice as the effective SL if set
-            const effectiveSl = position.exitMode === 'trailing' && position.trailSlPrice
-              ? parseFloat(position.trailSlPrice)
-              : stopLoss;
-
-            // For trailing mode with active trailTp, use trailTpPrice instead of original TP
-            const effectiveTp = position.exitMode === 'trailing' && position.trailTpActive && position.trailTpPrice
-              ? parseFloat(position.trailTpPrice)
-              : (position.exitMode === 'trailing' && position.trailTpActive ? null : takeProfit);
-
             let fillType: FillType | null = null;
 
-            if (effectiveSl !== null) {
+            if (stopLoss !== null) {
               const slHit = direction === 'LONG'
-                ? currentPrice <= effectiveSl
-                : currentPrice >= effectiveSl;
+                ? currentPrice <= stopLoss
+                : currentPrice >= stopLoss;
               if (slHit) fillType = 'sl_hit';
             }
 
-            if (!fillType && effectiveTp !== null) {
+            if (!fillType && takeProfit !== null) {
               const tpHit = direction === 'LONG'
-                ? currentPrice >= effectiveTp
-                : currentPrice <= effectiveTp;
+                ? currentPrice >= takeProfit
+                : currentPrice <= takeProfit;
               if (tpHit) fillType = 'tp_hit';
             }
 
