@@ -71,6 +71,13 @@
       "when": 1783930624095,
       "tag": "0009_wild_scarlet_spider",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1783931952780,
+      "tag": "0010_sour_ikaris",
+      "breakpoints": true
     }
   ]
 }
