@@ -7,6 +7,7 @@ import {
   SensitiveDataFilter,
 } from '@mastra/observability';
 import { weatherWorkflow } from './workflows/weather-workflow';
+import { tradeAnalysisWorkflow } from './workflows/trade-analysis-workflow';
 import { weatherAgent } from './agents/weather-agent';
 import { tradingAgent } from './agents/trading-agent';
 import { setupAgent } from './agents/setup-agent';
@@ -21,7 +22,7 @@ import { riskTool } from './tools/risk-tool';
 import { mastraStorage } from './storage';
 
 export const mastra = new Mastra({
-  workflows: { weatherWorkflow },
+  workflows: { weatherWorkflow, tradeAnalysisWorkflow },
   agents: { weatherAgent, tradingAgent, setupAgent },
   tools: {
     marketDataTool,
