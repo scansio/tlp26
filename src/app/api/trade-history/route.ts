@@ -19,7 +19,7 @@ import { auth } from '@clerk/nextjs/server';
 import { NextRequest, NextResponse } from 'next/server';
 import { and, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
 import { db } from '@/db';
-import { tradeExecutions, tradeSignals } from '@/db/schema';
+import { tradeExecutions, tradeSignals, publisherEarnings } from '@/db/schema';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -204,6 +204,32 @@ export async function GET(req: NextRequest) {
   ]);
 
   // ---------------------------------------------------------------------------
+  // Fetch performance fees for copy trades in this page (subscriber P&L net of fee)
+  // ---------------------------------------------------------------------------
+
+  const copyTradeIds = rawRows
+    .filter((r) => r.source === 'copy')
+    .map((r) => r.id);
+
+  const feeByTradeId = new Map<string, number>();
+
+  if (copyTradeIds.length > 0) {
+    const feeRows = await db
+      .select({
+        tradeId: publisherEarnings.tradeId,
+        feeAmount: publisherEarnings.feeAmount,
+      })
+      .from(publisherEarnings)
+      .where(inArray(publisherEarnings.tradeId, copyTradeIds));
+
+    for (const row of feeRows) {
+      if (row.tradeId) {
+        feeByTradeId.set(row.tradeId, parseFloat(row.feeAmount));
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Post-filter: source + strategy (applied in JS since they come from the join)
   // For a full implementation these would be WHERE clauses; acceptable here
   // since the result set is already paginated at PAGE_SIZE.
@@ -241,7 +267,15 @@ export async function GET(req: NextRequest) {
     const entryPrice = r.entryPrice ? parseFloat(r.entryPrice) : null;
     const exitPrice = r.exitPrice ? parseFloat(r.exitPrice) : null;
     const positionSize = r.positionSize ? parseFloat(r.positionSize) : null;
-    const realizedPnl = r.realizedPnl ? parseFloat(r.realizedPnl) : null;
+    const grossPnl = r.realizedPnl ? parseFloat(r.realizedPnl) : null;
+
+    // For copy trades: subtract performance fee from P&L shown to subscriber
+    const performanceFeeDeducted = feeByTradeId.get(r.id) ?? null;
+    const realizedPnl =
+      grossPnl !== null && performanceFeeDeducted !== null
+        ? grossPnl - performanceFeeDeducted
+        : grossPnl;
+
     const realizedPnlPct =
       entryPrice && positionSize && entryPrice > 0 && realizedPnl !== null
         ? (realizedPnl / (entryPrice * positionSize)) * 100
@@ -263,6 +297,8 @@ export async function GET(req: NextRequest) {
       positionSize,
       realizedPnl,
       realizedPnlPct,
+      // Expose the fee deduction so the UI can display it separately
+      performanceFeeDeducted,
       status: r.status,
       fillType: r.fillType ?? null,
       mode: r.mode ?? 'paper',

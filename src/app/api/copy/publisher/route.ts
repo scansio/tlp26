@@ -258,8 +258,8 @@ export async function PATCH(req: Request) {
 
   if (feePercent !== undefined) {
     const fee = Number(feePercent);
-    if (isNaN(fee) || fee < 0 || fee > 50) {
-      return NextResponse.json({ error: 'feePercent must be between 0 and 50' }, { status: 400 });
+    if (isNaN(fee) || fee < 0 || fee > 30) {
+      return NextResponse.json({ error: 'feePercent must be between 0 and 30' }, { status: 400 });
     }
     updates.feePercent = fee.toFixed(2);
   }
