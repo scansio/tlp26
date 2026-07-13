@@ -9,7 +9,7 @@
  *  - Trading mode (paper | live)
  *
  * Live exchange calls are only made when executionMode === 'live' and a connected exchange exists.
- * Paper mode: equity is shown as N/A; unrealized P&L is estimated from entry prices only.
+ * Paper mode: equity is the user's configured virtual balance (paperBalanceUsd); unrealized P&L is estimated from entry prices only.
  */
 
 import { auth } from '@clerk/nextjs/server';
@@ -168,7 +168,10 @@ export async function GET() {
   // For paper mode: skip balance fetch; still fetch public ticker for unrealized P&L.
   // -------------------------------------------------------------------------
 
-  let equity: number | null = null;
+  // In paper mode, equity is the virtual paper balance (no exchange API call needed)
+  let equity: number | null = isPaper
+    ? Number(riskProfile?.paperBalanceUsd ?? '10000.00')
+    : null;
   let unrealizedPnl = 0;
 
   // Deduplicate symbols for batch ticker fetch

@@ -138,11 +138,13 @@ export async function PATCH(
     );
   }
 
-  // Load user's risk profile for executionMode + slippagePct
+  // Load user's risk profile for executionMode + slippagePct + sizing
   const [profile] = await db
     .select({
       executionMode: userRiskProfiles.executionMode, // paper | live
       slippagePct: userRiskProfiles.slippagePct,
+      paperBalanceUsd: userRiskProfiles.paperBalanceUsd,
+      riskPerTradePct: userRiskProfiles.riskPerTradePct,
     })
     .from(userRiskProfiles)
     .where(eq(userRiskProfiles.userId, userId))
@@ -176,6 +178,18 @@ export async function PATCH(
     // Apply slippage model (same as live)
     const simulatedFillPrice = applySlippage(fillPrice, signal.direction, slippagePct);
 
+    // Compute position size from virtual balance and risk parameters
+    // Formula: (paperBalance × riskPerTradePct%) / |fillPrice − stopLoss|
+    const paperBalance = profile?.paperBalanceUsd ? Number(profile.paperBalanceUsd) : 10_000;
+    const riskPct = profile?.riskPerTradePct ? Number(profile.riskPerTradePct) : 1;
+    const signalStopLoss = signal.stopLoss ? Number(signal.stopLoss) : null;
+    let positionSize: number | null = null;
+    if (signalStopLoss !== null && Math.abs(simulatedFillPrice - signalStopLoss) > 0) {
+      const riskAmount = paperBalance * (riskPct / 100);
+      const slDistance = Math.abs(simulatedFillPrice - signalStopLoss);
+      positionSize = riskAmount / slDistance;
+    }
+
     // Record paper execution in trade_executions
     const rawPayload = signal.rawPayload as Record<string, unknown> | null;
     const exchangeName = (rawPayload?.exchange as string | undefined) ?? 'paper';
@@ -188,7 +202,7 @@ export async function PATCH(
         exchangeName,
         symbol: signal.symbol,
         entryPrice: String(simulatedFillPrice),
-        positionSize: null, // position sizing deferred to execute-trade-tool
+        positionSize: positionSize !== null ? String(positionSize) : null,
         mode: 'paper',
         status: 'open',
         entryAt: new Date(),
