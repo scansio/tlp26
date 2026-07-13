@@ -6,12 +6,19 @@ const isPublicRoute = createRouteMatcher([
   '/sign-up(.*)',
   '/api/webhooks/tradingview',
   '/api/auth/webhook',
-  // Publisher public profile pages: /copy/<uuid> but NOT /copy/publisher
-  '/copy/:publisherId((?!publisher$)[^/]+)',
+  // Public API for publisher profiles (no auth needed for read)
+  '/api/copy/publishers/(.*)',
 ]);
 
 export default clerkMiddleware(async (auth, request) => {
-  if (!isPublicRoute(request)) {
+  const { pathname } = request.nextUrl;
+
+  // /copy/publisher is a protected Clerk-auth page.
+  // /copy/<any-other-path> is the public publisher profile — allow without auth.
+  const isPublicCopyProfile =
+    pathname.startsWith('/copy/') && pathname !== '/copy/publisher';
+
+  if (!isPublicRoute(request) && !isPublicCopyProfile) {
     await auth.protect();
   }
 });
