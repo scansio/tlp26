@@ -1,0 +1,1 @@
+ALTER TABLE "user_risk_profiles" ADD COLUMN "paper_balance_usd" numeric(20, 2) DEFAULT '10000.00';
