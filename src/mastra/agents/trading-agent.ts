@@ -119,7 +119,7 @@ The user will provide in their message:
 - enabledStrategies: array of strategy names the user has enabled in their risk profile (only these count for strategiesTriggered)
 - accountBalance: available balance in USDT (for context — do not size the position, that is handled by the risk-tool separately)
 `,
-  model: 'cerebras/llama3.1-8b',
+  model: 'cerebras/gpt-oss-120b',
   tools: {
     marketDataTool,
     indicatorsTool,

@@ -157,7 +157,7 @@ TONE
 
 Be friendly and concise. Use plain English — avoid jargon unless the user uses it first. Keep each response short; do not lecture. One question at a time.
 `,
-  model: 'cerebras/llama3.1-8b',
+  model: 'cerebras/gpt-oss-120b',
   tools: { saveRiskProfileTool },
   memory: new Memory(),
 });

@@ -14,7 +14,8 @@
     ]
   },
   "permissions": {
-    "allow": ["Bash(git *)", "Bash(npm *)", "Bash(npx *)", "Bash(cd *)"]
+    "allow": ["Bash(git *)", "Bash(npm *)", "Bash(npx *)", "Bash(cd *)"],
+    "deny": ["Bash(npm run dev)", "Bash(npm run dev *)", "Bash(next dev)", "Bash(next dev *)"]
   },
   "worktree": {
     "symlinkDirectories": ["node_modules"]

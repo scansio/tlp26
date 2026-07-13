@@ -19,7 +19,7 @@ export const weatherAgent = new Agent({
 
       Use the weatherTool to fetch current weather data.
 `,
-  model: 'cerebras/llama3.1-8b',
+  model: 'cerebras/gpt-oss-120b',
   tools: { weatherTool },
 
   memory: new Memory(),
