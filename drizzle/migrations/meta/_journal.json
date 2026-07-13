@@ -57,6 +57,13 @@
       "when": 1783930392603,
       "tag": "0007_charming_thunderbolt",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1783931257767,
+      "tag": "0008_swift_jetstream",
+      "breakpoints": true
     }
   ]
 }

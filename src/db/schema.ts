@@ -144,18 +144,26 @@ export const tradeExecutions = pgTable('trade_executions', {
   signalId: uuid('signal_id').references(() => tradeSignals.id),
   userId: varchar('user_id', { length: 255 }).notNull(),
   exchangeName: varchar('exchange_name', { length: 50 }).notNull(),
+  // symbol stored here directly so the position monitor does not need a JOIN
+  // (signalId can be null for manual/copy trades)
+  symbol: varchar('symbol', { length: 30 }).notNull().default(''),
   exchangeOrderId: varchar('exchange_order_id', { length: 128 }),
+  // exitOrderId: the SL/TP/close order placed after entry (may differ from entry order)
+  exitOrderId: varchar('exit_order_id', { length: 128 }),
   entryPrice: numeric('entry_price', { precision: 20, scale: 8 }),
   exitPrice: numeric('exit_price', { precision: 20, scale: 8 }),
   positionSize: numeric('position_size', { precision: 20, scale: 8 }),
   realizedPnl: numeric('realized_pnl', { precision: 20, scale: 8 }),
   status: varchar('status', { length: 20 }).default('open'), // open | closed | cancelled
+  // fillType populated when position is closed by the position monitor
+  fillType: varchar('fill_type', { length: 20 }), // sl_hit | tp_hit | manual | liquidation
   mode: varchar('mode', { length: 10 }).default('paper'), // live | paper
   entryAt: timestamp('entry_at', { withTimezone: true }).defaultNow(),
   exitAt: timestamp('exit_at', { withTimezone: true }),
 }, (table) => [
   index('te_user_id_idx').on(table.userId),
   index('te_signal_id_idx').on(table.signalId),
+  index('te_status_idx').on(table.status),
 ]);
 
 // ---------------------------------------------------------------------------
