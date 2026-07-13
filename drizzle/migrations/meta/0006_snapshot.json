@@ -1,6 +1,6 @@
 {
-  "id": "cbd9e9bd-f4f1-44bc-a6ee-888b40089534",
-  "prevId": "6047f8d4-528f-4796-b610-d6b0fe4dbebd",
+  "id": "4c787cba-1e2d-45cc-a7e0-b38806423eb9",
+  "prevId": "5d38b991-28f8-477e-8272-555b99660ee4",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -354,6 +354,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "timeframe_focus": {
+          "name": "timeframe_focus",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "strategy_type": {
+          "name": "strategy_type",
+          "type": "varchar(30)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "fee_percent": {
           "name": "fee_percent",
           "type": "numeric(5, 2)",
@@ -429,6 +441,19 @@
           "notNull": true,
           "default": 100
         },
+        "execution_mode": {
+          "name": "execution_mode",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'review-copy'"
+        },
+        "max_position_size_cap": {
+          "name": "max_position_size_cap",
+          "type": "numeric(20, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "is_active": {
           "name": "is_active",
           "type": "boolean",
@@ -438,6 +463,13 @@
         },
         "created_at": {
           "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false,
@@ -463,6 +495,27 @@
         "ss_publisher_id_idx": {
           "name": "ss_publisher_id_idx",
           "columns": [
+            {
+              "expression": "publisher_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ss_sub_pub_idx": {
+          "name": "ss_sub_pub_idx",
+          "columns": [
+            {
+              "expression": "subscriber_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
             {
               "expression": "publisher_id",
               "isExpression": false,

@@ -4,12 +4,25 @@ const isPublicRoute = createRouteMatcher([
   '/',
   '/sign-in(.*)',
   '/sign-up(.*)',
+  '/copy/leaderboard',
+  '/api/copy/leaderboard',
   '/api/webhooks/tradingview',
   '/api/auth/webhook',
+  // Public API for publisher profiles (no auth needed for read)
+  '/api/copy/publishers/(.*)',
+  // Cron routes are authenticated via CRON_SECRET header, not Clerk session
+  '/api/cron/(.*)',
 ]);
 
 export default clerkMiddleware(async (auth, request) => {
-  if (!isPublicRoute(request)) {
+  const { pathname } = request.nextUrl;
+
+  // /copy/publisher is a protected Clerk-auth page.
+  // /copy/<any-other-path> is the public publisher profile — allow without auth.
+  const isPublicCopyProfile =
+    pathname.startsWith('/copy/') && pathname !== '/copy/publisher';
+
+  if (!isPublicRoute(request) && !isPublicCopyProfile) {
     await auth.protect();
   }
 });

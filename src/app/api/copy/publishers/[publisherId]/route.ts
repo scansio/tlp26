@@ -7,7 +7,8 @@ import { signalPublishers, signalSubscriptions } from '@/db/schema';
 // ---------------------------------------------------------------------------
 // GET /api/copy/publishers/[publisherId]
 // Returns the publisher's public profile plus the current user's subscription
-// status (if any).
+// status (if any). Merges public-safe fields from TLP-31 with the
+// subscription-awareness added in TLP-33.
 // ---------------------------------------------------------------------------
 export async function GET(
   _req: Request,
@@ -19,6 +20,10 @@ export async function GET(
   }
 
   const { publisherId } = await params;
+
+  if (!publisherId) {
+    return NextResponse.json({ error: 'publisherId is required' }, { status: 400 });
+  }
 
   const [publisher] = await db
     .select()
@@ -56,12 +61,18 @@ export async function GET(
     id: publisher.id,
     displayName: publisher.displayName,
     strategyDescription: publisher.strategyDescription,
-    totalSignals: publisher.totalSignals,
-    winRate: publisher.winRate,
-    sharpeRatio: publisher.sharpeRatio,
-    avgRR: publisher.avgRR,
+    isPublic: publisher.isPublic,
+    isActive: publisher.isActive,
+    shareIndividualTrades: publisher.shareIndividualTrades,
     feePercent: publisher.feePercent,
-    subscriberCount: publisher.subscriberCount,
+    stats: {
+      totalSignals: publisher.totalSignals,
+      winRate: publisher.winRate,
+      avgRR: publisher.avgRR,
+      sharpeRatio: publisher.sharpeRatio,
+      maxDrawdown: publisher.maxDrawdown,
+      subscriberCount: publisher.subscriberCount,
+    },
     createdAt: publisher.createdAt,
     isSelf: publisher.userId === userId,
     subscription: existingSubscription ?? null,

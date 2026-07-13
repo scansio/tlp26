@@ -1,6 +1,6 @@
 {
-  "id": "cbd9e9bd-f4f1-44bc-a6ee-888b40089534",
-  "prevId": "6047f8d4-528f-4796-b610-d6b0fe4dbebd",
+  "id": "5d38b991-28f8-477e-8272-555b99660ee4",
+  "prevId": "cbd9e9bd-f4f1-44bc-a6ee-888b40089534",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -351,6 +351,18 @@
         "max_drawdown": {
           "name": "max_drawdown",
           "type": "numeric(8, 4)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "timeframe_focus": {
+          "name": "timeframe_focus",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "strategy_type": {
+          "name": "strategy_type",
+          "type": "varchar(30)",
           "primaryKey": false,
           "notNull": false
         },

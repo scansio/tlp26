@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState, use } from 'react';
+import { useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -11,17 +12,25 @@ import { Spinner } from '@/components/ui/spinner';
 // Types
 // ---------------------------------------------------------------------------
 
+interface PublisherStats {
+  totalSignals: number | null;
+  winRate: string | null;
+  avgRR: string | null;
+  sharpeRatio: string | null;
+  maxDrawdown: string | null;
+  subscriberCount: number | null;
+}
+
 interface PublisherProfile {
   id: string;
   displayName: string | null;
   strategyDescription: string | null;
-  totalSignals: number | null;
-  winRate: string | null;
-  sharpeRatio: string | null;
-  avgRR: string | null;
+  isPublic: boolean | null;
+  isActive: boolean | null;
+  shareIndividualTrades: boolean | null;
   feePercent: string | null;
-  subscriberCount: number | null;
-  createdAt: string;
+  stats: PublisherStats;
+  createdAt: string | null;
   isSelf: boolean;
   subscription: {
     id: string;
@@ -38,16 +47,34 @@ interface SubscribeFormState {
 }
 
 // ---------------------------------------------------------------------------
-// Stat card helper
+// Stat card
 // ---------------------------------------------------------------------------
 
-function StatItem({ label, value }: { label: string; value: string | number | null }) {
+function StatCard({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number | null | undefined;
+}) {
   return (
-    <div className="text-center">
+    <div className="rounded-lg border bg-card p-4 text-center">
       <p className="text-2xl font-bold">{value ?? '—'}</p>
-      <p className="text-xs text-muted-foreground mt-0.5">{label}</p>
+      <p className="text-sm text-muted-foreground mt-1">{label}</p>
     </div>
   );
+}
+
+function formatPct(v: string | null | undefined): string {
+  if (v == null) return '—';
+  const n = parseFloat(v);
+  return isNaN(n) ? '—' : `${n.toFixed(1)}%`;
+}
+
+function formatRatio(v: string | null | undefined): string {
+  if (v == null) return '—';
+  const n = parseFloat(v);
+  return isNaN(n) ? '—' : n.toFixed(2);
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +112,8 @@ function SubscribeModal({
         <div>
           <h2 className="text-xl font-bold">Subscribe to {publisherName}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Configure how copied trades are sized and executed relative to your risk profile.
+            Configure how copied trades are sized and executed relative to your risk
+            profile.
           </p>
         </div>
 
@@ -183,7 +211,7 @@ function SubscribeModal({
             disabled={submitting}
           >
             {submitting ? <Spinner className="mr-2 h-4 w-4" /> : null}
-            {submitting ? 'Subscribing…' : 'Subscribe'}
+            {submitting ? 'Subscribing...' : 'Subscribe'}
           </Button>
         </div>
       </div>
@@ -192,39 +220,46 @@ function SubscribeModal({
 }
 
 // ---------------------------------------------------------------------------
-// Publisher profile page
+// Component
 // ---------------------------------------------------------------------------
 
-export default function PublisherProfilePage({
-  params,
-}: {
-  params: Promise<{ publisherId: string }>;
-}) {
-  const { publisherId } = use(params);
+export default function PublisherPublicPage() {
+  const params = useParams();
+  const publisherId = params?.publisherId as string | undefined;
 
-  const [publisher, setPublisher] = useState<PublisherProfile | null>(null);
+  const [profile, setProfile] = useState<PublisherProfile | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
+  async function loadProfile(id: string) {
+    const r = await fetch(`/api/copy/publishers/${id}`);
+    if (r.status === 404) {
+      setError('Publisher not found.');
+      return;
+    }
+    if (!r.ok) {
+      setError('Failed to load publisher profile.');
+      return;
+    }
+    const data: PublisherProfile = await r.json();
+    setProfile(data);
+  }
+
   useEffect(() => {
-    fetch(`/api/copy/publishers/${publisherId}`)
-      .then(async (res) => {
-        if (!res.ok) {
-          const data = await res.json();
-          throw new Error(data.error ?? 'Failed to load publisher');
-        }
-        return res.json();
-      })
-      .then((data: PublisherProfile) => setPublisher(data))
-      .catch((err: Error) => setLoadError(err.message))
+    if (!publisherId) return;
+
+    loadProfile(publisherId)
+      .catch(() => setError('Network error. Please try again.'))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [publisherId]);
 
   async function handleSubscribe(form: SubscribeFormState) {
+    if (!publisherId) return;
     setSubmitting(true);
     setSubmitError('');
 
@@ -250,11 +285,7 @@ export default function PublisherProfilePage({
       }
       setModalOpen(false);
       setSuccessMessage(data.message ?? 'Subscribed successfully!');
-      // Refresh publisher data to update subscription state
-      const updated = await fetch(`/api/copy/publishers/${publisherId}`).then((r) =>
-        r.json(),
-      );
-      setPublisher(updated);
+      await loadProfile(publisherId);
     } catch {
       setSubmitError('Network error. Please try again.');
     } finally {
@@ -265,47 +296,46 @@ export default function PublisherProfilePage({
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <Spinner className="h-6 w-6" />
+        <p className="text-muted-foreground">Loading...</p>
       </div>
     );
   }
 
-  if (loadError || !publisher) {
+  if (error || !profile) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <p className="text-red-600">{loadError || 'Publisher not found.'}</p>
+        <p className="text-red-600">{error ?? 'Publisher not found.'}</p>
       </div>
     );
   }
 
-  const isSubscribed = !!publisher.subscription?.isActive;
-  const isPaused = publisher.subscription && !publisher.subscription.isActive;
+  const isSubscribed = !!profile.subscription?.isActive;
+  const isPaused = profile.subscription && !profile.subscription.isActive;
 
   return (
     <>
-      <div className="max-w-2xl mx-auto py-10 px-4 space-y-6">
+      <div className="max-w-2xl mx-auto py-10 px-4 space-y-8">
         {/* Header */}
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold">
-              {publisher.displayName ?? 'Anonymous Publisher'}
-            </h1>
-            {publisher.strategyDescription && (
-              <p className="text-muted-foreground mt-1 text-sm max-w-prose">
-                {publisher.strategyDescription}
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-2xl font-bold">
+                {profile.displayName ?? 'Anonymous Publisher'}
+              </h1>
+              {profile.isSelf && <Badge variant="secondary">Your profile</Badge>}
+              {isSubscribed && (
+                <Badge className="bg-green-100 text-green-800 border-green-300">
+                  Subscribed
+                </Badge>
+              )}
+              {isPaused && <Badge variant="outline">Paused</Badge>}
+            </div>
+            {profile.strategyDescription && (
+              <p className="text-muted-foreground mt-2 max-w-prose">
+                {profile.strategyDescription}
               </p>
             )}
           </div>
-
-          {publisher.isSelf ? (
-            <Badge variant="secondary">Your profile</Badge>
-          ) : isSubscribed ? (
-            <Badge className="bg-green-100 text-green-800 border-green-300">
-              Subscribed
-            </Badge>
-          ) : isPaused ? (
-            <Badge variant="outline">Paused</Badge>
-          ) : null}
         </div>
 
         {successMessage && (
@@ -315,65 +345,49 @@ export default function PublisherProfilePage({
         )}
 
         {/* Stats */}
-        <Card className="p-6">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 divide-x divide-border">
-            <StatItem
-              label="Win Rate"
-              value={
-                publisher.winRate != null ? `${Number(publisher.winRate).toFixed(1)}%` : null
-              }
-            />
-            <StatItem label="Total Signals" value={publisher.totalSignals} />
-            <StatItem
-              label="Avg R:R"
-              value={
-                publisher.avgRR != null ? `${Number(publisher.avgRR).toFixed(2)}` : null
-              }
-            />
-            <StatItem
-              label="Sharpe Ratio"
-              value={
-                publisher.sharpeRatio != null
-                  ? Number(publisher.sharpeRatio).toFixed(2)
-                  : null
-              }
-            />
+        <div>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+            Performance
+          </h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <StatCard label="Win Rate" value={formatPct(profile.stats.winRate)} />
+            <StatCard label="Avg R:R" value={formatRatio(profile.stats.avgRR)} />
+            <StatCard label="Sharpe Ratio" value={formatRatio(profile.stats.sharpeRatio)} />
+            <StatCard label="Max Drawdown" value={formatPct(profile.stats.maxDrawdown)} />
+            <StatCard label="Total Signals" value={profile.stats.totalSignals} />
+            <StatCard label="Subscribers" value={profile.stats.subscriberCount} />
           </div>
-          <div className="mt-4 flex gap-6 text-sm text-muted-foreground pt-4 border-t border-border">
-            <span>
-              <strong>{publisher.subscriberCount ?? 0}</strong> subscribers
-            </span>
-            {publisher.feePercent && Number(publisher.feePercent) > 0 && (
-              <span>
-                Performance fee: <strong>{Number(publisher.feePercent).toFixed(2)}%</strong>
-              </span>
-            )}
-          </div>
-        </Card>
+          {profile.feePercent && Number(profile.feePercent) > 0 && (
+            <p className="text-sm text-muted-foreground mt-3">
+              Performance fee:{' '}
+              <strong>{Number(profile.feePercent).toFixed(2)}%</strong> of profits
+            </p>
+          )}
+        </div>
 
         {/* Current subscription config */}
-        {publisher.subscription && (
-          <Card className="p-6 space-y-2 border-primary/40">
+        {profile.subscription && (
+          <Card className="p-5 space-y-2 border-primary/40">
             <h2 className="font-semibold text-sm">Your Subscription Settings</h2>
             <div className="grid grid-cols-3 gap-4 text-sm">
               <div>
                 <p className="text-muted-foreground text-xs">Copy Ratio</p>
-                <p className="font-medium">{publisher.subscription.copyRatioPct}%</p>
+                <p className="font-medium">{profile.subscription.copyRatioPct}%</p>
               </div>
               <div>
                 <p className="text-muted-foreground text-xs">Mode</p>
                 <p className="font-medium capitalize">
-                  {publisher.subscription.executionMode.replace('-', ' ')}
+                  {profile.subscription.executionMode.replace('-', ' ')}
                 </p>
               </div>
               <div>
                 <p className="text-muted-foreground text-xs">Status</p>
                 <p className="font-medium">
-                  {publisher.subscription.isActive ? 'Active' : 'Paused'}
+                  {profile.subscription.isActive ? 'Active' : 'Paused'}
                 </p>
               </div>
             </div>
-            <div className="pt-2">
+            <div className="pt-1">
               <Link
                 href="/copy/subscriptions"
                 className="text-sm text-primary underline underline-offset-2"
@@ -384,13 +398,9 @@ export default function PublisherProfilePage({
           </Card>
         )}
 
-        {/* Subscribe button — hidden if self, shown otherwise */}
-        {!publisher.isSelf && !publisher.subscription && (
-          <Button
-            size="lg"
-            className="w-full"
-            onClick={() => setModalOpen(true)}
-          >
+        {/* Subscribe button -- hidden for self or already subscribed */}
+        {!profile.isSelf && !profile.subscription && (
+          <Button size="lg" className="w-full" onClick={() => setModalOpen(true)}>
             Subscribe
           </Button>
         )}
@@ -399,7 +409,7 @@ export default function PublisherProfilePage({
       <SubscribeModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        publisherName={publisher.displayName ?? 'this publisher'}
+        publisherName={profile.displayName ?? 'this publisher'}
         onSubmit={handleSubscribe}
         submitting={submitting}
         error={submitError}
