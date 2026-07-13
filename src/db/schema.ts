@@ -95,6 +95,8 @@ export const signalPublishers = pgTable('signal_publishers', {
   sharpeRatio: numeric('sharpe_ratio', { precision: 8, scale: 4 }),
   avgRR: numeric('avg_rr', { precision: 8, scale: 4 }),
   maxDrawdown: numeric('max_drawdown', { precision: 8, scale: 4 }),
+  timeframeFocus: varchar('timeframe_focus', { length: 20 }), // scalp | swing | position
+  strategyType: varchar('strategy_type', { length: 30 }),     // SMC | technical | pattern
   feePercent: numeric('fee_percent', { precision: 5, scale: 2 }).default('0.00'),
   subscriberCount: integer('subscriber_count').default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),

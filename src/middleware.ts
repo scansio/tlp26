@@ -4,6 +4,8 @@ const isPublicRoute = createRouteMatcher([
   '/',
   '/sign-in(.*)',
   '/sign-up(.*)',
+  '/copy/leaderboard',
+  '/api/copy/leaderboard',
   '/api/webhooks/tradingview',
   '/api/auth/webhook',
   // Public API for publisher profiles (no auth needed for read)
