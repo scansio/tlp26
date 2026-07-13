@@ -50,8 +50,11 @@ interface Trade {
   reasoning: string | null;
   confidence: string | null;
   indicators: TradeIndicators | null;
-  newsSentiment: null;
-  onChainBias: null;
+  newsSentiment: string | null;
+  newsSentimentScore: number | null;
+  onChainFundingRate: number | null;
+  onChainFundingBias: string | null;
+  onChainNetflow: number | null;
 }
 
 interface Pagination {
@@ -258,20 +261,52 @@ function TradeDetail({ trade }: { trade: Trade }) {
             </>
           )}
 
-          {/* News sentiment & On-chain — not yet stored in rawPayload */}
+          {/* News sentiment & On-chain bias captured at signal time */}
           <Separator />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <p className="font-medium mb-1">News Sentiment</p>
-              <p className="text-xs text-muted-foreground italic">
-                Not stored at signal time (future enhancement).
-              </p>
+              {trade.newsSentiment != null ? (
+                <div className="text-xs text-muted-foreground space-y-0.5">
+                  <div>
+                    <span className="font-medium text-foreground">Bias:</span>{' '}
+                    {trade.newsSentiment}
+                  </div>
+                  {trade.newsSentimentScore != null && (
+                    <div>
+                      <span className="font-medium text-foreground">Score:</span>{' '}
+                      {trade.newsSentimentScore.toFixed(4)}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground italic">Not available for this signal.</p>
+              )}
             </div>
             <div>
               <p className="font-medium mb-1">On-Chain Bias</p>
-              <p className="text-xs text-muted-foreground italic">
-                Not stored at signal time (future enhancement).
-              </p>
+              {trade.onChainFundingBias != null ? (
+                <div className="text-xs text-muted-foreground space-y-0.5">
+                  <div>
+                    <span className="font-medium text-foreground">Funding Bias:</span>{' '}
+                    {trade.onChainFundingBias}
+                  </div>
+                  {trade.onChainFundingRate != null && (
+                    <div>
+                      <span className="font-medium text-foreground">Funding Rate:</span>{' '}
+                      {trade.onChainFundingRate.toFixed(4)}%
+                    </div>
+                  )}
+                  {trade.onChainNetflow != null && (
+                    <div>
+                      <span className="font-medium text-foreground">Exchange Netflow:</span>{' '}
+                      {trade.onChainNetflow.toFixed(2)}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground italic">Not available for this signal.</p>
+              )}
             </div>
           </div>
 
