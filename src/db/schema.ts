@@ -44,6 +44,13 @@ export const userRiskProfiles = pgTable('user_risk_profiles', {
   webhookToken: varchar('webhook_token', { length: 128 }),
   // Slippage estimate as a percentage of notional (default 0.05%)
   slippagePct: numeric('slippage_pct', { precision: 5, scale: 3 }).default('0.050'),
+  // Exit mode: 'fixed' = standard SL/TP at absolute levels; 'trailing' = trail by %
+  exitMode: varchar('exit_mode', { length: 20 }).default('fixed'),
+  // Trailing % distances — SL trails price by this %, TP trails after activation
+  trailSlPct: numeric('trail_sl_pct', { precision: 5, scale: 3 }).default('1.000'),
+  trailTpPct: numeric('trail_tp_pct', { precision: 5, scale: 3 }).default('2.000'),
+  // Trail activates immediately (0) or only after price moves X% in profit direction
+  trailActivationPct: numeric('trail_activation_pct', { precision: 5, scale: 3 }).default('0.000'),
   isActive: boolean('is_active').default(true),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => [
@@ -131,6 +138,12 @@ export const tradeSignals = pgTable('trade_signals', {
   // publisherId: nullable FK — set when this signal is a copy of a publisher's signal
   publisherId: uuid('publisher_id').references(() => signalPublishers.id),
   rawPayload: jsonb('raw_payload'),
+  // Per-signal exit mode override; null = use user risk profile default
+  exitMode: varchar('exit_mode', { length: 20 }),
+  // Per-signal trailing % overrides; null = use user risk profile defaults
+  trailSlPct: numeric('trail_sl_pct', { precision: 5, scale: 3 }),
+  trailTpPct: numeric('trail_tp_pct', { precision: 5, scale: 3 }),
+  trailActivationPct: numeric('trail_activation_pct', { precision: 5, scale: 3 }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true }),
@@ -161,6 +174,13 @@ export const tradeExecutions = pgTable('trade_executions', {
   // fillType populated when position is closed by the position monitor
   fillType: varchar('fill_type', { length: 20 }), // sl_hit | tp_hit | manual | liquidation
   mode: varchar('mode', { length: 10 }).default('paper'), // live | paper
+  // Trailing stop state — maintained by position monitor
+  // trailSlPrice: the current (ratcheted) trailing SL level; null = not trailing
+  trailSlPrice: numeric('trail_sl_price', { precision: 20, scale: 8 }),
+  // trailTpActive: true once price first reaches the initial TP target
+  trailTpActive: boolean('trail_tp_active').default(false),
+  // trailTpPrice: current trailing TP level (set when trailTpActive = true)
+  trailTpPrice: numeric('trail_tp_price', { precision: 20, scale: 8 }),
   entryAt: timestamp('entry_at', { withTimezone: true }).defaultNow(),
   exitAt: timestamp('exit_at', { withTimezone: true }),
 }, (table) => [
@@ -219,6 +239,28 @@ export const backtestRuns = pgTable('backtest_runs', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (table) => [
   index('br_user_id_idx').on(table.userId),
+]);
+
+// ---------------------------------------------------------------------------
+// trail_audit_log
+// Append-only log of every trailing SL/TP movement for audit and debugging.
+// ---------------------------------------------------------------------------
+export const trailAuditLog = pgTable('trail_audit_log', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  executionId: uuid('execution_id').notNull().references(() => tradeExecutions.id),
+  userId: varchar('user_id', { length: 255 }).notNull(),
+  // 'sl_move' | 'tp_activate' | 'tp_move'
+  eventType: varchar('event_type', { length: 20 }).notNull(),
+  // Price that triggered the trail update
+  triggerPrice: numeric('trigger_price', { precision: 20, scale: 8 }).notNull(),
+  // New SL or TP level after update
+  newLevel: numeric('new_level', { precision: 20, scale: 8 }).notNull(),
+  // Previous level before update (null for first move)
+  prevLevel: numeric('prev_level', { precision: 20, scale: 8 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index('tal_execution_id_idx').on(table.executionId),
+  index('tal_user_id_idx').on(table.userId),
 ]);
 
 // ---------------------------------------------------------------------------

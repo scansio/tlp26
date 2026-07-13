@@ -82,9 +82,12 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // Fetch user's slippage preference (fallback to default if no profile)
+  // Fetch user's slippage preference and exit mode (fallback to defaults if no profile)
   const [profile] = await db
-    .select({ slippagePct: userRiskProfiles.slippagePct })
+    .select({
+      slippagePct: userRiskProfiles.slippagePct,
+      exitMode: userRiskProfiles.exitMode,
+    })
     .from(userRiskProfiles)
     .where(eq(userRiskProfiles.userId, userId))
     .limit(1);
@@ -111,6 +114,7 @@ export async function GET() {
       createdAt: tradeSignals.createdAt,
       updatedAt: tradeSignals.updatedAt,
       expiresAt: tradeSignals.expiresAt,
+      exitMode: tradeSignals.exitMode,
       // Publisher name (only populated for copy-sourced signals)
       publisherName: signalPublishers.displayName,
     })
@@ -119,6 +123,12 @@ export async function GET() {
     .where(eq(tradeSignals.userId, userId))
     .orderBy(desc(tradeSignals.createdAt))
     .limit(100);
+
+  // Resolve exit mode: per-signal override → user risk profile default
+  const effectiveExitMode = (
+    signalExitMode: string | null | undefined,
+    profileExitMode: string | null | undefined,
+  ): string => signalExitMode ?? profileExitMode ?? 'fixed';
 
   const signals = rows.map((row) => ({
     id: row.id,
@@ -137,6 +147,8 @@ export async function GET() {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     expiresAt: row.expiresAt,
+    // Resolved exit mode — drives "Trailing" badge in the signal card
+    exitMode: effectiveExitMode(row.exitMode, profile?.exitMode ?? null),
     // "COPY" badge — present only for copy-sourced signals
     copyBadge:
       row.source === 'copy' && row.publisherName

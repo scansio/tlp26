@@ -33,6 +33,8 @@ export interface TradeSignal {
   copyBadge?: { label: string; publisherName: string } | null;
   // Optional fee data — present when the risk-tool was run for this signal
   feeData?: SignalFeeData | null;
+  // Exit mode — 'trailing' shows the Trailing badge
+  exitMode?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -96,6 +98,14 @@ export function SignalCard({ signal }: { signal: TradeSignal }) {
             </span>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">
+            {signal.exitMode === 'trailing' && (
+              <Badge
+                variant="outline"
+                className="text-xs border-blue-400 text-blue-600 dark:border-blue-500 dark:text-blue-400"
+              >
+                Trailing
+              </Badge>
+            )}
             {signal.copyBadge && (
               <Badge variant="outline" className="text-xs">
                 {signal.copyBadge.label} · {signal.copyBadge.publisherName}

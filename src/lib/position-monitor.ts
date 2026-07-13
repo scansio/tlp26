@@ -1,5 +1,5 @@
 /**
- * Position Monitor — WebSocket-based SL/TP fill detection.
+ * Position Monitor — WebSocket-based SL/TP fill detection with trailing stop support.
  *
  * Architecture notes:
  * - Singleton pattern attached to `globalThis` (HMR-safe, same as db pool).
@@ -8,12 +8,23 @@
  * - Exponential backoff on reconnect: 1s, 2s, 4s, 8s, 16s, 32s, 60s (×4), then alert.
  * - Connection closes gracefully when all open positions for that user+exchange are gone.
  *
+ * Trailing stop logic (server-side, cross-exchange):
+ * - Exit mode is resolved per-position: signal override → user risk profile default → 'fixed'.
+ * - TRAILING SL ratchet:
+ *     LONG:  trailSlPrice only moves UP   (price × (1 - trailSlPct / 100))
+ *     SHORT: trailSlPrice only moves DOWN (price × (1 + trailSlPct / 100))
+ * - TRAILING TP: once price reaches the initial TP level, trailTpActive is set to true
+ *   and the TP trails price by trailTpPct%. A separate exit fires when price pulls back
+ *   below (LONG) or above (SHORT) the trailing TP level.
+ * - Activation guard: trailing starts only after price has moved trailActivationPct% in
+ *   the profit direction from entry.
+ * - Every SL move is appended to trail_audit_log.
+ *
  * IMPORTANT — runtime requirement:
  * WebSocket connections require a long-running Node.js process. This monitor
  * will NOT persist across cold-starts on serverless runtimes (e.g. Vercel).
  * A persistent dyno/container or a cron-tick approach via /api/cron/position-monitor
- * is required for production. The cron endpoint is provided to re-bootstrap
- * connections on each tick, but true real-time behaviour needs a worker process.
+ * is required for production.
  */
 
 import ccxt, { type Exchange, type Ticker } from 'ccxt';
@@ -23,6 +34,8 @@ import {
   tradeExecutions,
   tradeSignals,
   userExchanges,
+  userRiskProfiles,
+  trailAuditLog,
 } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
 import { sendNotification } from '@/lib/notifications';
@@ -45,6 +58,23 @@ interface OpenPosition {
   takeProfit: string | null;
   mode: string | null;
   positionSize: string | null;
+  direction: string | null;
+  // Trailing config (resolved: signal override → user profile → defaults)
+  exitMode: string;            // 'fixed' | 'trailing'
+  trailSlPct: number;          // e.g. 1.0 = 1%
+  trailTpPct: number;          // e.g. 2.0 = 2%
+  trailActivationPct: number;  // e.g. 0 = immediately
+  // Trailing state persisted in trade_executions
+  trailSlPrice: string | null;
+  trailTpActive: boolean;
+  trailTpPrice: string | null;
+}
+
+interface TrailingConfig {
+  exitMode: string;
+  trailSlPct: number;
+  trailTpPct: number;
+  trailActivationPct: number;
 }
 
 interface MonitorState {
@@ -55,26 +85,28 @@ interface MonitorState {
   retryCount: number;
   retryTimeoutId: ReturnType<typeof setTimeout> | null;
   paperIntervalId: ReturnType<typeof setInterval> | null;
-  // abort flag — set to true to stop the watch loop
   stopped: boolean;
 }
 
 // ---------------------------------------------------------------------------
-// Exponential backoff schedule (ms): 1s, 2s, 4s, 8s, 16s, 32s, 60s×4
-// Max 10 retries, then alert.
+// Constants
 // ---------------------------------------------------------------------------
 
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000, 60000, 60000];
 const MAX_RETRIES = 10;
-const PAPER_POLL_INTERVAL_MS = 10_000; // 10 seconds
-const PRICE_TOLERANCE_PCT = 0.005;     // 0.5% — fills within this band count as SL/TP
+const PAPER_POLL_INTERVAL_MS = 10_000;
+const PRICE_TOLERANCE_PCT = 0.005;
+
+// Default trailing % values (mirrors schema defaults)
+const DEFAULT_TRAIL_SL_PCT = 1.0;
+const DEFAULT_TRAIL_TP_PCT = 2.0;
+const DEFAULT_TRAIL_ACTIVATION_PCT = 0.0;
 
 // ---------------------------------------------------------------------------
 // Global singleton
 // ---------------------------------------------------------------------------
 
 declare global {
-
   var __positionMonitor: PositionMonitorManager | undefined;
 }
 
@@ -92,7 +124,6 @@ function classifyFill(
   const lowerType = orderType?.toLowerCase() ?? '';
   const lowerReason = orderReason?.toLowerCase() ?? '';
 
-  // Liquidation signals from exchange metadata
   if (
     lowerType.includes('liquidat') ||
     lowerReason.includes('liquidat') ||
@@ -123,14 +154,93 @@ function computePnl(
 }
 
 // ---------------------------------------------------------------------------
+// Trailing stop helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute the new trailing SL level given the current price.
+ * LONG:  newSl = price × (1 − trailSlPct/100)
+ * SHORT: newSl = price × (1 + trailSlPct/100)
+ */
+function computeTrailSl(
+  currentPrice: number,
+  direction: string,
+  trailSlPct: number,
+): number {
+  const pct = trailSlPct / 100;
+  return direction === 'LONG'
+    ? currentPrice * (1 - pct)
+    : currentPrice * (1 + pct);
+}
+
+/**
+ * Compute the new trailing TP level given the current price.
+ * LONG:  newTp = price × (1 + trailTpPct/100)  — TP is above price
+ * SHORT: newTp = price × (1 - trailTpPct/100)  — TP is below price
+ * Note: this is used to SET a protective re-exit level, not to move TP further from entry.
+ * When trailing TP is active, position closes when price RETREATS below (LONG) or above
+ * (SHORT) this trailing level.
+ */
+function computeTrailTp(
+  currentPrice: number,
+  direction: string,
+  trailTpPct: number,
+): number {
+  const pct = trailTpPct / 100;
+  return direction === 'LONG'
+    ? currentPrice * (1 - pct)   // exit if price drops back more than trailTpPct%
+    : currentPrice * (1 + pct);  // exit if price rises back more than trailTpPct%
+}
+
+/**
+ * Returns true when the activation guard has been cleared:
+ * price has moved trailActivationPct% from entry in the profit direction.
+ */
+function isTrailActivated(
+  currentPrice: number,
+  entryPrice: number,
+  direction: string,
+  trailActivationPct: number,
+): boolean {
+  if (trailActivationPct <= 0) return true;
+  const movePct = direction === 'LONG'
+    ? ((currentPrice - entryPrice) / entryPrice) * 100
+    : ((entryPrice - currentPrice) / entryPrice) * 100;
+  return movePct >= trailActivationPct;
+}
+
+// ---------------------------------------------------------------------------
 // DB helpers
 // ---------------------------------------------------------------------------
+
+async function fetchUserTrailingConfig(userId: string): Promise<TrailingConfig> {
+  const [profile] = await db
+    .select({
+      exitMode: userRiskProfiles.exitMode,
+      trailSlPct: userRiskProfiles.trailSlPct,
+      trailTpPct: userRiskProfiles.trailTpPct,
+      trailActivationPct: userRiskProfiles.trailActivationPct,
+    })
+    .from(userRiskProfiles)
+    .where(eq(userRiskProfiles.userId, userId))
+    .limit(1);
+
+  return {
+    exitMode: profile?.exitMode ?? 'fixed',
+    trailSlPct: profile?.trailSlPct ? Number(profile.trailSlPct) : DEFAULT_TRAIL_SL_PCT,
+    trailTpPct: profile?.trailTpPct ? Number(profile.trailTpPct) : DEFAULT_TRAIL_TP_PCT,
+    trailActivationPct: profile?.trailActivationPct
+      ? Number(profile.trailActivationPct)
+      : DEFAULT_TRAIL_ACTIVATION_PCT,
+  };
+}
 
 async function fetchOpenPositions(
   userId: string,
   exchangeName: string,
 ): Promise<OpenPosition[]> {
-  // Join trade_executions with trade_signals to get SL/TP levels
+  const userConfig = await fetchUserTrailingConfig(userId);
+
   const rows = await db
     .select({
       id: tradeExecutions.id,
@@ -142,8 +252,18 @@ async function fetchOpenPositions(
       entryPrice: tradeExecutions.entryPrice,
       stopLoss: tradeSignals.stopLoss,
       takeProfit: tradeSignals.takeProfit,
+      direction: tradeSignals.direction,
       mode: tradeExecutions.mode,
       positionSize: tradeExecutions.positionSize,
+      // Per-signal trailing overrides
+      signalExitMode: tradeSignals.exitMode,
+      signalTrailSlPct: tradeSignals.trailSlPct,
+      signalTrailTpPct: tradeSignals.trailTpPct,
+      signalTrailActivationPct: tradeSignals.trailActivationPct,
+      // Current trailing state
+      trailSlPrice: tradeExecutions.trailSlPrice,
+      trailTpActive: tradeExecutions.trailTpActive,
+      trailTpPrice: tradeExecutions.trailTpPrice,
     })
     .from(tradeExecutions)
     .leftJoin(tradeSignals, eq(tradeExecutions.signalId, tradeSignals.id))
@@ -155,19 +275,41 @@ async function fetchOpenPositions(
       ),
     );
 
-  return rows.map((r) => ({
-    id: r.id,
-    userId: r.userId,
-    exchangeName: r.exchangeName,
-    symbol: r.symbol,
-    exchangeOrderId: r.exchangeOrderId,
-    exitOrderId: r.exitOrderId,
-    entryPrice: r.entryPrice,
-    stopLoss: r.stopLoss ?? null,
-    takeProfit: r.takeProfit ?? null,
-    mode: r.mode,
-    positionSize: r.positionSize,
-  }));
+  return rows.map((r) => {
+    // Resolve trailing config: signal override → user profile default
+    const exitMode = r.signalExitMode ?? userConfig.exitMode;
+    const trailSlPct = r.signalTrailSlPct
+      ? Number(r.signalTrailSlPct)
+      : userConfig.trailSlPct;
+    const trailTpPct = r.signalTrailTpPct
+      ? Number(r.signalTrailTpPct)
+      : userConfig.trailTpPct;
+    const trailActivationPct = r.signalTrailActivationPct
+      ? Number(r.signalTrailActivationPct)
+      : userConfig.trailActivationPct;
+
+    return {
+      id: r.id,
+      userId: r.userId,
+      exchangeName: r.exchangeName,
+      symbol: r.symbol,
+      exchangeOrderId: r.exchangeOrderId,
+      exitOrderId: r.exitOrderId,
+      entryPrice: r.entryPrice,
+      stopLoss: r.stopLoss ?? null,
+      takeProfit: r.takeProfit ?? null,
+      direction: r.direction ?? null,
+      mode: r.mode,
+      positionSize: r.positionSize,
+      exitMode,
+      trailSlPct,
+      trailTpPct,
+      trailActivationPct,
+      trailSlPrice: r.trailSlPrice ?? null,
+      trailTpActive: r.trailTpActive ?? false,
+      trailTpPrice: r.trailTpPrice ?? null,
+    };
+  });
 }
 
 async function closePosition(
@@ -184,6 +326,38 @@ async function closePosition(
       fillType,
     })
     .where(eq(tradeExecutions.id, executionId));
+}
+
+async function updateTrailState(
+  executionId: string,
+  update: {
+    trailSlPrice?: string;
+    trailTpActive?: boolean;
+    trailTpPrice?: string | null;
+  },
+): Promise<void> {
+  await db
+    .update(tradeExecutions)
+    .set(update)
+    .where(eq(tradeExecutions.id, executionId));
+}
+
+async function appendTrailAudit(
+  executionId: string,
+  userId: string,
+  eventType: 'sl_move' | 'tp_activate' | 'tp_move',
+  triggerPrice: number,
+  newLevel: number,
+  prevLevel: number | null,
+): Promise<void> {
+  await db.insert(trailAuditLog).values({
+    executionId,
+    userId,
+    eventType,
+    triggerPrice: String(triggerPrice),
+    newLevel: String(newLevel),
+    prevLevel: prevLevel !== null ? String(prevLevel) : null,
+  });
 }
 
 async function getExchangeCredentials(
@@ -217,11 +391,145 @@ async function getExchangeCredentials(
 }
 
 // ---------------------------------------------------------------------------
+// Core trailing logic — called on each price tick for an open position
+// Returns true if the position should be closed immediately.
+// ---------------------------------------------------------------------------
+
+async function applyTrailingLogic(
+  position: OpenPosition,
+  currentPrice: number,
+): Promise<boolean> {
+  if (position.exitMode !== 'trailing') return false;
+
+  const direction = position.direction ?? 'LONG';
+  const entry = position.entryPrice ? parseFloat(position.entryPrice) : null;
+  if (!entry) return false;
+
+  const { trailSlPct, trailTpPct, trailActivationPct } = position;
+  const activated = isTrailActivated(currentPrice, entry, direction, trailActivationPct);
+  if (!activated) return false;
+
+  // ------------------------------------------------------------------
+  // Trailing SL ratchet
+  // ------------------------------------------------------------------
+  const newSlCandidate = computeTrailSl(currentPrice, direction, trailSlPct);
+  const currentTrailSl = position.trailSlPrice ? parseFloat(position.trailSlPrice) : null;
+
+  let updatedTrailSl: number | null = null;
+
+  if (currentTrailSl === null) {
+    // First time we set the trailing SL
+    updatedTrailSl = newSlCandidate;
+    await updateTrailState(position.id, { trailSlPrice: String(newSlCandidate) });
+    await appendTrailAudit(position.id, position.userId, 'sl_move', currentPrice, newSlCandidate, null);
+  } else {
+    // Ratchet: only move in the favorable direction
+    const shouldMove = direction === 'LONG'
+      ? newSlCandidate > currentTrailSl
+      : newSlCandidate < currentTrailSl;
+
+    if (shouldMove) {
+      updatedTrailSl = newSlCandidate;
+      await updateTrailState(position.id, { trailSlPrice: String(newSlCandidate) });
+      await appendTrailAudit(position.id, position.userId, 'sl_move', currentPrice, newSlCandidate, currentTrailSl);
+    } else {
+      updatedTrailSl = currentTrailSl;
+    }
+  }
+
+  // Check if trailing SL has been hit
+  if (updatedTrailSl !== null) {
+    const slHit = direction === 'LONG'
+      ? currentPrice <= updatedTrailSl
+      : currentPrice >= updatedTrailSl;
+
+    if (slHit) {
+      await closePosition(position.id, currentPrice, 'sl_hit');
+      const positionSize = position.positionSize ? parseFloat(position.positionSize) : 0;
+      const pnl = computePnl(entry, currentPrice, positionSize);
+      void sendNotification(position.userId, {
+        event: 'sl_hit',
+        symbol: position.symbol,
+        exitPrice: String(currentPrice),
+        pnl: pnl.toFixed(4),
+      });
+      return true;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Trailing TP
+  // ------------------------------------------------------------------
+  const initialTp = position.takeProfit ? parseFloat(position.takeProfit) : null;
+
+  if (initialTp !== null) {
+    // Activate once price reaches the initial TP level
+    if (!position.trailTpActive) {
+      const tpReached = direction === 'LONG'
+        ? currentPrice >= initialTp
+        : currentPrice <= initialTp;
+
+      if (tpReached) {
+        // Activate trailing TP — set the initial trailing level
+        const newTpLevel = computeTrailTp(currentPrice, direction, trailTpPct);
+        await updateTrailState(position.id, {
+          trailTpActive: true,
+          trailTpPrice: String(newTpLevel),
+        });
+        await appendTrailAudit(position.id, position.userId, 'tp_activate', currentPrice, newTpLevel, null);
+        // Update in-memory state for this tick
+        position.trailTpActive = true;
+        position.trailTpPrice = String(newTpLevel);
+      }
+    } else {
+      // Trailing TP is active — ratchet the trailing level
+      const currentTpLevel = position.trailTpPrice ? parseFloat(position.trailTpPrice) : null;
+      const newTpCandidate = computeTrailTp(currentPrice, direction, trailTpPct);
+
+      if (currentTpLevel !== null) {
+        // For LONG: trailing TP exit level moves down closer to price as price rises
+        // — but we want it to stay at the highest "floor" the price established.
+        // The exit level (computed as price - trailTpPct%) moves UP when price rises.
+        const shouldMoveTp = direction === 'LONG'
+          ? newTpCandidate > currentTpLevel
+          : newTpCandidate < currentTpLevel;
+
+        let activeTpLevel = currentTpLevel;
+        if (shouldMoveTp) {
+          activeTpLevel = newTpCandidate;
+          await updateTrailState(position.id, { trailTpPrice: String(newTpCandidate) });
+          await appendTrailAudit(position.id, position.userId, 'tp_move', currentPrice, newTpCandidate, currentTpLevel);
+        }
+
+        // Check if price has retreated past the trailing TP exit level
+        const tpHit = direction === 'LONG'
+          ? currentPrice <= activeTpLevel
+          : currentPrice >= activeTpLevel;
+
+        if (tpHit) {
+          await closePosition(position.id, currentPrice, 'tp_hit');
+          const positionSize = position.positionSize ? parseFloat(position.positionSize) : 0;
+          const pnl = computePnl(entry, currentPrice, positionSize);
+          void sendNotification(position.userId, {
+            event: 'tp_hit',
+            symbol: position.symbol,
+            exitPrice: String(currentPrice),
+            pnl: pnl.toFixed(4),
+          });
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Manager class
 // ---------------------------------------------------------------------------
 
 class PositionMonitorManager {
-  // key: `${userId}::${exchangeName}`
   private monitors = new Map<string, MonitorState>();
 
   private monitorKey(userId: string, exchangeName: string): string {
@@ -232,12 +540,7 @@ class PositionMonitorManager {
   // Public API
   // -------------------------------------------------------------------------
 
-  /**
-   * Ensure a monitor is running for each (userId, exchangeName) pair that has
-   * open positions. Call from the cron tick or after a trade is placed.
-   */
   async syncMonitors(): Promise<void> {
-    // Fetch all currently open positions grouped by user+exchange
     const openRows = await db
       .select({
         userId: tradeExecutions.userId,
@@ -258,7 +561,6 @@ class PositionMonitorManager {
       }
     }
 
-    // Stop monitors whose user+exchange no longer has open positions
     for (const [key, state] of this.monitors.entries()) {
       if (!seen.has(key) && state.active) {
         this.stopMonitor(state.userId, state.exchangeName);
@@ -266,9 +568,6 @@ class PositionMonitorManager {
     }
   }
 
-  /**
-   * Start a monitor for a specific user+exchange. No-op if already running.
-   */
   async startMonitor(
     userId: string,
     exchangeName: string,
@@ -296,9 +595,6 @@ class PositionMonitorManager {
     }
   }
 
-  /**
-   * Stop a specific monitor gracefully.
-   */
   stopMonitor(userId: string, exchangeName: string): void {
     const key = this.monitorKey(userId, exchangeName);
     const state = this.monitors.get(key);
@@ -319,9 +615,6 @@ class PositionMonitorManager {
     this.monitors.delete(key);
   }
 
-  /**
-   * Return status of all active monitors (for the /api/monitor endpoint).
-   */
   getStatus(): Array<{
     userId: string;
     exchangeName: string;
@@ -374,26 +667,20 @@ class PositionMonitorManager {
           ...(creds.password ? { password: creds.password } : {}),
         });
 
-        // Reset retry count on successful connection
         state.retryCount = 0;
 
-        // Watch orders indefinitely — ccxt.pro watchOrders reconnects internally
-        // but throws on fatal errors; we catch and reconnect at this level too.
         while (!state.stopped) {
           const orders = await exchange.watchOrders();
 
-          // Check if still active after awaiting
           if (state.stopped) break;
 
           const positions = await fetchOpenPositions(userId, exchangeName);
           if (positions.length === 0) {
-            // No more open positions — close WebSocket and remove monitor
             await exchange.close();
             this.stopMonitor(userId, exchangeName);
             return;
           }
 
-          // Build lookup maps for fast matching
           const byExchangeOrderId = new Map(
             positions.filter((p) => p.exchangeOrderId).map((p) => [p.exchangeOrderId!, p]),
           );
@@ -407,13 +694,19 @@ class PositionMonitorManager {
             const fillPrice = order.average ?? order.price ?? 0;
             if (!fillPrice) continue;
 
-            // Match by either the entry order ID or the exit order ID
             const orderId = order.id ?? '';
             const position =
               byExchangeOrderId.get(orderId) ??
               byExitOrderId.get(orderId);
 
             if (!position) continue;
+
+            // For trailing positions, apply trailing logic using fill price as current price.
+            // The fill price represents the latest market level at close.
+            if (position.exitMode === 'trailing') {
+              const closed = await applyTrailingLogic(position, fillPrice);
+              if (closed) continue;
+            }
 
             const fillType = classifyFill(
               fillPrice,
@@ -429,10 +722,9 @@ class PositionMonitorManager {
 
             await closePosition(position.id, fillPrice, fillType);
 
-            // Fire notification — determine the event type
             const notifEvent =
-              fillType === 'sl_hit'    ? 'sl_hit' as const :
-              fillType === 'tp_hit'    ? 'tp_hit' as const :
+              fillType === 'sl_hit'      ? 'sl_hit' as const :
+              fillType === 'tp_hit'      ? 'tp_hit' as const :
               fillType === 'liquidation' ? 'liquidation' as const :
               'manual_close' as const;
 
@@ -499,13 +791,11 @@ class PositionMonitorManager {
           return;
         }
 
-        // Use a single unauthenticated ccxt instance for price fetching
         const ExchangeClass = (ccxt as unknown as Record<string, new (config: object) => Exchange>)[exchangeName];
         if (!ExchangeClass) return;
 
         const publicExchange = new ExchangeClass({});
 
-        // Deduplicate symbols
         const symbols = [...new Set(positions.map((p) => p.symbol))];
 
         for (const symbol of symbols) {
@@ -513,7 +803,7 @@ class PositionMonitorManager {
           try {
             ticker = await publicExchange.fetchTicker(symbol);
           } catch {
-            continue; // skip on fetch error
+            continue;
           }
 
           const currentPrice = ticker.last ?? 0;
@@ -522,15 +812,41 @@ class PositionMonitorManager {
           const symbolPositions = positions.filter((p) => p.symbol === symbol);
 
           for (const position of symbolPositions) {
+            // Apply trailing logic first — may close the position
+            if (position.exitMode === 'trailing') {
+              const closed = await applyTrailingLogic(position, currentPrice);
+              if (closed) continue;
+            }
+
+            // Fixed exit mode (or trailing activation not met / not triggered above)
             const stopLoss = position.stopLoss ? parseFloat(position.stopLoss) : null;
             const takeProfit = position.takeProfit ? parseFloat(position.takeProfit) : null;
+            const direction = position.direction ?? 'LONG';
+
+            // For trailing mode, use trailSlPrice as the effective SL if set
+            const effectiveSl = position.exitMode === 'trailing' && position.trailSlPrice
+              ? parseFloat(position.trailSlPrice)
+              : stopLoss;
+
+            // For trailing mode with active trailTp, use trailTpPrice instead of original TP
+            const effectiveTp = position.exitMode === 'trailing' && position.trailTpActive && position.trailTpPrice
+              ? parseFloat(position.trailTpPrice)
+              : (position.exitMode === 'trailing' && position.trailTpActive ? null : takeProfit);
 
             let fillType: FillType | null = null;
 
-            if (stopLoss !== null && currentPrice <= stopLoss) {
-              fillType = 'sl_hit';
-            } else if (takeProfit !== null && currentPrice >= takeProfit) {
-              fillType = 'tp_hit';
+            if (effectiveSl !== null) {
+              const slHit = direction === 'LONG'
+                ? currentPrice <= effectiveSl
+                : currentPrice >= effectiveSl;
+              if (slHit) fillType = 'sl_hit';
+            }
+
+            if (!fillType && effectiveTp !== null) {
+              const tpHit = direction === 'LONG'
+                ? currentPrice >= effectiveTp
+                : currentPrice <= effectiveTp;
+              if (tpHit) fillType = 'tp_hit';
             }
 
             if (!fillType) continue;
@@ -555,7 +871,6 @@ class PositionMonitorManager {
       }
     };
 
-    // Run immediately, then on interval
     void poll();
     state.paperIntervalId = setInterval(() => void poll(), PAPER_POLL_INTERVAL_MS);
   }
