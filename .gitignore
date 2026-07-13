@@ -52,3 +52,4 @@ storage.db
 storage.db-shm
 storage.db-wal
 .claude/worktrees/
+.claire/worktrees/
