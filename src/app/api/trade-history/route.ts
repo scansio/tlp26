@@ -154,6 +154,11 @@ export async function GET(req: NextRequest) {
         confidence: tradeSignals.confidence,
         reasoning: tradeSignals.reasoning,
         rawPayload: tradeSignals.rawPayload,
+        newsSentiment: tradeSignals.newsSentiment,
+        newsSentimentScore: tradeSignals.newsSentimentScore,
+        onChainFundingRate: tradeSignals.onChainFundingRate,
+        onChainFundingBias: tradeSignals.onChainFundingBias,
+        onChainNetflow: tradeSignals.onChainNetflow,
       })
       .from(tradeExecutions)
       .leftJoin(tradeSignals, eq(tradeExecutions.signalId, tradeSignals.id))
@@ -317,9 +322,11 @@ export async function GET(req: NextRequest) {
             macdHistogram: ind.macdHistogram ?? null,
           }
         : null,
-      // News sentiment and on-chain bias are not stored in rawPayload — see AC note
-      newsSentiment: null,
-      onChainBias: null,
+      newsSentiment: r.newsSentiment ?? null,
+      newsSentimentScore: r.newsSentimentScore != null ? parseFloat(r.newsSentimentScore) : null,
+      onChainFundingRate: r.onChainFundingRate != null ? parseFloat(r.onChainFundingRate) : null,
+      onChainFundingBias: r.onChainFundingBias ?? null,
+      onChainNetflow: r.onChainNetflow != null ? parseFloat(r.onChainNetflow) : null,
     };
   });
 

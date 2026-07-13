@@ -710,6 +710,20 @@ const routeSignal = createStep({
       const entryPrice = inputData.entryZone.low ?? inputData.entryZone.high;
       const direction = action === 'ENTER_LONG' ? 'LONG' : 'SHORT';
 
+      // Derive news sentiment score from items average (overallSentimentScore not in schema)
+      const newsItems = inputData.news?.items ?? [];
+      const avgSentimentScore =
+        newsItems.length > 0
+          ? newsItems.reduce((sum: number, item: { sentimentScore: number }) => sum + item.sentimentScore, 0) / newsItems.length
+          : null;
+      const newsSentiment = inputData.news?.overallSentiment ?? null;
+      const newsSentimentScore = avgSentimentScore !== null ? String(avgSentimentScore) : null;
+
+      const onchain = inputData.onchain;
+      const onChainFundingRate = onchain?.fundingRate != null ? String(onchain.fundingRate) : null;
+      const onChainFundingBias = onchain?.fundingBias ?? null;
+      const onChainNetflow = onchain?.exchangeNetflow != null ? String(onchain.exchangeNetflow) : null;
+
       // Look up the user's execution mode
       let executionMode = 'paper';
       try {
@@ -741,6 +755,11 @@ const routeSignal = createStep({
           strategySource: strategiesTriggered.join(', '),
           source: 'ai',
           status: 'pending',
+          newsSentiment,
+          newsSentimentScore,
+          onChainFundingRate,
+          onChainFundingBias,
+          onChainNetflow,
           rawPayload: {
             triggeredBy: inputData.triggeredBy,
             exchange,

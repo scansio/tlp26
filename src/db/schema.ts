@@ -148,6 +148,12 @@ export const tradeSignals = pgTable('trade_signals', {
   trailSlPct: numeric('trail_sl_pct', { precision: 5, scale: 3 }),
   trailTpPct: numeric('trail_tp_pct', { precision: 5, scale: 3 }),
   trailActivationPct: numeric('trail_activation_pct', { precision: 5, scale: 3 }),
+  // News/on-chain snapshot captured at signal creation time (for trade history detail view)
+  newsSentiment: text('news_sentiment'), // BULLISH | BEARISH | NEUTRAL
+  newsSentimentScore: numeric('news_sentiment_score', { precision: 8, scale: 4 }),
+  onChainFundingRate: numeric('on_chain_funding_rate', { precision: 12, scale: 8 }),
+  onChainFundingBias: text('on_chain_funding_bias'), // BULLISH | BEARISH | NEUTRAL
+  onChainNetflow: numeric('on_chain_netflow', { precision: 20, scale: 4 }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true }),
