@@ -18,13 +18,16 @@ import { eq } from 'drizzle-orm';
 // ---------------------------------------------------------------------------
 
 export type NotificationEvent =
-  | 'signal_new'         // New AI signal (pending approval)
-  | 'signal_executed'    // Signal auto-executed
-  | 'signal_rejected'    // Rejected by circuit breaker
-  | 'sl_hit'            // Stop-loss hit
-  | 'tp_hit'            // Take-profit hit
-  | 'daily_limit'       // Daily trade limit reached
-  | 'daily_loss_limit'; // Daily loss limit — kill switch activated
+  | 'signal_new'           // New AI signal (pending approval)
+  | 'signal_executed'      // Signal auto-executed
+  | 'signal_rejected'      // Rejected by circuit breaker
+  | 'sl_hit'              // Stop-loss hit
+  | 'tp_hit'              // Take-profit hit
+  | 'manual_close'        // Position closed manually by trader
+  | 'liquidation'         // Position liquidated by exchange
+  | 'monitor_disconnected' // WebSocket disconnected after max retries — alert
+  | 'daily_limit'         // Daily trade limit reached
+  | 'daily_loss_limit';   // Daily loss limit — kill switch activated
 
 export interface NotificationPayload {
   event: NotificationEvent;
@@ -49,6 +52,8 @@ export interface NotificationPayload {
 
 const CRITICAL_EVENTS: Set<NotificationEvent> = new Set([
   'sl_hit',
+  'liquidation',
+  'monitor_disconnected',
   'daily_loss_limit',
   'signal_rejected',
 ]);
@@ -88,6 +93,18 @@ function formatMessage(payload: NotificationPayload): string {
     case 'tp_hit':
       return truncate(
         `🟢 Take-Profit Hit: ${payload.symbol ?? '?'} | Exit: ${payload.exitPrice ?? '?'} | P&L: ${payload.pnl ?? '?'}`
+      );
+    case 'manual_close':
+      return truncate(
+        `📤 Position Closed Manually: ${payload.symbol ?? '?'} | Exit: ${payload.exitPrice ?? '?'} | P&L: ${payload.pnl ?? '?'}`
+      );
+    case 'liquidation':
+      return truncate(
+        `💥 Liquidation: ${payload.symbol ?? '?'} | Exit: ${payload.exitPrice ?? '?'} | P&L: ${payload.pnl ?? '?'}`
+      );
+    case 'monitor_disconnected':
+      return truncate(
+        `⚠️ Position monitor disconnected after max retries on ${payload.symbol ?? 'exchange'}. Manual position check required.`
       );
     case 'daily_limit':
       return truncate(
