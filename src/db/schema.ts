@@ -137,6 +137,8 @@ export const tradeSignals = pgTable('trade_signals', {
   status: text('status').default('pending'), // pending | approved | rejected | executed | cancelled | expired
   // publisherId: nullable FK — set when this signal is a copy of a publisher's signal
   publisherId: uuid('publisher_id').references(() => signalPublishers.id),
+  // parentSignalId: FK to the publisher's own signal — enables cascade cancellation
+  parentSignalId: uuid('parent_signal_id'),
   rawPayload: jsonb('raw_payload'),
   // Per-signal exit mode override; null = use user risk profile default
   exitMode: varchar('exit_mode', { length: 20 }),

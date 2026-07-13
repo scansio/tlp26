@@ -3,6 +3,7 @@ import { db } from '@/db';
 import { userRiskProfiles, tradeSignals } from '@/db/schema';
 import { tvWebhookSchema, normaliseSymbol, actionToDirection } from '@/lib/tradingview';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
+import { propagatePublisherSignal } from '@/lib/copy-mirror-engine';
 
 export const runtime = 'nodejs';
 
@@ -106,6 +107,9 @@ export async function POST(req: Request) {
       console.warn('[tradingview-webhook] failed to start workflow:', err);
     }
   }
+
+  // Fire-and-forget: propagate to copy-trading subscribers asynchronously
+  void propagatePublisherSignal(signal.id, userId);
 
   return Response.json({ ok: true, signalId: signal.id }, { status: 201 });
 }

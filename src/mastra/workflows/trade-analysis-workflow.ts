@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { db } from '@/db';
 import { tradeSignals, userRiskProfiles } from '@/db/schema';
 import { eq } from 'drizzle-orm';
+import { propagatePublisherSignal } from '@/lib/copy-mirror-engine';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -752,6 +753,11 @@ const routeSignal = createStep({
         .returning({ id: tradeSignals.id });
 
       const signalId = inserted?.id ?? null;
+
+      // Fire-and-forget: propagate to copy-trading subscribers asynchronously
+      if (signalId) {
+        void propagatePublisherSignal(signalId, userId);
+      }
 
       // Auto-execute branch: deferred until TLP-16 (execute-trade-tool) is implemented
       let autoExecuteDeferred = false;
