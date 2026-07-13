@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { userRiskProfiles, tradeSignals } from '@/db/schema';
 import { tvWebhookSchema, normaliseSymbol, actionToDirection } from '@/lib/tradingview';
+import { checkCircuitBreaker } from '@/lib/circuit-breaker';
 
 export const runtime = 'nodejs';
 
@@ -40,6 +41,18 @@ export async function POST(req: Request) {
   const userId = profile.userId;
   const normalisedSymbol = normaliseSymbol(symbol);
   const direction = actionToDirection(action);
+
+  // --- Circuit breaker check ---
+  const cbResult = await checkCircuitBreaker(userId, {
+    signalSymbol: normalisedSymbol,
+    signalDirection: direction,
+  });
+  if (!cbResult.allowed) {
+    return Response.json(
+      { error: 'Trade blocked by circuit breaker', reason: cbResult.reason, state: cbResult.state },
+      { status: 403 },
+    );
+  }
 
   // Determine initial status based on execution mode
   const executionMode = profile.executionMode ?? 'manual';

@@ -1,0 +1,1 @@
+ALTER TABLE "user_risk_profiles" ADD COLUMN "max_open_positions" integer DEFAULT 5;
