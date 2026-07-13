@@ -39,6 +39,8 @@ export const userRiskProfiles = pgTable('user_risk_profiles', {
   killSwitchActive: boolean('kill_switch_active').default(false),
   tradingMode: varchar('trading_mode', { length: 20 }).default('manual'),
   webhookToken: varchar('webhook_token', { length: 128 }),
+  // Slippage estimate as a percentage of notional (default 0.05%)
+  slippagePct: numeric('slippage_pct', { precision: 5, scale: 3 }).default('0.050'),
   isActive: boolean('is_active').default(true),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => [

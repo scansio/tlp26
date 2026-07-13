@@ -28,6 +28,13 @@ const riskProfileSchema = z.object({
   executionMode: z.enum(['auto', 'manual']),
   preferredTimeframes: z.array(z.string()).optional().default([]),
   allowedSymbols: z.array(z.string()).optional().default([]),
+  // Slippage estimate as a percentage of notional (default 0.05%)
+  slippagePct: z
+    .number()
+    .min(0)
+    .max(1, 'slippagePct cannot exceed 1%')
+    .optional()
+    .default(0.05),
 });
 
 type RiskProfileInput = z.infer<typeof riskProfileSchema>;
@@ -97,6 +104,7 @@ export async function POST(req: Request) {
       tradingMode: data.executionMode,
       preferredTimeframes: data.preferredTimeframes,
       allowedSymbols: data.allowedSymbols,
+      slippagePct: String(data.slippagePct),
       isActive: true,
       updatedAt: new Date(),
     })
@@ -110,6 +118,7 @@ export async function POST(req: Request) {
         tradingMode: data.executionMode,
         preferredTimeframes: data.preferredTimeframes,
         allowedSymbols: data.allowedSymbols,
+        slippagePct: String(data.slippagePct),
         isActive: true,
         updatedAt: new Date(),
       },
@@ -170,6 +179,7 @@ function toResponse(profile: ProfileRow) {
     executionMode: profile.tradingMode, // auto | manual
     preferredTimeframes: profile.preferredTimeframes,
     allowedSymbols: profile.allowedSymbols,
+    slippagePct: Number(profile.slippagePct ?? '0.05'),
     isActive: profile.isActive,
     updatedAt: profile.updatedAt,
   };

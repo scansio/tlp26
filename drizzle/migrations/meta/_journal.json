@@ -50,6 +50,13 @@
       "when": 1783929280614,
       "tag": "0006_burly_cloak",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783930624095,
+      "tag": "0007_wild_scarlet_spider",
+      "breakpoints": true
     }
   ]
 }
