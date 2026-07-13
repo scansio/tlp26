@@ -44,6 +44,8 @@ export const userRiskProfiles = pgTable('user_risk_profiles', {
   webhookToken: varchar('webhook_token', { length: 128 }),
   // Slippage estimate as a percentage of notional (default 0.05%)
   slippagePct: numeric('slippage_pct', { precision: 5, scale: 3 }).default('0.050'),
+  // Virtual paper trading starting balance in USD (user-configurable; default $10,000)
+  paperBalanceUsd: numeric('paper_balance_usd', { precision: 20, scale: 2 }).default('10000.00'),
   // Exit mode: 'fixed' = standard SL/TP at absolute levels; 'trailing' = trail by %
   exitMode: varchar('exit_mode', { length: 20 }).default('fixed'),
   // Trailing % distances — SL trails price by this %, TP trails after activation

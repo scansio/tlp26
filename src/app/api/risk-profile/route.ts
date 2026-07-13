@@ -35,6 +35,13 @@ const riskProfileSchema = z.object({
     .max(1, 'slippagePct cannot exceed 1%')
     .optional()
     .default(0.05),
+  // Virtual paper balance (user-configurable starting equity, default $10,000)
+  paperBalanceUsd: z
+    .number()
+    .positive()
+    .max(10_000_000, 'paperBalanceUsd cannot exceed $10M')
+    .optional()
+    .default(10_000),
 });
 
 type RiskProfileInput = z.infer<typeof riskProfileSchema>;
@@ -105,6 +112,7 @@ export async function POST(req: Request) {
       preferredTimeframes: data.preferredTimeframes,
       allowedSymbols: data.allowedSymbols,
       slippagePct: String(data.slippagePct),
+      paperBalanceUsd: String(data.paperBalanceUsd),
       isActive: true,
       updatedAt: new Date(),
     })
@@ -119,6 +127,7 @@ export async function POST(req: Request) {
         preferredTimeframes: data.preferredTimeframes,
         allowedSymbols: data.allowedSymbols,
         slippagePct: String(data.slippagePct),
+        paperBalanceUsd: String(data.paperBalanceUsd),
         isActive: true,
         updatedAt: new Date(),
       },
@@ -180,6 +189,9 @@ function toResponse(profile: ProfileRow) {
     preferredTimeframes: profile.preferredTimeframes,
     allowedSymbols: profile.allowedSymbols,
     slippagePct: Number(profile.slippagePct ?? '0.05'),
+    // Paper trading mode fields
+    paperMode: (profile.executionMode ?? 'paper') === 'paper', // true = paper, false = live
+    paperBalanceUsd: Number(profile.paperBalanceUsd ?? '10000.00'),
     isActive: profile.isActive,
     updatedAt: profile.updatedAt,
   };

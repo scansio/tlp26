@@ -36,6 +36,8 @@ interface RiskProfile {
   executionMode: 'auto' | 'manual';
   preferredTimeframes: string[];
   allowedSymbols: string[];
+  paperMode: boolean;
+  paperBalanceUsd: number;
   isActive: boolean;
   updatedAt: string | null;
 }
@@ -48,6 +50,7 @@ interface FormState {
   executionMode: 'auto' | 'manual';
   preferredTimeframes: string[];
   allowedSymbols: string[];
+  paperBalanceUsd: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -71,6 +74,7 @@ const DEFAULT_FORM: FormState = {
   executionMode: 'manual',
   preferredTimeframes: [],
   allowedSymbols: [],
+  paperBalanceUsd: 10_000,
 };
 
 // ---------------------------------------------------------------------------
@@ -190,6 +194,7 @@ function FallbackForm({
         executionMode: profile.executionMode ?? 'manual',
         preferredTimeframes: profile.preferredTimeframes ?? [],
         allowedSymbols: profile.allowedSymbols ?? [],
+        paperBalanceUsd: profile.paperBalanceUsd ?? 10_000,
       });
     }
   }, [profile]);
@@ -227,6 +232,7 @@ function FallbackForm({
       executionMode: form.executionMode,
       preferredTimeframes: form.preferredTimeframes,
       allowedSymbols: form.allowedSymbols,
+      paperBalanceUsd: form.paperBalanceUsd,
     };
 
     try {
@@ -440,6 +446,34 @@ function FallbackForm({
 
       <Separator />
 
+      {/* Paper trading balance */}
+      <div className="space-y-2">
+        <label className="text-sm font-medium">Paper Trading Balance (USD)</label>
+        <p className="text-xs text-muted-foreground">
+          Virtual starting balance for simulated paper trades.
+        </p>
+        <div className="flex items-center gap-3">
+          <input
+            type="number"
+            min={100}
+            max={10_000_000}
+            step={100}
+            value={form.paperBalanceUsd}
+            onChange={(e) => {
+              const val = Math.max(100, Math.min(10_000_000, Number(e.target.value)));
+              setForm((f) => ({ ...f, paperBalanceUsd: val }));
+              setSaveMessage('');
+            }}
+            className="w-40 rounded-md border border-input bg-background px-3 py-1.5 text-sm tabular-nums"
+          />
+          <span className="text-sm text-muted-foreground">
+            ${form.paperBalanceUsd.toLocaleString('en-US')}
+          </span>
+        </div>
+      </div>
+
+      <Separator />
+
       {/* Save */}
       <div className="flex items-center gap-4 pt-2">
         <Button onClick={handleSave} disabled={saving}>
@@ -581,6 +615,151 @@ function SetupChat({ onSaved }: { onSaved: (p: RiskProfile) => void }) {
 }
 
 // ---------------------------------------------------------------------------
+// Trading Mode Toggle Panel (Paper ↔ Live)
+// ---------------------------------------------------------------------------
+
+function TradingModePanel({
+  profile,
+  onModeChanged,
+}: {
+  profile: RiskProfile | null;
+  onModeChanged: (isPaper: boolean) => void;
+}) {
+  const isPaper = profile?.paperMode ?? true;
+  const [showLiveConfirm, setShowLiveConfirm] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
+
+  async function switchMode(targetMode: 'paper' | 'live') {
+    setSwitching(true);
+    setSwitchError(null);
+    try {
+      const res = await fetch('/api/trading-mode', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: targetMode, confirmed: targetMode === 'live' ? true : undefined }),
+      });
+      if (res.ok) {
+        onModeChanged(targetMode === 'paper');
+        setShowLiveConfirm(false);
+        setConfirmed(false);
+      } else {
+        const err = await res.json().catch(() => ({})) as Record<string, string>;
+        setSwitchError(err?.error ?? 'Failed to switch mode. Please try again.');
+      }
+    } catch {
+      setSwitchError('Network error. Please try again.');
+    } finally {
+      setSwitching(false);
+    }
+  }
+
+  return (
+    <Card className="p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-semibold">Trading Mode</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {isPaper
+              ? 'Paper mode — all trades are simulated. No real funds at risk.'
+              : 'Live mode — trades execute on your connected exchange with real funds.'}
+          </p>
+        </div>
+        <div className={`px-3 py-1 rounded-full text-xs font-semibold ${
+          isPaper
+            ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200'
+            : 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200'
+        }`}>
+          {isPaper ? 'PAPER' : 'LIVE'}
+        </div>
+      </div>
+
+      {/* Switch buttons */}
+      {!showLiveConfirm && (
+        <div className="flex gap-3">
+          {isPaper ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowLiveConfirm(true)}
+              disabled={switching}
+            >
+              Switch to Live Trading
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void switchMode('paper')}
+              disabled={switching}
+            >
+              {switching ? 'Switching…' : 'Switch to Paper Mode'}
+            </Button>
+          )}
+        </div>
+      )}
+
+      {/* Live confirmation panel */}
+      {showLiveConfirm && (
+        <div className="rounded-lg border border-red-300 bg-red-50 dark:bg-red-950 dark:border-red-700 p-4 space-y-3">
+          <p className="text-sm font-semibold text-red-800 dark:text-red-200">
+            Switch to Live Trading
+          </p>
+          <p className="text-sm text-red-700 dark:text-red-300">
+            Live trading executes real orders on your connected exchange using real funds.
+            Losses are real. Make sure you have tested your strategy in paper mode first.
+          </p>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={(e) => setConfirmed(e.target.checked)}
+              className="mt-0.5 accent-red-600"
+            />
+            <span className="text-sm text-red-800 dark:text-red-200 font-medium">
+              I understand I am switching to live trading with real funds
+            </span>
+          </label>
+          {switchError && (
+            <p className="text-sm text-red-700 dark:text-red-300">{switchError}</p>
+          )}
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={!confirmed || switching}
+              onClick={() => void switchMode('live')}
+            >
+              {switching ? 'Switching…' : 'Confirm — Switch to Live'}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setShowLiveConfirm(false);
+                setConfirmed(false);
+                setSwitchError(null);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Paper balance info */}
+      {isPaper && profile && (
+        <p className="text-xs text-muted-foreground">
+          Virtual balance: ${(profile.paperBalanceUsd ?? 10_000).toLocaleString('en-US')} USD
+          &mdash; configurable in the form below.
+        </p>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -600,6 +779,10 @@ export default function RiskProfilePage() {
 
   function handleSaved(saved: RiskProfile) {
     setProfile(saved);
+  }
+
+  function handleModeChanged(isPaper: boolean) {
+    setProfile((prev) => prev ? { ...prev, paperMode: isPaper } : prev);
   }
 
   if (loading) {
@@ -629,6 +812,11 @@ export default function RiskProfilePage() {
             timeStyle: 'short',
           })}
         </p>
+      )}
+
+      {/* Trading mode toggle */}
+      {profile && (
+        <TradingModePanel profile={profile} onModeChanged={handleModeChanged} />
       )}
 
       {/* Mode toggle */}
@@ -677,6 +865,10 @@ export default function RiskProfilePage() {
             <span>Symbols:</span>
             <span className="font-medium text-foreground">
               {profile.allowedSymbols?.length > 0 ? profile.allowedSymbols.join(', ') : 'All'}
+            </span>
+            <span>Paper balance:</span>
+            <span className="font-medium text-foreground">
+              ${(profile.paperBalanceUsd ?? 10_000).toLocaleString('en-US')}
             </span>
           </div>
           {(profile.riskPerTradePct > 5 || profile.maxDailyLossPct > 10) && (
