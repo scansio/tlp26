@@ -50,6 +50,13 @@
       "when": 1783929280614,
       "tag": "0006_burly_cloak",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783930392603,
+      "tag": "0007_charming_thunderbolt",
+      "breakpoints": true
     }
   ]
 }
