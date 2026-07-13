@@ -6,6 +6,8 @@ const isPublicRoute = createRouteMatcher([
   '/sign-up(.*)',
   '/api/webhooks/tradingview',
   '/api/auth/webhook',
+  // Publisher public profile pages: /copy/<uuid> but NOT /copy/publisher
+  '/copy/:publisherId((?!publisher$)[^/]+)',
 ]);
 
 export default clerkMiddleware(async (auth, request) => {

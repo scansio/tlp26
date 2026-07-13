@@ -86,13 +86,19 @@ export const signalPublishers = pgTable('signal_publishers', {
   displayName: varchar('display_name', { length: 100 }),
   strategyDescription: text('strategy_description'),
   isPublic: boolean('is_public').default(false),
+  // isActive: false = deactivated; stops new subscriptions
+  isActive: boolean('is_active').default(true),
+  // shareIndividualTrades: publisher opts in to show individual trade history on their public page
+  shareIndividualTrades: boolean('share_individual_trades').default(false),
   totalSignals: integer('total_signals').default(0),
   winRate: numeric('win_rate', { precision: 5, scale: 2 }),
   sharpeRatio: numeric('sharpe_ratio', { precision: 8, scale: 4 }),
   avgRR: numeric('avg_rr', { precision: 8, scale: 4 }),
+  maxDrawdown: numeric('max_drawdown', { precision: 8, scale: 4 }),
   feePercent: numeric('fee_percent', { precision: 5, scale: 2 }).default('0.00'),
   subscriberCount: integer('subscriber_count').default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
 
 // ---------------------------------------------------------------------------

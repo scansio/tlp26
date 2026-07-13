@@ -29,6 +29,13 @@
       "when": 1783896987742,
       "tag": "0003_breezy_randall",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1783926535833,
+      "tag": "0004_crazy_thunderbolt",
+      "breakpoints": true
     }
   ]
 }
