@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { DefaultChatTransport, type ToolUIPart } from 'ai';
 import { useChat } from '@ai-sdk/react';
 import { TrendingUp } from 'lucide-react';
+import { skipOnboarding } from './actions';
 import {
   Conversation,
   ConversationContent,
@@ -65,15 +66,25 @@ export default function OnboardingPage() {
 
   return (
     <div className="relative flex h-screen w-full flex-col p-6">
-      {/* Brand */}
-      <div className="mb-4 flex items-center gap-2.5">
-        <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-          <TrendingUp className="size-4" />
+      {/* Brand + skip */}
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <TrendingUp className="size-4" />
+          </div>
+          <div className="flex flex-col leading-tight">
+            <span className="text-sm font-semibold">Trading Hub</span>
+            <span className="text-xs text-muted-foreground">Account setup</span>
+          </div>
         </div>
-        <div className="flex flex-col leading-tight">
-          <span className="text-sm font-semibold">Trading Hub</span>
-          <span className="text-xs text-muted-foreground">Account setup</span>
-        </div>
+        <form action={skipOnboarding}>
+          <button
+            type="submit"
+            className="text-xs text-muted-foreground underline-offset-4 hover:underline"
+          >
+            Skip for now
+          </button>
+        </form>
       </div>
 
       <div className="flex flex-1 flex-col overflow-hidden">
