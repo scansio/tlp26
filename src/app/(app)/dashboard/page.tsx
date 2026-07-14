@@ -332,7 +332,7 @@ export default function DashboardPage() {
       )}
 
       {/* Stat cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div data-tour="stat-cards" className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Account Equity"
           icon={DollarSign}
@@ -420,9 +420,11 @@ export default function DashboardPage() {
 
       {/* Circuit breaker + signal queue */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <CircuitBreakerPanel />
+        <div data-tour="circuit-breaker">
+          <CircuitBreakerPanel />
+        </div>
 
-        <Card>
+        <Card data-tour="signal-queue">
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">
               <Zap className="size-4 text-primary" />

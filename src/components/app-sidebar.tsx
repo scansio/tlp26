@@ -51,6 +51,7 @@ const navMain = [
     title: 'Signals',
     href: '/signals',
     icon: Zap,
+    tourId: 'nav-signals',
   },
   {
     title: 'Trade',
@@ -64,6 +65,7 @@ const navMain = [
     title: 'AI Chat',
     href: '/chat',
     icon: MessageSquare,
+    tourId: 'nav-chat',
   },
   {
     title: 'Backtest',
@@ -99,7 +101,7 @@ function NavItem({
     const isOpen = item.children.some((c) => pathname === c.href || pathname.startsWith(c.href + '/'));
     return (
       <Collapsible defaultOpen={isOpen} className="group/collapsible">
-        <SidebarMenuItem>
+        <SidebarMenuItem data-tour={'tourId' in item ? item.tourId : undefined}>
           <CollapsibleTrigger asChild>
             <SidebarMenuButton tooltip={item.title}>
               <item.icon className="size-4" />
@@ -131,7 +133,7 @@ function NavItem({
 
   const active = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href + '/'));
   return (
-    <SidebarMenuItem>
+    <SidebarMenuItem data-tour={'tourId' in item ? item.tourId : undefined}>
       <SidebarMenuButton asChild isActive={active} tooltip={item.title}>
         <Link href={item.href!}>
           <item.icon className="size-4" />
@@ -148,7 +150,7 @@ export function AppSidebar() {
   return (
     <Sidebar collapsible="icon">
       {/* Brand */}
-      <SidebarHeader>
+      <SidebarHeader data-tour="sidebar-brand">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
