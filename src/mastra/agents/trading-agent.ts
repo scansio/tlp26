@@ -1,4 +1,5 @@
 import { Agent } from '@mastra/core/agent';
+import { defaultModel } from '../model';
 import { marketDataTool } from '../tools/market-data-tool';
 import { indicatorsTool } from '../tools/indicators-tool';
 import { smcTool } from '../tools/smc-tool';
@@ -119,7 +120,7 @@ The user will provide in their message:
 - enabledStrategies: array of strategy names the user has enabled in their risk profile (only these count for strategiesTriggered)
 - accountBalance: available balance in USDT (for context — do not size the position, that is handled by the risk-tool separately)
 `,
-  model: 'cerebras/gpt-oss-120b',
+  model: defaultModel,
   tools: {
     marketDataTool,
     indicatorsTool,

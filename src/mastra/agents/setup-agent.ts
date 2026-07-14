@@ -2,6 +2,7 @@ import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
+import { defaultModel } from '../model';
 import { db } from '@/db';
 import { userRiskProfiles } from '@/db/schema';
 
@@ -157,7 +158,7 @@ TONE
 
 Be friendly and concise. Use plain English — avoid jargon unless the user uses it first. Keep each response short; do not lecture. One question at a time.
 `,
-  model: 'cerebras/gpt-oss-120b',
+  model: defaultModel,
   tools: { saveRiskProfileTool },
   memory: new Memory(),
 });

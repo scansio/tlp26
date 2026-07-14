@@ -1,5 +1,6 @@
 import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
+import { defaultModel } from '../model';
 import { weatherTool } from '../tools/weather-tool';
 
 export const weatherAgent = new Agent({
@@ -19,7 +20,7 @@ export const weatherAgent = new Agent({
 
       Use the weatherTool to fetch current weather data.
 `,
-  model: 'cerebras/gpt-oss-120b',
+  model: defaultModel,
   tools: { weatherTool },
 
   memory: new Memory(),
