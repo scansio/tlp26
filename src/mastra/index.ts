@@ -11,6 +11,9 @@ import { tradeAnalysisWorkflow } from './workflows/trade-analysis-workflow';
 import { weatherAgent } from './agents/weather-agent';
 import { tradingAgent } from './agents/trading-agent';
 import { setupAgent } from './agents/setup-agent';
+import { marketChatAgent } from './agents/market-chat-agent';
+import { chartTool } from './tools/chart-tool';
+import { createSignalTool } from './tools/create-signal-tool';
 import { marketDataTool } from './tools/market-data-tool';
 import { indicatorsTool } from './tools/indicators-tool';
 import { smcTool } from './tools/smc-tool';
@@ -24,7 +27,7 @@ import { mastraStorage } from './storage';
 
 export const mastra = new Mastra({
   workflows: { weatherWorkflow, tradeAnalysisWorkflow },
-  agents: { weatherAgent, tradingAgent, setupAgent },
+  agents: { weatherAgent, tradingAgent, setupAgent, marketChatAgent },
   tools: {
     marketDataTool,
     indicatorsTool,
@@ -35,6 +38,8 @@ export const mastra = new Mastra({
     onchainTool,
     riskTool,
     executeTradeTool,
+    chartTool,
+    createSignalTool,
   },
   storage: mastraStorage,
   logger: new PinoLogger({

@@ -17,9 +17,24 @@ export async function POST(req: Request) {
   const params = await req.json()
   const stream = await handleChatStream({
     mastra,
-    agentId: 'weather-agent',
+    agentId: 'market-chat-agent',
+    // Cache the system prompt at the provider level (Anthropic ephemeral cache).
+    // This is a no-op for Groq/OpenAI/Cerebras — safe to leave on regardless of AI_PROVIDER.
+    defaultOptions: {
+      providerOptions: {
+        anthropic: {
+          cacheControl: { type: 'ephemeral' },
+        },
+      },
+    },
     params: {
       ...params,
+      context: [
+        {
+          role: 'system',
+          content: `userId:${userId}`,
+        },
+      ],
       memory: {
         ...params.memory,
         thread: THREAD_ID,
@@ -39,7 +54,7 @@ export async function GET() {
   const THREAD_ID = userId
   const RESOURCE_ID = `chat-${userId}`
 
-  const memory = await mastra.getAgentById('weather-agent').getMemory()
+  const memory = await mastra.getAgentById('market-chat-agent').getMemory()
   let response = null
 
   try {
