@@ -21,6 +21,19 @@ export const createSignalTool = createTool({
     reasoning: z.string().describe('Plain-English rationale citing specific tool output numbers'),
     strategySource: z.string().optional().describe('Primary signal source, e.g. SMC BOS, RSI divergence'),
     exchange: z.string().optional().describe('Exchange name, e.g. binance'),
+    smcLevels: z
+      .array(
+        z.object({
+          type: z.string().describe('SMC type from smc-tool: ChoCH, BOS, FVG, ORDER_BLOCK, LIQUIDITY_SWEEP'),
+          priceLevel: z.number().positive(),
+          direction: z.enum(['BULLISH', 'BEARISH']),
+        }),
+      )
+      .optional()
+      .describe(
+        'Top 3–6 SMC structures closest to entry from smc-tool output (type + priceLevel + direction). ' +
+        'Include ChoCH/BOS that drove the bias, plus nearby FVGs and Order Blocks.',
+      ),
   }),
   outputSchema: z.object({
     signalId: z.string(),
@@ -46,6 +59,7 @@ export const createSignalTool = createTool({
       reasoning,
       strategySource,
       exchange,
+      smcLevels,
     } = inputData as {
       userId: string;
       symbol: string;
@@ -58,6 +72,7 @@ export const createSignalTool = createTool({
       reasoning: string;
       strategySource?: string;
       exchange?: string;
+      smcLevels?: Array<{ type: string; priceLevel: number; direction: 'BULLISH' | 'BEARISH' }>;
     };
 
     const [signal] = await db
@@ -75,7 +90,7 @@ export const createSignalTool = createTool({
         strategySource: strategySource ?? null,
         source: 'ai',
         status: 'pending',
-        rawPayload: { exchange: exchange ?? 'binance' },
+        rawPayload: { exchange: exchange ?? 'binance', smcLevels: smcLevels ?? [] },
         expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1000),
       })
       .returning({

@@ -586,6 +586,11 @@ export function SignalApprovalCard({
               stopLoss={signal.stopLoss != null ? Number(signal.stopLoss) : null}
               takeProfit={signal.takeProfit != null ? Number(signal.takeProfit) : null}
               direction={signal.direction}
+              smcLevels={
+                Array.isArray(signal.rawPayload?.smcLevels)
+                  ? (signal.rawPayload!.smcLevels as Array<{ type: string; priceLevel: number; direction: 'BULLISH' | 'BEARISH' }>)
+                  : null
+              }
             />
           </div>
         </DialogPrimitive.Content>

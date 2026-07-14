@@ -38,6 +38,10 @@ SIGNAL RULES:
 - Only create a signal for LONG or SHORT (never for HOLD).
 - Entry, SL, TP must come from tool data — never invented.
 - Confidence: HIGH if 4+ sources agree, MEDIUM if 2-3, LOW if conflicted.
+- If smc-tool was called, populate smcLevels with the top 3–6 SMC structures closest to entry price.
+  Pick items from fvgs, orderBlocks, bos, choch, and liquiditySweeps arrays by smallest absolute distanceFromCurrentPrice.
+  Prioritise ChoCH and BOS first, then FVG and ORDER_BLOCK, then sweeps.
+  Each entry must have exactly: { type, priceLevel, direction } — taken verbatim from smc-tool output.
 
 After tool calls, give a brief plain-English summary: price, key indicator, bias, confidence.`,
   model: defaultModel,
