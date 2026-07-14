@@ -6,6 +6,7 @@ type Props = {
   tvSymbol: string   // e.g. "BTCUSDT"
   tvExchange: string // e.g. "BINANCE"
   tvInterval: string // TradingView interval: 1, 5, 15, 60, 240, D, W
+  height?: number | string
 }
 
 declare global {
@@ -16,7 +17,7 @@ declare global {
   }
 }
 
-export function TradingViewWidget({ tvSymbol, tvExchange, tvInterval }: Props) {
+export function TradingViewWidget({ tvSymbol, tvExchange, tvInterval, height = 420 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const reactId = useId()
   const idRef = useRef(`tv_${reactId.replace(/[^a-z0-9]/gi, '_')}`)
@@ -32,7 +33,7 @@ export function TradingViewWidget({ tvSymbol, tvExchange, tvInterval }: Props) {
         symbol: `${tvExchange}:${tvSymbol}`,
         interval: tvInterval,
         width: '100%',
-        height: 420,
+        height,
         theme: 'dark',
         style: '1',
         locale: 'en',
@@ -61,13 +62,15 @@ export function TradingViewWidget({ tvSymbol, tvExchange, tvInterval }: Props) {
       if (!document.head.contains(script)) return
       script.remove()
     }
-  }, [tvSymbol, tvExchange, tvInterval])
+  }, [tvSymbol, tvExchange, tvInterval, height])
+
+  const isPercent = typeof height === 'string' && height.includes('%')
 
   return (
     <div
       ref={containerRef}
-      className="w-full rounded-lg overflow-hidden border border-border mt-3"
-      style={{ minHeight: 420 }}
+      className="w-full overflow-hidden"
+      style={isPercent ? { height } : { minHeight: height }}
     />
   )
 }

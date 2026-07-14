@@ -4,6 +4,13 @@ import { useState } from 'react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { SignalChart } from '@/components/trade/SignalChart';
+import { Dialog as DialogPrimitive } from 'radix-ui';
+import {
+  Dialog,
+  DialogOverlay,
+  DialogPortal,
+} from '@/components/ui/dialog';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -83,6 +90,7 @@ function sourceLabel(source: string | null): { label: string; title: string } {
   if (source === 'manual') return { label: 'MAN', title: 'Manually created signal' };
   return { label: 'AI', title: 'AI-generated signal' };
 }
+
 
 function timeUntilExpiry(expiresAt: string | Date | null, createdAt: string | Date | null): string | null {
   const expiry = expiresAt
@@ -212,6 +220,7 @@ export function SignalApprovalCard({
   onAction,
 }: SignalApprovalCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const [showChart, setShowChart] = useState(false);
   const [actionLoading, setActionLoading] = useState<'approve' | 'reject' | null>(null);
   const [actionResult, setActionResult] = useState<{
     type: 'success' | 'error';
@@ -246,6 +255,7 @@ export function SignalApprovalCard({
   }
 
   return (
+    <>
     <Card className="w-full">
       <CardHeader className="pb-2">
         {/* Top row */}
@@ -305,10 +315,23 @@ export function SignalApprovalCard({
             )}
           </div>
 
-          {/* Expiry label */}
-          {expiryLabel && isPending && (
-            <span className="text-xs text-muted-foreground shrink-0">{expiryLabel}</span>
-          )}
+          {/* Right-side: expiry + chart toggle */}
+          <div className="flex items-center gap-2 shrink-0">
+            {expiryLabel && isPending && (
+              <span className="text-xs text-muted-foreground">{expiryLabel}</span>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowChart((v) => !v)}
+              className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              title="Show signal on TradingView chart"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+              </svg>
+              {showChart ? 'Hide Chart' : 'Show on Chart'}
+            </button>
+          </div>
         </div>
 
         {/* Strategy source + timestamp */}
@@ -497,5 +520,77 @@ export function SignalApprovalCard({
         )}
       </CardContent>
     </Card>
+
+    {/* Chart modal — true fullscreen via raw Radix primitive */}
+    <Dialog open={showChart} onOpenChange={setShowChart}>
+      <DialogPortal>
+        <DialogOverlay />
+        <DialogPrimitive.Content
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 50,
+            display: 'flex',
+            flexDirection: 'column',
+            background: 'var(--color-background)',
+            outline: 'none',
+          }}
+        >
+          {/* Title bar */}
+          <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2 border-b bg-background">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <span>{signal.symbol}</span>
+              <span className="text-muted-foreground font-normal">{signal.timeframe}</span>
+              <span
+                className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${directionClass(signal.direction)}`}
+              >
+                {signal.direction}
+              </span>
+              {signal.entryPrice && (
+                <span className="text-muted-foreground font-normal text-xs">
+                  Entry ${fmt(signal.entryPrice)} · SL ${fmt(signal.stopLoss)} · TP ${fmt(signal.takeProfit)}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <a
+                href={`https://www.tradingview.com/chart/?symbol=BINANCE:${signal.symbol.replace('/', '')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                  <polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
+                </svg>
+                TradingView
+              </a>
+              <button
+                type="button"
+                onClick={() => setShowChart(false)}
+                className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                aria-label="Close chart"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          {/* Chart fills remaining height */}
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <SignalChart
+              symbol={signal.symbol}
+              timeframe={signal.timeframe}
+              entry={signal.entryPrice != null ? Number(signal.entryPrice) : null}
+              stopLoss={signal.stopLoss != null ? Number(signal.stopLoss) : null}
+              takeProfit={signal.takeProfit != null ? Number(signal.takeProfit) : null}
+              direction={signal.direction}
+            />
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPortal>
+    </Dialog>
+    </>
   );
 }
