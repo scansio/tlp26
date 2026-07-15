@@ -20,8 +20,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Trading Hub Platform",
+  title: "TLP26 — AI Trading Platform",
   description: "AI-powered multi-user crypto trading platform with real-time signals and automated execution.",
+  icons: { icon: '/icon.svg' },
 };
 
 export default function RootLayout({

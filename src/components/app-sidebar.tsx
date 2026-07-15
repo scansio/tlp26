@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { UserButton } from '@clerk/nextjs';
 import {
@@ -13,11 +14,11 @@ import {
   Calculator,
   Users,
   Star,
-  TrendingUp,
   Shield,
   Link2,
   ChevronRight,
   Activity,
+  TrendingUp,
 } from 'lucide-react';
 import {
   Sidebar,
@@ -155,13 +156,17 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
               <Link href="/dashboard">
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                  <TrendingUp className="size-4" />
-                </div>
-                <div className="flex flex-col gap-0.5 leading-none">
-                  <span className="font-semibold text-sm">Trading Hub</span>
-                  <span className="text-xs text-muted-foreground">AI-powered</span>
-                </div>
+                <Image
+                  src="/icon.svg"
+                  width={28}
+                  height={28}
+                  alt="TLP26"
+                  className="shrink-0 rounded-md"
+                  priority
+                />
+                <span className="font-bold text-sm tracking-tight group-data-[collapsible=icon]:hidden">
+                  TLP26
+                </span>
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
