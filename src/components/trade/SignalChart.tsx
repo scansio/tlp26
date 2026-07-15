@@ -123,6 +123,7 @@ export function SignalChart({
   const [smcLevels, setSmcLevels] = useState<SmcLevel[]>([]);
 
   const isLong = direction !== 'SHORT';
+  const smcKey = JSON.stringify(smcLevelsProp);
   const rr =
     entry != null && stopLoss != null && takeProfit != null
       ? Math.abs((Number(takeProfit) - Number(entry)) / (Number(entry) - Number(stopLoss))).toFixed(2)
@@ -259,7 +260,8 @@ export function SignalChart({
 
     void init();
     return () => { controller.abort(); observer?.disconnect(); chart?.remove(); };
-  }, [symbol, timeframe, entry, stopLoss, takeProfit, direction, smcLevelsProp, isLong]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, timeframe, entry, stopLoss, takeProfit, direction, smcKey]);
 
   return (
     <div className="relative w-full h-full" style={{ background: '#131722' }}>
