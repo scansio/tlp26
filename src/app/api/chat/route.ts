@@ -11,10 +11,10 @@ export async function POST(req: Request) {
     return new NextResponse('Unauthorized', { status: 401 });
   }
 
-  const THREAD_ID = userId
+  const params = await req.json()
+  const THREAD_ID = params.threadId ?? userId
   const RESOURCE_ID = `chat-${userId}`
 
-  const params = await req.json()
   const stream = await handleChatStream({
     mastra,
     agentId: 'market-chat-agent',
@@ -42,16 +42,18 @@ export async function POST(req: Request) {
       },
     },
   })
-  return createUIMessageStreamResponse({ stream })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return createUIMessageStreamResponse({ stream: stream as any })
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   const { userId } = await auth();
   if (!userId) {
     return new NextResponse('Unauthorized', { status: 401 });
   }
 
-  const THREAD_ID = userId
+  const url = new URL(req.url)
+  const THREAD_ID = url.searchParams.get('threadId') ?? userId
   const RESOURCE_ID = `chat-${userId}`
 
   const memory = await mastra.getAgentById('market-chat-agent').getMemory()
