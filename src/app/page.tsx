@@ -132,6 +132,7 @@ export default function Home() {
           <a href="#how-it-works" className="hover:text-white transition-colors">How it works</a>
           <a href="#testimonials" className="hover:text-white transition-colors">Testimonials</a>
           <a href="#faq" className="hover:text-white transition-colors">FAQ</a>
+          <a href="/docs" className="hover:text-white transition-colors">Docs</a>
         </nav>
         <div className="flex items-center gap-3">
           <SignedOut>
