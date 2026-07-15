@@ -26,9 +26,9 @@ export const marketDataTool = createTool({
     limit: z
       .number()
       .int()
-      .positive()
-      .default(200)
-      .describe('Number of candles to fetch (default 200)'),
+      .min(200)
+      .default(300)
+      .describe('Number of candles to fetch (minimum 200, default 300). Must be at least 200 for EMA-200 computation.'),
     exchange: z
       .enum(SUPPORTED_EXCHANGES)
       .default('binance')
