@@ -66,13 +66,13 @@ function formatDate(iso: string) {
 }
 
 function renderToolPart(part: ToolUIPart, key: string) {
-  if (part.type === 'tool-chart-tool' && part.state === 'output-available' && part.output) {
+  if ((part.type === 'tool-chartTool' || part.type === 'tool-chart-tool') && part.state === 'output-available' && part.output) {
     const out = part.output as ChartOutput
     if (out.widgetType === 'tradingview') {
       return <TradingViewWidget key={key} tvSymbol={out.tvSymbol} tvExchange={out.tvExchange} tvInterval={out.tvInterval} />
     }
   }
-  if (part.type === 'tool-create-signal-tool' && part.state === 'output-available' && part.output) {
+  if ((part.type === 'tool-createSignalTool' || part.type === 'tool-create-signal-tool') && part.state === 'output-available' && part.output) {
     return <SignalCard key={key} output={part.output as SignalOutput} />
   }
   const isError = part.state === 'output-error'
@@ -142,7 +142,7 @@ function ChatInterface({
           {messages.map(message => {
             const parts = message.parts ?? []
             const hasChartTool = parts.some(
-              p => p.type === 'tool-chart-tool' && (p as ToolUIPart).state === 'output-available'
+              p => (p.type === 'tool-chartTool' || p.type === 'tool-chart-tool') && (p as ToolUIPart).state === 'output-available'
             )
             let autoChartRendered = false
 
@@ -163,7 +163,7 @@ function ChatInterface({
                     const toolPart = part as ToolUIPart
                     // Auto-render chart from first market-data-tool when chart-tool was skipped
                     if (!hasChartTool && !autoChartRendered &&
-                        toolPart.type === 'tool-market-data-tool' &&
+                        (toolPart.type === 'tool-marketDataTool' || toolPart.type === 'tool-market-data-tool') &&
                         toolPart.state === 'output-available') {
                       autoChartRendered = true
                       const inp = toolPart.input as { symbol?: string; exchange?: string; timeframe?: string } | undefined
