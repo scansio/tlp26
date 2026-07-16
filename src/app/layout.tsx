@@ -35,7 +35,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning className={cn("font-sans", inter.variable)}>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          <NextTopLoader color="hsl(var(--primary))" showSpinner={false} />
+          <NextTopLoader color="var(--primary)" showSpinner={false} />
           <ClerkProvider appearance={{ theme: shadcn }}>
             <TooltipProvider>{children}</TooltipProvider>
           </ClerkProvider>
