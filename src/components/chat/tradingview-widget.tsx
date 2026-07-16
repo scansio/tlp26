@@ -69,7 +69,7 @@ export function TradingViewWidget({ tvSymbol, tvExchange, tvInterval, height = 4
   return (
     <div
       ref={containerRef}
-      className="w-full overflow-hidden"
+      className="w-full overflow-hidden py-4"
       style={isPercent ? { height } : { minHeight: height }}
     />
   )

@@ -916,7 +916,7 @@ export const PromptInput = ({
         type="file"
       />
       <form
-        className={cn("w-full", className)}
+        className={cn("", className)}
         onSubmit={handleSubmit}
         ref={formRef}
         {...props}
