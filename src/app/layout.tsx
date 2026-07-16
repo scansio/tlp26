@@ -4,6 +4,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { shadcn } from "@clerk/ui/themes";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
+import NextTopLoader from "nextjs-toploader";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +35,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning className={cn("font-sans", inter.variable)}>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          <NextTopLoader color="hsl(var(--primary))" showSpinner={false} />
           <ClerkProvider appearance={{ theme: shadcn }}>
             <TooltipProvider>{children}</TooltipProvider>
           </ClerkProvider>
