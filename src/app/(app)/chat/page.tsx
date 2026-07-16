@@ -1,7 +1,7 @@
 'use client'
 
 import '@/app/globals.css'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { DefaultChatTransport, ToolUIPart } from 'ai'
 import { useChat } from '@ai-sdk/react'
 
@@ -20,6 +20,7 @@ import {
 import { Message, MessageContent, MessageResponse } from '@/components/ai-elements/message'
 import { Tool, ToolHeader, ToolContent, ToolInput, ToolOutput } from '@/components/ai-elements/tool'
 import { TradingViewWidget } from '@/components/chat/tradingview-widget'
+import { TV_INTERVAL_MAP } from '@/mastra/tools/chart-tool'
 import { SignalCard } from '@/components/chat/signal-card'
 import { Shimmer } from '@/components/ai-elements/shimmer'
 import { Button } from '@/components/ui/button'
@@ -137,26 +138,54 @@ function ChatInterface({
     <div className="relative flex flex-1 flex-col overflow-hidden p-6">
       <Conversation className="h-full">
         <ConversationContent>
-          {messages.map(message => (
-            <div key={message.id}>
-              {message.parts?.map((part, i) => {
-                const partKey = `${message.id}-${i}`
-                if (part.type === 'text') {
-                  return (
-                    <Message key={partKey} from={message.role}>
-                      <MessageContent>
-                        <MessageResponse>{part.text}</MessageResponse>
-                      </MessageContent>
-                    </Message>
-                  )
-                }
-                if (part.type?.startsWith('tool-')) {
-                  return renderToolPart(part as ToolUIPart, partKey)
-                }
-                return null
-              })}
-            </div>
-          ))}
+          {messages.map(message => {
+            const parts = message.parts ?? []
+            const hasChartTool = parts.some(
+              p => p.type === 'tool-chart-tool' && (p as ToolUIPart).state === 'output-available'
+            )
+            let autoChartRendered = false
+
+            return (
+              <div key={message.id}>
+                {parts.map((part, i) => {
+                  const partKey = `${message.id}-${i}`
+                  if (part.type === 'text') {
+                    return (
+                      <Message key={partKey} from={message.role}>
+                        <MessageContent>
+                          <MessageResponse>{part.text}</MessageResponse>
+                        </MessageContent>
+                      </Message>
+                    )
+                  }
+                  if (part.type?.startsWith('tool-')) {
+                    const toolPart = part as ToolUIPart
+                    // Auto-render chart from first market-data-tool when chart-tool was skipped
+                    if (!hasChartTool && !autoChartRendered &&
+                        toolPart.type === 'tool-market-data-tool' &&
+                        toolPart.state === 'output-available') {
+                      autoChartRendered = true
+                      const inp = toolPart.input as { symbol?: string; exchange?: string; timeframe?: string } | undefined
+                      if (inp?.symbol) {
+                        return (
+                          <Fragment key={partKey}>
+                            {renderToolPart(toolPart, `${partKey}-t`)}
+                            <TradingViewWidget
+                              tvSymbol={inp.symbol.replace('/', '').toUpperCase()}
+                              tvExchange={(inp.exchange ?? 'binance').toUpperCase()}
+                              tvInterval={TV_INTERVAL_MAP[inp.timeframe ?? '1h'] ?? '60'}
+                            />
+                          </Fragment>
+                        )
+                      }
+                    }
+                    return renderToolPart(toolPart, partKey)
+                  }
+                  return null
+                })}
+              </div>
+            )
+          })}
 
           {(status === 'submitted' || status === 'streaming') && (
             <div className="flex items-center gap-2 px-1 py-2">

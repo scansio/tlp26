@@ -249,6 +249,7 @@ export async function GET() {
       id: pos.id,
       symbol: pos.symbol,
       direction: (pos.direction ?? 'LONG') as 'LONG' | 'SHORT',
+      exchangeName: pos.exchangeName,
       entryPrice,
       currentPrice,
       positionSize,

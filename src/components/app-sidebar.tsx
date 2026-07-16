@@ -58,6 +58,7 @@ const navMain = [
     title: 'Trade',
     icon: Activity,
     children: [
+      { title: 'Open Positions', href: '/trade/positions', icon: TrendingUp },
       { title: 'Signal Queue', href: '/trade/signals', icon: Clock },
       { title: 'History', href: '/trade/history', icon: History },
     ],

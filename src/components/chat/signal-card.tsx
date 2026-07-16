@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
@@ -13,6 +14,7 @@ import {
   CheckCircle2,
   XCircle,
   Loader2,
+  ArrowRight,
 } from 'lucide-react'
 
 type SignalOutput = {
@@ -179,6 +181,25 @@ export function SignalCard({ output }: Props) {
             <Button size="sm" variant="outline" onClick={() => setStatus('idle')}>
               Try again
             </Button>
+          </div>
+        )}
+
+        {status !== 'dismissed' && (
+          <div className="flex gap-2 w-full pt-1">
+            <Link href="/signals" className="flex-1">
+              <Button variant="ghost" size="sm" className="w-full text-xs gap-1.5">
+                Go to Signal
+                <ArrowRight className="size-3" />
+              </Button>
+            </Link>
+            {status === 'done' && (
+              <Link href="/trade/history" className="flex-1">
+                <Button variant="outline" size="sm" className="w-full text-xs gap-1.5">
+                  Go to Trade
+                  <ArrowRight className="size-3" />
+                </Button>
+              </Link>
+            )}
           </div>
         )}
       </CardFooter>

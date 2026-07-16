@@ -19,6 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { CircuitBreakerPanel } from '@/components/circuit-breaker/circuit-breaker-panel';
+import { PositionDrawer } from '@/components/trade/position-drawer';
 import { cn } from '@/lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -29,6 +30,7 @@ interface OpenPosition {
   id: string;
   symbol: string;
   direction: 'LONG' | 'SHORT';
+  exchangeName: string;
   entryPrice: number | null;
   currentPrice: number | null;
   positionSize: number | null;
@@ -137,11 +139,14 @@ function StatCard({
 // Position row
 // ---------------------------------------------------------------------------
 
-function PositionRow({ pos }: { pos: OpenPosition }) {
+function PositionRow({ pos, onOpen }: { pos: OpenPosition; onOpen: () => void }) {
   const pnlPositive = pos.unrealizedPnlUsd !== null && pos.unrealizedPnlUsd >= 0;
 
   return (
-    <tr className="border-b last:border-0 hover:bg-muted/40 transition-colors">
+    <tr
+      className="border-b last:border-0 hover:bg-accent/50 transition-colors cursor-pointer"
+      onClick={onOpen}
+    >
       <td className="py-3 px-4">
         <span className="font-semibold text-sm">{pos.symbol}</span>
       </td>
@@ -169,8 +174,8 @@ function PositionRow({ pos }: { pos: OpenPosition }) {
           </span>
         ) : <span className="text-muted-foreground">—</span>}
       </td>
-      <td className="py-3 px-4 text-sm tabular-nums text-muted-foreground">{pos.stopLoss !== null ? formatPrice(pos.stopLoss) : '—'}</td>
-      <td className="py-3 px-4 text-sm tabular-nums text-muted-foreground">{pos.takeProfit !== null ? formatPrice(pos.takeProfit) : '—'}</td>
+      <td className="py-3 px-4 text-sm tabular-nums text-red-400">{pos.stopLoss !== null ? formatPrice(pos.stopLoss) : '—'}</td>
+      <td className="py-3 px-4 text-sm tabular-nums text-green-400">{pos.takeProfit !== null ? formatPrice(pos.takeProfit) : '—'}</td>
     </tr>
   );
 }
@@ -187,6 +192,7 @@ export default function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const [selectedPosition, setSelectedPosition] = useState<OpenPosition | null>(null);
 
   const fetchData = useCallback(async (isManual = false) => {
     if (isManual) setRefreshing(true);
@@ -409,7 +415,7 @@ export default function DashboardPage() {
                 </thead>
                 <tbody>
                   {openPositions.map((pos) => (
-                    <PositionRow key={pos.id} pos={pos} />
+                    <PositionRow key={pos.id} pos={pos} onOpen={() => setSelectedPosition(pos)} />
                   ))}
                 </tbody>
               </table>
@@ -459,6 +465,13 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <PositionDrawer
+        position={selectedPosition}
+        open={selectedPosition !== null}
+        onClose={() => setSelectedPosition(null)}
+        onAction={() => { void fetchData(); setSelectedPosition(null); }}
+      />
     </div>
   );
 }
