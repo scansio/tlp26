@@ -2,13 +2,22 @@
 
 import '@/app/globals.css'
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
-import { DefaultChatTransport, ToolUIPart } from 'ai'
+import { DefaultChatTransport, FileUIPart, ToolUIPart } from 'ai'
 import { useChat } from '@ai-sdk/react'
 
 import {
   PromptInput,
   PromptInputBody,
   PromptInputTextarea,
+  PromptInputFooter,
+  PromptInputTools,
+  PromptInputActionMenu,
+  PromptInputActionMenuTrigger,
+  PromptInputActionMenuContent,
+  PromptInputActionAddAttachments,
+  PromptInputSubmit,
+  PromptInputHeader,
+  usePromptInputAttachments,
 } from '@/components/ai-elements/prompt-input'
 
 import {
@@ -23,6 +32,13 @@ import { TradingViewWidget } from '@/components/chat/tradingview-widget'
 import { TV_INTERVAL_MAP } from '@/mastra/tools/chart-tool'
 import { SignalCard } from '@/components/chat/signal-card'
 import { Shimmer } from '@/components/ai-elements/shimmer'
+import {
+  Attachments,
+  Attachment,
+  AttachmentPreview,
+  AttachmentInfo,
+  AttachmentRemove,
+} from '@/components/ai-elements/attachments'
 import { Button } from '@/components/ui/button'
 import { AlertCircle, MessageSquarePlus, RefreshCw, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -87,9 +103,52 @@ function renderToolPart(part: ToolUIPart, key: string) {
   )
 }
 
+function renderFilePart(part: FileUIPart, key: string) {
+  if (part.mediaType?.startsWith('image/')) {
+    return (
+      <img
+        key={key}
+        src={part.url}
+        alt={part.filename ?? 'Image'}
+        className="max-w-xs rounded-lg border border-border object-cover"
+      />
+    )
+  }
+  return (
+    <Attachments key={key} variant="inline">
+      <Attachment data={{ ...part, id: key }}>
+        <AttachmentPreview />
+        <AttachmentInfo />
+      </Attachment>
+    </Attachments>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// AttachmentPreviewArea — renders pending attachments inside PromptInput
+// ---------------------------------------------------------------------------
+
+function AttachmentPreviewArea() {
+  const { files, remove } = usePromptInputAttachments()
+  if (files.length === 0) return null
+  return (
+    <Attachments variant="inline" className="flex-wrap px-3 pt-2">
+      {files.map(f => (
+        <Attachment key={f.id} data={f} onRemove={() => remove(f.id)}>
+          <AttachmentPreview />
+          <AttachmentInfo />
+          <AttachmentRemove />
+        </Attachment>
+      ))}
+    </Attachments>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // ChatInterface — remounts per session via key={threadId}
 // ---------------------------------------------------------------------------
+
+const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
 
 function ChatInterface({
   threadId,
@@ -117,13 +176,13 @@ function ChatInterface({
       .catch(() => {/* no prior messages */})
   }, [threadId, setMessages])
 
-  const handleSubmit = useCallback(async () => {
-    if (!input.trim()) return
+  const handleSubmit = useCallback(async ({ text, files }: { text: string; files?: FileUIPart[] }) => {
+    if (!text.trim() && (!files || files.length === 0)) return
 
     // Auto-title on first message
     if (!titleSetRef.current && messages.length === 0) {
       titleSetRef.current = true
-      const title = input.slice(0, 60)
+      const title = text.slice(0, 60)
       fetch(`/api/chat/sessions/${encodeURIComponent(threadId)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -131,9 +190,9 @@ function ChatInterface({
       }).then(() => onTitleSet(title))
     }
 
-    sendMessage({ text: input })
+    sendMessage({ text, files })
     setInput('')
-  }, [input, messages.length, threadId, onTitleSet, sendMessage])
+  }, [messages.length, threadId, onTitleSet, sendMessage])
 
   return (
     <div className="relative flex flex-1 flex-col overflow-hidden p-6">
@@ -146,9 +205,29 @@ function ChatInterface({
             )
             let autoChartRendered = false
 
+            // Group consecutive file parts from user messages so they render together
+            const fileParts = message.role === 'user'
+              ? parts.filter(p => p.type === 'file') as FileUIPart[]
+              : []
+            const filePartsRendered = new Set<number>()
+
             return (
               <div key={message.id}>
+                {/* Render user-attached files above the text bubble */}
+                {fileParts.length > 0 && (
+                  <Message from={message.role}>
+                    <MessageContent className="gap-1">
+                      {fileParts.map((fp, fi) => {
+                        const idx = parts.indexOf(fp)
+                        filePartsRendered.add(idx)
+                        return renderFilePart(fp, `${message.id}-file-${fi}`)
+                      })}
+                    </MessageContent>
+                  </Message>
+                )}
+
                 {parts.map((part, i) => {
+                  if (filePartsRendered.has(i)) return null
                   const partKey = `${message.id}-${i}`
                   if (part.type === 'text') {
                     return (
@@ -222,7 +301,17 @@ function ChatInterface({
         </ConversationContent>
       </Conversation>
 
-      <PromptInput onSubmit={handleSubmit} className="mt-20">
+      <PromptInput
+        onSubmit={handleSubmit}
+        className="mt-20"
+        accept="image/*,text/*,application/pdf"
+        multiple
+        maxFileSize={MAX_FILE_SIZE}
+        onError={e => console.warn('Attachment error:', e.message)}
+      >
+        <PromptInputHeader>
+          <AttachmentPreviewArea />
+        </PromptInputHeader>
         <PromptInputBody>
           <PromptInputTextarea
             onChange={e => setInput(e.target.value)}
@@ -232,6 +321,20 @@ function ChatInterface({
             disabled={status !== 'ready' && status !== 'error'}
           />
         </PromptInputBody>
+        <PromptInputFooter>
+          <PromptInputTools>
+            <PromptInputActionMenu>
+              <PromptInputActionMenuTrigger tooltip="Attach file" />
+              <PromptInputActionMenuContent>
+                <PromptInputActionAddAttachments label="Attach image or file" />
+              </PromptInputActionMenuContent>
+            </PromptInputActionMenu>
+          </PromptInputTools>
+          <PromptInputSubmit
+            status={status}
+            disabled={status !== 'ready' && status !== 'error'}
+          />
+        </PromptInputFooter>
       </PromptInput>
     </div>
   )
@@ -348,7 +451,7 @@ export default function Chat() {
   }
 
   return (
-    <div className="flex h-screen w-full overflow-hidden">
+    <div className="flex h-full w-full overflow-hidden">
       <SessionSidebar
         sessions={sessions}
         activeId={activeThreadId}
