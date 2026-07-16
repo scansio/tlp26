@@ -721,6 +721,19 @@ const routeSignal = createStep({
       const entryPrice = inputData.entryZone.low ?? inputData.entryZone.high;
       const direction = action === 'ENTER_LONG' ? 'LONG' : 'SHORT';
 
+      // Enforce SL/TP requirement — never create a signal without both.
+      if (!inputData.sl || !inputData.tp) {
+        console.warn('routeSignal: agent returned non-HOLD action without SL/TP — aborting signal creation');
+        return {
+          signalId: null,
+          action: 'HOLD' as const,
+          symbol,
+          userId,
+          executionMode: 'n/a',
+          executionResult: null,
+        };
+      }
+
       // Derive news sentiment score from items average (overallSentimentScore not in schema)
       const newsItems = inputData.news?.items ?? [];
       const avgSentimentScore =
@@ -761,8 +774,8 @@ const routeSignal = createStep({
           timeframe: '1h',
           direction,
           entryPrice: entryPrice ? String(entryPrice) : null,
-          stopLoss: inputData.sl ? String(inputData.sl) : null,
-          takeProfit: inputData.tp ? String(inputData.tp) : null,
+          stopLoss: String(inputData.sl),
+          takeProfit: String(inputData.tp),
           confidence,
           reasoning,
           strategySource: strategiesTriggered.join(', '),
@@ -811,8 +824,8 @@ const routeSignal = createStep({
               direction: direction as 'LONG' | 'SHORT',
               entryPrice,
               positionSizeUsdt,
-              sl: inputData.sl ?? undefined,
-              tp: inputData.tp ?? undefined,
+              sl: inputData.sl!,
+              tp: inputData.tp!,
               mode: toolMode,
               slippagePct,
             },

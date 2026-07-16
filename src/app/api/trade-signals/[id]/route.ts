@@ -117,6 +117,14 @@ export async function PATCH(
     );
   }
 
+  // Block approve if SL or TP is missing — enforce the hard requirement before any execution.
+  if (action === 'approve' && (!signal.stopLoss || !signal.takeProfit)) {
+    return NextResponse.json(
+      { error: 'Cannot approve signal: stop-loss and take-profit are required before execution.' },
+      { status: 422 },
+    );
+  }
+
   // Reject path — simple status update
   if (action === 'reject') {
     await db
@@ -270,8 +278,8 @@ export async function PATCH(
       direction: signal.direction as 'LONG' | 'SHORT',
       entryPrice: liveEntryPrice,
       positionSizeUsdt,
-      sl: signal.stopLoss ? Number(signal.stopLoss) : undefined,
-      tp: signal.takeProfit ? Number(signal.takeProfit) : undefined,
+      sl: Number(signal.stopLoss),
+      tp: Number(signal.takeProfit),
       mode: 'live',
       slippagePct,
     },

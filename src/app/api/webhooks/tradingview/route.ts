@@ -68,8 +68,8 @@ export async function POST(req: Request) {
       timeframe: '1h', // TV alerts don't include timeframe; default to 1h
       direction,
       entryPrice: price != null ? String(price) : null,
-      stopLoss: sl != null ? String(sl) : null,
-      takeProfit: tp != null ? String(tp) : null,
+      stopLoss: String(sl),
+      takeProfit: String(tp),
       source: 'tradingview',
       status: signalStatus,
       rawPayload: body as Record<string, unknown>,

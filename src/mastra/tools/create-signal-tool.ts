@@ -15,8 +15,8 @@ export const createSignalTool = createTool({
     timeframe: z.string().describe('Chart timeframe, e.g. 1h'),
     direction: z.enum(['LONG', 'SHORT']),
     entryPrice: z.number().positive().describe('Recommended entry price from market-data-tool output'),
-    sl: z.number().positive().optional().describe('Stop-loss price from tool data'),
-    tp: z.number().positive().optional().describe('Take-profit price from tool data'),
+    sl: z.number().positive().describe('Stop-loss price — required, must come from tool data'),
+    tp: z.number().positive().describe('Take-profit price — required, must come from tool data'),
     confidence: z.enum(['LOW', 'MEDIUM', 'HIGH']),
     reasoning: z.string().describe('Plain-English rationale citing specific tool output numbers'),
     strategySource: z.string().optional().describe('Primary signal source, e.g. SMC BOS, RSI divergence'),
@@ -66,8 +66,8 @@ export const createSignalTool = createTool({
       timeframe: string;
       direction: 'LONG' | 'SHORT';
       entryPrice: number;
-      sl?: number;
-      tp?: number;
+      sl: number;
+      tp: number;
       confidence: 'LOW' | 'MEDIUM' | 'HIGH';
       reasoning: string;
       strategySource?: string;
@@ -83,8 +83,8 @@ export const createSignalTool = createTool({
         timeframe,
         direction,
         entryPrice: String(entryPrice),
-        stopLoss: sl != null ? String(sl) : null,
-        takeProfit: tp != null ? String(tp) : null,
+        stopLoss: String(sl),
+        takeProfit: String(tp),
         confidence,
         reasoning,
         strategySource: strategySource ?? null,

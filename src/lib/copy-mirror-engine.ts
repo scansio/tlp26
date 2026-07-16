@@ -93,6 +93,14 @@ export async function propagatePublisherSignal(
       return;
     }
 
+    // Never propagate signals that are missing SL or TP.
+    if (!pubSignal.stopLoss || !pubSignal.takeProfit) {
+      console.warn(
+        `[mirror-engine] skipping propagation — publisher signal missing SL/TP: signalId=${publisherSignalId}`,
+      );
+      return;
+    }
+
     // --- 2. Resolve the publisher record (user must be an active, public publisher) ---
     const [publisher] = await db
       .select()

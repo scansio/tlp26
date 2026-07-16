@@ -8,8 +8,8 @@ export const tvWebhookSchema = z.object({
   symbol: z.string().min(1),
   action: z.enum(['BUY', 'SELL']),
   price: z.number().positive().optional(),
-  sl: z.number().positive().optional(),
-  tp: z.number().positive().optional(),
+  sl: z.number().positive().describe('Stop-loss price — required'),
+  tp: z.number().positive().describe('Take-profit price — required'),
 });
 
 export type TvWebhookPayload = z.infer<typeof tvWebhookSchema>;

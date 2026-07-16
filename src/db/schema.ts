@@ -129,8 +129,8 @@ export const tradeSignals = pgTable('trade_signals', {
   entryPrice: numeric('entry_price', { precision: 20, scale: 8 }),
   // TS names stopLoss/takeProfit kept to avoid breaking existing callers;
   // DB columns are stop_loss / take_profit — semantically equivalent to sl/tp in the AC.
-  stopLoss: numeric('stop_loss', { precision: 20, scale: 8 }),
-  takeProfit: numeric('take_profit', { precision: 20, scale: 8 }),
+  stopLoss: numeric('stop_loss', { precision: 20, scale: 8 }).notNull(),
+  takeProfit: numeric('take_profit', { precision: 20, scale: 8 }).notNull(),
   // confidence changed from numeric to text (LOW | MEDIUM | HIGH)
   confidence: text('confidence'), // LOW | MEDIUM | HIGH
   reasoning: text('reasoning'),

@@ -102,8 +102,8 @@ export const executeTradeTool = createTool({
       .number()
       .positive()
       .describe('Notional position size in USDT from risk-tool output'),
-    sl: z.number().positive().optional().describe('Stop-loss price'),
-    tp: z.number().positive().optional().describe('Take-profit price'),
+    sl: z.number().positive().describe('Stop-loss price — required'),
+    tp: z.number().positive().describe('Take-profit price — required'),
     mode: z.enum(['paper', 'live']).describe('Execution mode'),
     slippagePct: z
       .number()
@@ -142,8 +142,8 @@ export const executeTradeTool = createTool({
       direction: 'LONG' | 'SHORT';
       entryPrice: number;
       positionSizeUsdt: number;
-      sl?: number;
-      tp?: number;
+      sl: number;
+      tp: number;
       mode: 'paper' | 'live';
       slippagePct?: number;
     };
