@@ -132,6 +132,29 @@ export type ToolOutputProps = ComponentProps<"div"> & {
   errorText: ToolPart["errorText"];
 };
 
+function parseToolError(errorText: string): { message: string; hint?: string } {
+  let message = errorText;
+  try {
+    const parsed = JSON.parse(errorText);
+    message =
+      parsed?.cause?.message ??
+      parsed?.details?.errorMessage ??
+      errorText;
+    if (message.startsWith("Error: ")) message = message.slice(7);
+  } catch {
+    // use raw errorText
+  }
+  let hint: string | undefined;
+  if (/symbol|trading pair|not found|format/i.test(message)) {
+    hint = 'Use slash notation, e.g. "BTC/USDT" — try rephrasing like "analyse BTC/USDT on 4h".';
+  } else if (/api.?key|unauthorized|401|403/i.test(message)) {
+    hint = "Check that your exchange API key is configured in Settings → Exchanges.";
+  } else if (/rate.?limit|429|quota/i.test(message)) {
+    hint = "The data provider is rate-limited. Wait a moment and try again.";
+  }
+  return { message, hint };
+}
+
 export const ToolOutput = ({
   className,
   output,
@@ -152,6 +175,8 @@ export const ToolOutput = ({
     Output = <CodeBlock code={output} language="json" />;
   }
 
+  const parsed = errorText ? parseToolError(errorText) : null;
+
   return (
     <div className={cn("space-y-2", className)} {...props}>
       <h4 className="font-medium text-muted-foreground text-xs uppercase tracking-wide">
@@ -165,8 +190,15 @@ export const ToolOutput = ({
             : "bg-muted/50 text-foreground"
         )}
       >
-        {errorText && <div>{errorText}</div>}
-        {Output}
+        {parsed && (
+          <div className="p-3 space-y-1.5">
+            <p className="font-medium leading-snug">{parsed.message}</p>
+            {parsed.hint && (
+              <p className="opacity-70">Tip: {parsed.hint}</p>
+            )}
+          </div>
+        )}
+        {!errorText && Output}
       </div>
     </div>
   );

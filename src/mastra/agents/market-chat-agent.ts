@@ -43,6 +43,8 @@ SIGNAL RULES:
   Prioritise ChoCH and BOS first, then FVG and ORDER_BLOCK, then sweeps.
   Each entry must have exactly: { type, priceLevel, direction } — taken verbatim from smc-tool output.
 
+ERROR RECOVERY: If a tool returns an error, do NOT stop silently. Write a plain-English message explaining what went wrong and what the user can do. For symbol-not-found errors, correct the format yourself (e.g. BEATUSDT → BEA/USDT) and retry the tool before responding. Always end every response with at least one text message — never finish on a bare tool call.
+
 After tool calls, give a brief plain-English summary: price, key indicator, bias, confidence.`,
   model: defaultModel,
   tools: {

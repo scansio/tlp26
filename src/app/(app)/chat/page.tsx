@@ -75,8 +75,9 @@ function renderToolPart(part: ToolUIPart, key: string) {
   if (part.type === 'tool-create-signal-tool' && part.state === 'output-available' && part.output) {
     return <SignalCard key={key} output={part.output as SignalOutput} />
   }
+  const isError = part.state === 'output-error'
   return (
-    <Tool key={key}>
+    <Tool key={key} defaultOpen={isError}>
       <ToolHeader type={part.type} state={part.state || 'output-available'} className="cursor-pointer" />
       <ToolContent>
         <ToolInput input={part.input || {}} />
