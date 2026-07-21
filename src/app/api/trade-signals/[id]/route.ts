@@ -65,6 +65,39 @@ async function fetchLivePrice(symbol: string, exchangeName: string): Promise<num
 }
 
 // ---------------------------------------------------------------------------
+// GET — fetch signal status
+// ---------------------------------------------------------------------------
+
+export async function GET(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const { id: signalId } = await params;
+
+  const [signal] = await db
+    .select({ id: tradeSignals.id, status: tradeSignals.status })
+    .from(tradeSignals)
+    .where(
+      and(
+        eq(tradeSignals.id, signalId),
+        eq(tradeSignals.userId, userId),
+      ),
+    )
+    .limit(1);
+
+  if (!signal) {
+    return NextResponse.json({ error: 'Signal not found' }, { status: 404 });
+  }
+
+  return NextResponse.json({ signalId: signal.id, status: signal.status });
+}
+
+// ---------------------------------------------------------------------------
 // PATCH — approve or reject
 // ---------------------------------------------------------------------------
 

@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 
 type Props = {
   tvSymbol: string   // e.g. "BTCUSDT"
@@ -21,8 +22,10 @@ export function TradingViewWidget({ tvSymbol, tvExchange, tvInterval, height = 4
   const containerRef = useRef<HTMLDivElement>(null)
   const reactId = useId()
   const idRef = useRef(`tv_${reactId.replace(/[^a-z0-9]/gi, '_')}`)
+  const [collapsed, setCollapsed] = useState(true)
 
   useEffect(() => {
+    if (collapsed) return
     const containerId = idRef.current
 
     const init = () => {
@@ -62,15 +65,29 @@ export function TradingViewWidget({ tvSymbol, tvExchange, tvInterval, height = 4
       if (!document.head.contains(script)) return
       script.remove()
     }
-  }, [tvSymbol, tvExchange, tvInterval, height])
+  }, [tvSymbol, tvExchange, tvInterval, height, collapsed])
 
   const isPercent = typeof height === 'string' && height.includes('%')
+  const label = `${tvExchange}:${tvSymbol} · ${tvInterval}`
 
   return (
-    <div
-      ref={containerRef}
-      className="w-full overflow-hidden py-4"
-      style={isPercent ? { height } : { minHeight: height }}
-    />
+    <div className="w-full rounded-lg border border-border overflow-hidden my-2">
+      <button
+        onClick={() => setCollapsed(c => !c)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:bg-muted/50 transition-colors"
+      >
+        {collapsed
+          ? <ChevronRight className="size-3.5 shrink-0" />
+          : <ChevronDown className="size-3.5 shrink-0" />}
+        <span className="font-medium">{label}</span>
+      </button>
+      {!collapsed && (
+        <div
+          ref={containerRef}
+          className="w-full overflow-hidden"
+          style={isPercent ? { height } : { minHeight: height }}
+        />
+      )}
+    </div>
   )
 }
