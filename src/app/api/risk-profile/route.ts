@@ -42,6 +42,13 @@ const riskProfileSchema = z.object({
     .max(10_000_000, 'paperBalanceUsd cannot exceed $10M')
     .optional()
     .default(10_000),
+  // Minimum R:R ratio required to take a trade (default 1.5)
+  minRiskRewardRatio: z
+    .number()
+    .min(1, 'minRiskRewardRatio must be at least 1')
+    .max(10, 'minRiskRewardRatio cannot exceed 10')
+    .optional()
+    .default(1.5),
 });
 
 type RiskProfileInput = z.infer<typeof riskProfileSchema>;
@@ -113,6 +120,7 @@ export async function POST(req: Request) {
       allowedSymbols: data.allowedSymbols,
       slippagePct: String(data.slippagePct),
       paperBalanceUsd: String(data.paperBalanceUsd),
+      minRiskRewardRatio: String(data.minRiskRewardRatio),
       isActive: true,
       updatedAt: new Date(),
     })
@@ -128,6 +136,7 @@ export async function POST(req: Request) {
         allowedSymbols: data.allowedSymbols,
         slippagePct: String(data.slippagePct),
         paperBalanceUsd: String(data.paperBalanceUsd),
+        minRiskRewardRatio: String(data.minRiskRewardRatio),
         isActive: true,
         updatedAt: new Date(),
       },
@@ -189,6 +198,7 @@ function toResponse(profile: ProfileRow) {
     preferredTimeframes: profile.preferredTimeframes,
     allowedSymbols: profile.allowedSymbols,
     slippagePct: Number(profile.slippagePct ?? '0.05'),
+    minRiskRewardRatio: Number(profile.minRiskRewardRatio ?? '1.50'),
     // Paper trading mode fields
     paperMode: (profile.executionMode ?? 'paper') === 'paper', // true = paper, false = live
     paperBalanceUsd: Number(profile.paperBalanceUsd ?? '10000.00'),

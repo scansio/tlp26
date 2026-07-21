@@ -33,6 +33,7 @@ interface RiskProfile {
   maxTradesPerDay: number;
   riskPerTradePct: number;
   maxDailyLossPct: number;
+  minRiskRewardRatio: number;
   executionMode: 'auto' | 'manual';
   preferredTimeframes: string[];
   allowedSymbols: string[];
@@ -47,6 +48,7 @@ interface FormState {
   maxTradesPerDay: number;
   riskPerTradePct: number;
   maxDailyLossPct: number;
+  minRiskRewardRatio: number;
   executionMode: 'auto' | 'manual';
   preferredTimeframes: string[];
   allowedSymbols: string[];
@@ -71,6 +73,7 @@ const DEFAULT_FORM: FormState = {
   maxTradesPerDay: 5,
   riskPerTradePct: 2,
   maxDailyLossPct: 5,
+  minRiskRewardRatio: 1.5,
   executionMode: 'manual',
   preferredTimeframes: [],
   allowedSymbols: [],
@@ -191,6 +194,7 @@ function FallbackForm({
         maxTradesPerDay: profile.maxTradesPerDay ?? 5,
         riskPerTradePct: profile.riskPerTradePct ?? 2,
         maxDailyLossPct: profile.maxDailyLossPct ?? 5,
+        minRiskRewardRatio: profile.minRiskRewardRatio ?? 1.5,
         executionMode: profile.executionMode ?? 'manual',
         preferredTimeframes: profile.preferredTimeframes ?? [],
         allowedSymbols: profile.allowedSymbols ?? [],
@@ -229,6 +233,7 @@ function FallbackForm({
       maxTradesPerDay: form.maxTradesPerDay,
       riskPerTradePct: form.riskPerTradePct,
       maxDailyLossPct: form.maxDailyLossPct,
+      minRiskRewardRatio: form.minRiskRewardRatio,
       executionMode: form.executionMode,
       preferredTimeframes: form.preferredTimeframes,
       allowedSymbols: form.allowedSymbols,
@@ -361,6 +366,35 @@ function FallbackForm({
           <span>1%</span>
           <span>20%</span>
         </div>
+      </div>
+
+      <Separator />
+
+      {/* Min Risk:Reward Ratio */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium">Min Risk:Reward Ratio</label>
+          <span className="text-sm font-semibold tabular-nums">1:{form.minRiskRewardRatio.toFixed(1)}</span>
+        </div>
+        <input
+          type="range"
+          min={1.0}
+          max={5.0}
+          step={0.1}
+          value={form.minRiskRewardRatio}
+          onChange={(e) => {
+            setForm((f) => ({ ...f, minRiskRewardRatio: Number(e.target.value) }));
+            setSaveMessage('');
+          }}
+          className="w-full accent-primary"
+        />
+        <div className="flex justify-between text-xs text-muted-foreground">
+          <span>1:1</span>
+          <span>1:5</span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          The AI will only enter trades where the potential reward is at least this multiple of the risk.
+        </p>
       </div>
 
       <Separator />
@@ -856,6 +890,8 @@ export default function RiskProfilePage() {
             <span className="font-medium text-foreground">{profile.riskPerTradePct}%</span>
             <span>Max daily loss:</span>
             <span className="font-medium text-foreground">{profile.maxDailyLossPct}%</span>
+            <span>Min R:R ratio:</span>
+            <span className="font-medium text-foreground">1:{(profile.minRiskRewardRatio ?? 1.5).toFixed(1)}</span>
             <span>Execution mode:</span>
             <span className="font-medium text-foreground capitalize">{profile.executionMode}</span>
             <span>Timeframes:</span>

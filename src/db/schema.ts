@@ -53,6 +53,8 @@ export const userRiskProfiles = pgTable('user_risk_profiles', {
   trailTpPct: numeric('trail_tp_pct', { precision: 5, scale: 3 }).default('2.000'),
   // Trail activates immediately (0) or only after price moves X% in profit direction
   trailActivationPct: numeric('trail_activation_pct', { precision: 5, scale: 3 }).default('0.000'),
+  // Minimum Risk:Reward ratio required to take a trade (e.g. 1.5 means TP must be ≥1.5× the SL distance)
+  minRiskRewardRatio: numeric('min_risk_reward_ratio', { precision: 5, scale: 2 }).default('1.50'),
   isActive: boolean('is_active').default(true),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => [

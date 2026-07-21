@@ -1,0 +1,1 @@
+ALTER TABLE "user_risk_profiles" ADD COLUMN "min_risk_reward_ratio" numeric(5, 2) DEFAULT '1.50';
