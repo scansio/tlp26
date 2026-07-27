@@ -1,16 +1,17 @@
 /**
- * Trade Analysis Workflow — 9-Step Decision Pipeline
+ * Trade Analysis Workflow — 10-Step Decision Pipeline
  *
  * Steps:
  *  1. fetchMarketData       — OHLCV for 1h, 4h, 1d
  *  2. computeIndicators     — RSI, EMA, MACD, BB, ADX (per timeframe)
+ *  2b. deriveTopDownBias    — HTF (1d) + intermediate (4h) trend filter; blocks counter-trend entries
  *  3. detectSMCStructures   — FVG, OB, BOS/ChoCH, liquidity sweeps
  *  4. detectChartPatterns   — classical pattern detection
  *  5. analyzeOrderBook      — L2 liquidity walls + imbalance
  *  6a/6b (parallel):
  *     fetchNews             — CryptoPanic + CoinGecko sentiment
  *     fetchOnchainSignals   — funding rate + netflow + liquidation levels
- *  7. agentDecision         — trading-agent synthesizes everything
+ *  7. agentDecision         — trading-agent synthesizes everything (constrained by topDownBias)
  *  8. calculateRisk         — position size + net P&L after fees/slippage
  *  9. routeSignal           — persist to trade_signals; execute via execute-trade-tool
  *                             when executionMode is 'auto' (live) or 'paper'
@@ -154,6 +155,26 @@ const step2OutputSchema = step1OutputSchema.extend({
   indicators1d: indicatorsResultSchema,
 });
 
+// ---------------------------------------------------------------------------
+// Top-Down Bias schema (produced by step 2b — deriveTopDownBias)
+// ---------------------------------------------------------------------------
+
+const topDownBiasSchema = z.object({
+  /** 1d trend direction derived from EMA stack + MACD + ADX gate */
+  htfBias: z.enum(['BULLISH', 'BEARISH', 'NEUTRAL']),
+  /** 4h trend direction — intermediate confirmation */
+  intermediateBias: z.enum(['BULLISH', 'BEARISH', 'NEUTRAL']),
+  /** Combined trade directive that the agent MUST respect */
+  tradeBias: z.enum(['BULLISH', 'BEARISH', 'NEUTRAL']),
+  biasStrength: z.enum(['STRONG', 'MODERATE', 'WEAK']),
+  htfReason: z.string(),
+  intermediateReason: z.string(),
+});
+
+const step2bOutputSchema = step2OutputSchema.extend({
+  topDownBias: topDownBiasSchema,
+});
+
 const computeIndicators = createStep({
   id: 'computeIndicators',
   description: 'Compute RSI, EMA, MACD, Bollinger Bands, ADX for each timeframe.',
@@ -183,6 +204,88 @@ const computeIndicators = createStep({
 });
 
 // ---------------------------------------------------------------------------
+// Step 2b — deriveTopDownBias
+// Deterministic (no LLM): reads 1d + 4h indicators, applies EMA-stack + MACD
+// scoring, gates with ADX, then combines into a single tradeBias directive.
+// ---------------------------------------------------------------------------
+
+type BiasResult = { bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL'; reason: string };
+
+function deriveSingleTimeframeBias(indicators: z.infer<typeof indicatorsResultSchema>): BiasResult {
+  // ADX < 20 → market has no trend; treat as NEUTRAL regardless of EMA/MACD
+  if (indicators.adx.value < 20) {
+    return {
+      bias: 'NEUTRAL',
+      reason: `ADX=${indicators.adx.value.toFixed(1)} (< 20, range-bound — no trend bias)`,
+    };
+  }
+
+  // EMA stack: each layer that price is above/below adds ±1
+  let score = 0;
+  const e = indicators.ema;
+  score += e.priceAboveEma20 ? 1 : -1;
+  score += e.priceAboveEma50 ? 1 : -1;
+  score += e.priceAboveEma200 ? 1 : -1;
+
+  // MACD direction adds ±1 as momentum confirmation
+  if (indicators.macd.direction === 'BULLISH') score += 1;
+  else if (indicators.macd.direction === 'BEARISH') score -= 1;
+
+  // Score range: −4 to +4; require ≥ 2 for a directional bias
+  const bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' =
+    score >= 2 ? 'BULLISH' : score <= -2 ? 'BEARISH' : 'NEUTRAL';
+
+  const reason =
+    `ADX=${indicators.adx.value.toFixed(1)}, ` +
+    `EMA(above20/50/200)=${e.priceAboveEma20}/${e.priceAboveEma50}/${e.priceAboveEma200}, ` +
+    `MACD=${indicators.macd.direction}, score=${score}`;
+
+  return { bias, reason };
+}
+
+function combineTopDownBias(
+  htf: BiasResult,
+  intermediate: BiasResult,
+): Pick<z.infer<typeof topDownBiasSchema>, 'tradeBias' | 'biasStrength'> {
+  const h = htf.bias;
+  const i = intermediate.bias;
+
+  if (h === 'BULLISH' && i === 'BULLISH') return { tradeBias: 'BULLISH', biasStrength: 'STRONG' };
+  if (h === 'BEARISH' && i === 'BEARISH') return { tradeBias: 'BEARISH', biasStrength: 'STRONG' };
+  if (h === 'BULLISH' && i === 'NEUTRAL') return { tradeBias: 'BULLISH', biasStrength: 'MODERATE' };
+  if (h === 'BEARISH' && i === 'NEUTRAL') return { tradeBias: 'BEARISH', biasStrength: 'MODERATE' };
+  if (h === 'NEUTRAL' && i === 'BULLISH') return { tradeBias: 'BULLISH', biasStrength: 'MODERATE' };
+  if (h === 'NEUTRAL' && i === 'BEARISH') return { tradeBias: 'BEARISH', biasStrength: 'MODERATE' };
+  if (h === 'NEUTRAL' && i === 'NEUTRAL') return { tradeBias: 'NEUTRAL', biasStrength: 'WEAK' };
+  // HTF conflicts with 4h (BULLISH vs BEARISH or vice versa) — stay neutral
+  return { tradeBias: 'NEUTRAL', biasStrength: 'WEAK' };
+}
+
+const deriveTopDownBias = createStep({
+  id: 'deriveTopDownBias',
+  description: 'Derive HTF (1d) and intermediate (4h) trend bias; combine into a tradeBias directive.',
+  inputSchema: step2OutputSchema,
+  outputSchema: step2bOutputSchema,
+  execute: async ({ inputData }) => {
+    const htf = deriveSingleTimeframeBias(inputData.indicators1d);
+    const intermediate = deriveSingleTimeframeBias(inputData.indicators4h);
+    const { tradeBias, biasStrength } = combineTopDownBias(htf, intermediate);
+
+    return {
+      ...inputData,
+      topDownBias: {
+        htfBias: htf.bias,
+        intermediateBias: intermediate.bias,
+        tradeBias,
+        biasStrength,
+        htfReason: htf.reason,
+        intermediateReason: intermediate.reason,
+      },
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Step 3 — detectSMCStructures
 // ---------------------------------------------------------------------------
 
@@ -204,14 +307,14 @@ const smcResultSchema = z.object({
   candleCount: z.number(),
 });
 
-const step3OutputSchema = step2OutputSchema.extend({
+const step3OutputSchema = step2bOutputSchema.extend({
   smcStructures: smcResultSchema,
 });
 
 const detectSMCStructures = createStep({
   id: 'detectSMCStructures',
   description: 'Detect FVG, Order Blocks, BOS/ChoCH, and liquidity sweeps using SMC tool.',
-  inputSchema: step2OutputSchema,
+  inputSchema: step2bOutputSchema,
   outputSchema: step3OutputSchema,
   execute: async ({ inputData, mastra }) => {
     const work = async () => {
@@ -445,6 +548,7 @@ const agentDecisionOutputSchema = z.object({
   indicators1h: indicatorsResultSchema,
   indicators4h: indicatorsResultSchema,
   indicators1d: indicatorsResultSchema,
+  topDownBias: topDownBiasSchema,
   smcStructures: smcResultSchema,
   chartPatterns: z.array(patternSchema),
   orderBook: orderbookResultSchema,
@@ -478,7 +582,22 @@ const agentDecision = createStep({
       const news = inputData.fetchNews.news;
       const onchain = inputData.fetchOnchainSignals.onchain;
 
+      const topDown = ctx.topDownBias;
+      const topDownSection = `## TOP-DOWN BIAS (HTF FILTER — MANDATORY CONSTRAINT)
+HTF (1d): ${topDown.htfBias} — ${topDown.htfReason}
+Intermediate (4h): ${topDown.intermediateBias} — ${topDown.intermediateReason}
+Combined Trade Bias: ${topDown.tradeBias} (Strength: ${topDown.biasStrength})
+
+RULES YOU MUST FOLLOW:
+- If tradeBias is BULLISH → only ENTER_LONG or HOLD are allowed. ENTER_SHORT is FORBIDDEN.
+- If tradeBias is BEARISH → only ENTER_SHORT or HOLD are allowed. ENTER_LONG is FORBIDDEN.
+- If tradeBias is NEUTRAL → ENTER_LONG or ENTER_SHORT are allowed but confidence must be MEDIUM or lower.
+- When a counter-trend trade would otherwise trigger, output HOLD and cite the HTF filter in reasoning.
+- Include "top-down-alignment" in strategiesTriggered when the LTF signal agrees with tradeBias.`;
+
       const prompt = `You are the trading decision engine. Analyze the following data and return ONLY a valid JSON object with no prose.
+
+${topDownSection}
 
 ## Symbol
 ${ctx.symbol}
@@ -564,6 +683,7 @@ ${JSON.stringify(onchain, null, 2)}
         indicators1h: ctx.indicators1h,
         indicators4h: ctx.indicators4h,
         indicators1d: ctx.indicators1d,
+        topDownBias: ctx.topDownBias,
         smcStructures: ctx.smcStructures,
         chartPatterns: ctx.chartPatterns,
         orderBook: ctx.orderBook,
@@ -789,6 +909,7 @@ const routeSignal = createStep({
           rawPayload: {
             triggeredBy: inputData.triggeredBy,
             exchange,
+            topDownBias: inputData.topDownBias,
             riskCalculation: inputData.riskCalculation,
             smcStructures: inputData.smcStructures,
             chartPatterns: inputData.chartPatterns,
@@ -865,7 +986,7 @@ const routeSignal = createStep({
 export const tradeAnalysisWorkflow = createWorkflow({
   id: 'tradeAnalysisWorkflow',
   description:
-    'End-to-end 9-step trade analysis pipeline: market data → indicators → SMC → patterns → order book → news + on-chain (parallel) → agent decision → risk sizing → signal routing.',
+    'End-to-end 10-step trade analysis pipeline: market data → indicators → top-down HTF bias → SMC → patterns → order book → news + on-chain (parallel) → agent decision → risk sizing → signal routing.',
   inputSchema: z.object({
     userId: z.string().describe('Clerk user ID of the trader'),
     symbol: z.string().describe('Trading pair symbol, e.g. BTC/USDT'),
@@ -886,6 +1007,7 @@ export const tradeAnalysisWorkflow = createWorkflow({
 })
   .then(fetchMarketData)
   .then(computeIndicators)
+  .then(deriveTopDownBias)
   .then(detectSMCStructures)
   .then(detectChartPatterns)
   .then(analyzeOrderBook)
