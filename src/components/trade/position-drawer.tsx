@@ -5,6 +5,9 @@ import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { SignalChart } from '@/components/trade/SignalChart'
+import { Dialog as DialogPrimitive } from 'radix-ui'
+import { Dialog, DialogOverlay, DialogPortal } from '@/components/ui/dialog'
 import {
   TrendingUp,
   TrendingDown,
@@ -16,6 +19,9 @@ import {
   TriangleAlert,
   ArrowRight,
   CircleX,
+  Copy,
+  Check,
+  LineChart,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -37,6 +43,7 @@ export type OpenPosition = {
   stopLoss: number | null
   takeProfit: number | null
   entryAt: string | null
+  timeframe?: string | null
 }
 
 type ActionStatus = 'idle' | 'confirming' | 'loading' | 'success' | 'error'
@@ -106,6 +113,53 @@ function SectionCard({
   )
 }
 
+function CopyablePrice({
+  label,
+  value,
+  raw,
+  color,
+}: {
+  label: string
+  value: string
+  raw: number | null
+  color: string
+}) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    if (raw === null) return
+    try {
+      await navigator.clipboard.writeText(String(raw))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1200)
+    } catch {
+      // clipboard unavailable — ignore
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      disabled={raw === null}
+      title={raw !== null ? 'Click to copy price' : undefined}
+      className="group relative w-full bg-card px-4 py-3 text-left transition-colors hover:bg-muted/50 disabled:cursor-default disabled:hover:bg-card"
+    >
+      <p className="text-xs text-muted-foreground mb-0.5 flex items-center gap-1">
+        {label}
+        {raw !== null && (
+          copied
+            ? <Check className="size-3 text-green-500 shrink-0" />
+            : <Copy className="size-3 opacity-0 group-hover:opacity-60 transition-opacity shrink-0" />
+        )}
+      </p>
+      <p className={cn('text-sm font-mono font-semibold tabular-nums', color)}>
+        {copied ? 'Copied!' : value}
+      </p>
+    </button>
+  )
+}
+
 function Feedback({ status, msg, onRetry }: { status: ActionStatus; msg: string; onRetry: () => void }) {
   if (status === 'success') {
     return (
@@ -144,6 +198,8 @@ export function PositionDrawer({
   onClose: () => void
   onAction?: () => void
 }) {
+  const [showChart, setShowChart] = useState(false)
+
   const [closeStatus, setCloseStatus] = useState<ActionStatus>('idle')
   const [closeMsg, setCloseMsg] = useState('')
 
@@ -160,6 +216,7 @@ export function PositionDrawer({
   const [adjustMsg, setAdjustMsg] = useState('')
 
   const reset = () => {
+    setShowChart(false)
     setCloseStatus('idle'); setCloseMsg('')
     setPartialPct(null); setPartialStatus('idle'); setPartialMsg('')
     setBeStatus('idle'); setBeMsg('')
@@ -258,6 +315,7 @@ export function PositionDrawer({
   // Render
   // ---------------------------------------------------------------------------
   return (
+    <>
     <Sheet open={open} onOpenChange={(v) => { if (!v) handleClose() }}>
       <SheetContent className="w-full sm:max-w-[400px] p-0 flex flex-col overflow-hidden">
 
@@ -291,9 +349,22 @@ export function PositionDrawer({
           </div>
           <button
             onClick={handleClose}
-            className="rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            className="rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
           >
             <X className="size-4" />
+          </button>
+        </div>
+
+        {/* ── Chart toggle ───────────────────────────────────────────── */}
+        <div className="px-5 pt-3 flex justify-end">
+          <button
+            type="button"
+            onClick={() => setShowChart((v) => !v)}
+            className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            title="Show position on TradingView chart"
+          >
+            <LineChart className="size-3" />
+            {showChart ? 'Hide Chart' : 'Show on Chart'}
           </button>
         </div>
 
@@ -326,15 +397,12 @@ export function PositionDrawer({
         {/* ── Price stats ────────────────────────────────────────────── */}
         <div className="mx-5 mt-3 grid grid-cols-2 gap-px rounded-xl overflow-hidden border border-border bg-border">
           {[
-            { label: 'Entry', value: `$${fmtPrice(position.entryPrice)}`, color: '' },
-            { label: 'Current', value: `$${fmtPrice(position.currentPrice)}`, color: '' },
-            { label: 'Stop Loss', value: position.stopLoss ? `$${fmtPrice(position.stopLoss)}` : '—', color: 'text-red-400' },
-            { label: 'Take Profit', value: position.takeProfit ? `$${fmtPrice(position.takeProfit)}` : '—', color: 'text-green-400' },
-          ].map(({ label, value, color }) => (
-            <div key={label} className="bg-card px-4 py-3">
-              <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
-              <p className={cn('text-sm font-mono font-semibold tabular-nums', color)}>{value}</p>
-            </div>
+            { label: 'Entry', value: `$${fmtPrice(position.entryPrice)}`, raw: position.entryPrice, color: '' },
+            { label: 'Current', value: `$${fmtPrice(position.currentPrice)}`, raw: position.currentPrice, color: '' },
+            { label: 'Stop Loss', value: position.stopLoss ? `$${fmtPrice(position.stopLoss)}` : '—', raw: position.stopLoss, color: 'text-red-400' },
+            { label: 'Take Profit', value: position.takeProfit ? `$${fmtPrice(position.takeProfit)}` : '—', raw: position.takeProfit, color: 'text-green-400' },
+          ].map(({ label, value, raw, color }) => (
+            <CopyablePrice key={label} label={label} value={value} raw={raw} color={color} />
           ))}
         </div>
         <p className="mx-5 mt-1.5 text-xs text-muted-foreground tabular-nums">
@@ -500,5 +568,70 @@ export function PositionDrawer({
 
       </SheetContent>
     </Sheet>
+
+    {/* Chart modal — true fullscreen via raw Radix primitive */}
+    <Dialog open={showChart} onOpenChange={setShowChart}>
+      <DialogPortal>
+        <DialogOverlay />
+        <DialogPrimitive.Content
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 50,
+            display: 'flex',
+            flexDirection: 'column',
+            background: 'var(--color-background)',
+            outline: 'none',
+          }}
+        >
+          {/* Title bar */}
+          <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2 border-b bg-background">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <span>{position.symbol}</span>
+              <Badge variant={isLong ? 'default' : 'destructive'} className="text-xs px-1.5 py-0">
+                {position.direction}
+              </Badge>
+              <span className="text-muted-foreground font-normal text-xs">
+                Entry ${fmtPrice(position.entryPrice)} · SL ${fmtPrice(position.stopLoss)} · TP ${fmtPrice(position.takeProfit)}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <a
+                href={`https://www.tradingview.com/chart/?symbol=BINANCE:${position.symbol.replace('/', '')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                  <polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
+                </svg>
+                TradingView
+              </a>
+              <button
+                type="button"
+                onClick={() => setShowChart(false)}
+                className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                aria-label="Close chart"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          {/* Chart fills remaining height */}
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <SignalChart
+              symbol={position.symbol}
+              timeframe={position.timeframe ?? '1h'}
+              entry={position.entryPrice}
+              stopLoss={position.stopLoss}
+              takeProfit={position.takeProfit}
+              direction={position.direction}
+            />
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPortal>
+    </Dialog>
+    </>
   )
 }

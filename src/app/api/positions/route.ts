@@ -59,6 +59,7 @@ export async function GET() {
       direction: tradeSignals.direction,
       stopLoss: tradeSignals.stopLoss,
       takeProfit: tradeSignals.takeProfit,
+      timeframe: tradeSignals.timeframe,
     })
     .from(tradeExecutions)
     .leftJoin(tradeSignals, eq(tradeExecutions.signalId, tradeSignals.id))
@@ -125,6 +126,7 @@ export async function GET() {
       stopLoss: pos.stopLoss ? parseFloat(pos.stopLoss) : null,
       takeProfit: pos.takeProfit ? parseFloat(pos.takeProfit) : null,
       entryAt: pos.entryAt?.toISOString() ?? null,
+      timeframe: pos.timeframe ?? null,
     };
   });
 
