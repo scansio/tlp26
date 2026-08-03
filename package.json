@@ -5,11 +5,11 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/migrate.mjs && next start",
     "lint": "eslint",
     "studio": "mastra studio",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/migrate.mjs",
     "db:studio": "drizzle-kit studio",
     "db:reset": "drizzle-kit reset"
   },
