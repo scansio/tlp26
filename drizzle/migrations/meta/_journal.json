@@ -127,6 +127,13 @@
       "when": 1784628708566,
       "tag": "0017_large_maestro",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1785767287736,
+      "tag": "0018_fast_sharon_carter",
+      "breakpoints": true
     }
   ]
 }

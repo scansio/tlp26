@@ -94,7 +94,7 @@ function deriveStatus(
  */
 export async function checkCircuitBreaker(
   userId: string,
-  opts?: { signalSymbol?: string; signalDirection?: string },
+  opts?: { signalSymbol?: string; signalDirection?: string; silent?: boolean },
 ): Promise<CircuitBreakerResult> {
   // --- Load risk profile ---
   const [profile] = await db
@@ -131,13 +131,15 @@ export async function checkCircuitBreaker(
   if (killSwitch) {
     const state = deriveStatus(true, 0, maxTrades, 0, maxDailyLossPct, 0, maxOpenPos);
     const reason = 'Kill switch is active. All trading halted.';
-    console.warn(`[circuit-breaker] BLOCKED userId=${userId} reason="${reason}"`);
-    void sendNotification(userId, {
-      event: 'signal_rejected',
-      symbol: opts?.signalSymbol,
-      direction: opts?.signalDirection,
-      reason,
-    });
+    if (!opts?.silent) {
+      console.warn(`[circuit-breaker] BLOCKED userId=${userId} reason="${reason}"`);
+      void sendNotification(userId, {
+        event: 'signal_rejected',
+        symbol: opts?.signalSymbol,
+        direction: opts?.signalDirection,
+        reason,
+      });
+    }
     return {
       allowed: false,
       reason,
@@ -236,38 +238,44 @@ export async function checkCircuitBreaker(
   // --- Check 1: daily trade count ---
   if (dailyTradeCount >= maxTrades) {
     const reason = `Daily trade limit reached (${dailyTradeCount}/${maxTrades}).`;
-    console.warn(`[circuit-breaker] BLOCKED userId=${userId} reason="${reason}"`);
-    void sendNotification(userId, {
-      event: 'daily_limit',
-      symbol: opts?.signalSymbol,
-      tradesUsed: dailyTradeCount,
-      tradesLimit: maxTrades,
-    });
+    if (!opts?.silent) {
+      console.warn(`[circuit-breaker] BLOCKED userId=${userId} reason="${reason}"`);
+      void sendNotification(userId, {
+        event: 'daily_limit',
+        symbol: opts?.signalSymbol,
+        tradesUsed: dailyTradeCount,
+        tradesLimit: maxTrades,
+      });
+    }
     return { allowed: false, reason, state, diagnostics };
   }
 
   // --- Check 2: daily loss ---
   if (dailyLossPct >= maxDailyLossPct) {
     const reason = `Daily loss limit reached (${dailyLossPct.toFixed(2)}% >= ${maxDailyLossPct}%).`;
-    console.warn(`[circuit-breaker] BLOCKED userId=${userId} reason="${reason}"`);
-    void sendNotification(userId, {
-      event: 'daily_loss_limit',
-      symbol: opts?.signalSymbol,
-      reason,
-    });
+    if (!opts?.silent) {
+      console.warn(`[circuit-breaker] BLOCKED userId=${userId} reason="${reason}"`);
+      void sendNotification(userId, {
+        event: 'daily_loss_limit',
+        symbol: opts?.signalSymbol,
+        reason,
+      });
+    }
     return { allowed: false, reason, state, diagnostics };
   }
 
   // --- Check 4: open positions ---
   if (openPositions >= maxOpenPos) {
     const reason = `Max open positions reached (${openPositions}/${maxOpenPos}).`;
-    console.warn(`[circuit-breaker] BLOCKED userId=${userId} reason="${reason}"`);
-    void sendNotification(userId, {
-      event: 'signal_rejected',
-      symbol: opts?.signalSymbol,
-      direction: opts?.signalDirection,
-      reason,
-    });
+    if (!opts?.silent) {
+      console.warn(`[circuit-breaker] BLOCKED userId=${userId} reason="${reason}"`);
+      void sendNotification(userId, {
+        event: 'signal_rejected',
+        symbol: opts?.signalSymbol,
+        direction: opts?.signalDirection,
+        reason,
+      });
+    }
     return { allowed: false, reason, state, diagnostics };
   }
 

@@ -16,5 +16,23 @@ services:
       timeout: 5s
       retries: 5
 
+  # For local integration testing of the confluence-group scheduled worker.
+  # Production deploys build/run Dockerfile.worker separately (see CLAUDE.md).
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Override the host-side DATABASE_URL from .env (localhost:54322) with
+      # the in-network address, since this container isn't on the host.
+      DATABASE_URL: postgresql://user:pass@postgres:5432/tlp26
+      WORKER_RUN_ON_BOOT: "false"
+
 volumes:
   postgres_data:

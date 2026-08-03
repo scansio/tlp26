@@ -55,11 +55,43 @@ export async function POST(req: Request) {
     );
   }
 
-  // Determine initial status based on execution mode
-  const executionMode = profile.executionMode ?? 'manual';
-  const signalStatus = executionMode === 'auto' ? 'pending' : 'pending';
+  // tradingMode ('auto' | 'manual') controls whether the AI pipeline runs
+  // autonomously; executionMode ('paper' | 'live') only selects the venue —
+  // it must never be used to gate auto-execution (see trade-analysis-workflow).
+  const tradingMode = profile.tradingMode ?? 'manual';
 
-  // Save signal to trade_signals
+  // Auto mode: let trade-analysis-workflow produce the AI-derived signal
+  // (entry/SL/TP from real analysis) instead of the raw TradingView values,
+  // so we don't end up with two trade_signals rows for one alert.
+  if (tradingMode === 'auto') {
+    try {
+      const { mastra } = await import('@/mastra');
+      const workflow = mastra.getWorkflow('tradeAnalysisWorkflow');
+      if (workflow) {
+        const run = await workflow.createRun();
+        run
+          .start({
+            inputData: { userId, symbol: normalisedSymbol, triggeredBy: 'tradingview', exchange: 'binance' },
+          })
+          .catch((err: unknown) => {
+            console.error('[tradingview-webhook] workflow run error:', err);
+          });
+
+        return Response.json(
+          { ok: true, signalId: null, message: 'Auto mode: analysis in progress' },
+          { status: 202 },
+        );
+      }
+      console.warn(
+        '[tradingview-webhook] tradeAnalysisWorkflow not registered — falling back to raw signal',
+      );
+    } catch (err) {
+      console.warn('[tradingview-webhook] failed to start workflow, falling back to raw signal:', err);
+    }
+  }
+
+  // Manual mode (or auto-mode workflow start failure): save the raw
+  // TradingView values for manual review/approval.
   const [signal] = await db
     .insert(tradeSignals)
     .values({
@@ -71,42 +103,10 @@ export async function POST(req: Request) {
       stopLoss: String(sl),
       takeProfit: String(tp),
       source: 'tradingview',
-      status: signalStatus,
+      status: 'pending',
       rawPayload: body as Record<string, unknown>,
     })
     .returning();
-
-  // If execution mode is auto, attempt to trigger trade-analysis-workflow.
-  // The workflow is not yet registered — this block is defensive and fire-and-forget.
-  if (executionMode === 'auto') {
-    try {
-      const { mastra } = await import('@/mastra');
-      // Cast to any so this compiles even before tradeAnalysisWorkflow is wired in
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mastraAny = mastra as any;
-      const workflow =
-        typeof mastraAny.getWorkflow === 'function'
-          ? mastraAny.getWorkflow('tradeAnalysisWorkflow')
-          : undefined;
-
-      if (workflow) {
-        const run = await workflow.createRun();
-        run
-          .start({
-            inputData: { symbol: normalisedSymbol, signalId: signal.id, userId },
-          })
-          .catch((err: unknown) => {
-            console.error('[tradingview-webhook] workflow run error:', err);
-          });
-      } else {
-        console.warn(
-          '[tradingview-webhook] tradeAnalysisWorkflow not registered — signal queued for manual approval',
-        );
-      }
-    } catch (err) {
-      console.warn('[tradingview-webhook] failed to start workflow:', err);
-    }
-  }
 
   // Fire-and-forget: propagate to copy-trading subscribers asynchronously
   void propagatePublisherSignal(signal.id, userId);

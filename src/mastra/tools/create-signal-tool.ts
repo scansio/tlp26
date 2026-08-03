@@ -34,6 +34,25 @@ export const createSignalTool = createTool({
         'Top 3–6 SMC structures closest to entry from smc-tool output (type + priceLevel + direction). ' +
         'Include ChoCH/BOS that drove the bias, plus nearby FVGs and Order Blocks.',
       ),
+    analysisRunId: z
+      .string()
+      .uuid()
+      .optional()
+      .describe('Shared id linking every signal produced from the same confluence-group analysis run'),
+    newsSentiment: z.enum(['BULLISH', 'BEARISH', 'NEUTRAL']).optional(),
+    newsSentimentScore: z.number().optional(),
+    onChainFundingRate: z.number().optional(),
+    onChainFundingBias: z.enum(['BULLISH', 'BEARISH', 'NEUTRAL']).optional(),
+    onChainNetflow: z.number().optional(),
+    // A record/free-form-object field here would break function-calling schema
+    // conversion for some providers (e.g. Gemini rejects unconstrained object
+    // schemas) — this tool is attached to market-chat-agent's tool list, so its
+    // schema must stay provider-safe. A JSON string sidesteps that entirely;
+    // only finalizeForUser ever populates it, never the LLM.
+    rawPayloadExtraJson: z
+      .string()
+      .optional()
+      .describe('Internal use only — do not set. JSON-stringified extra context merged into rawPayload.'),
   }),
   outputSchema: z.object({
     signalId: z.string(),
@@ -60,6 +79,13 @@ export const createSignalTool = createTool({
       strategySource,
       exchange,
       smcLevels,
+      analysisRunId,
+      newsSentiment,
+      newsSentimentScore,
+      onChainFundingRate,
+      onChainFundingBias,
+      onChainNetflow,
+      rawPayloadExtraJson,
     } = inputData as {
       userId: string;
       symbol: string;
@@ -73,7 +99,23 @@ export const createSignalTool = createTool({
       strategySource?: string;
       exchange?: string;
       smcLevels?: Array<{ type: string; priceLevel: number; direction: 'BULLISH' | 'BEARISH' }>;
+      analysisRunId?: string;
+      newsSentiment?: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+      newsSentimentScore?: number;
+      onChainFundingRate?: number;
+      onChainFundingBias?: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+      onChainNetflow?: number;
+      rawPayloadExtraJson?: string;
     };
+
+    let rawPayloadExtra: Record<string, unknown> = {};
+    if (rawPayloadExtraJson) {
+      try {
+        rawPayloadExtra = JSON.parse(rawPayloadExtraJson) as Record<string, unknown>;
+      } catch (err) {
+        console.warn('createSignalTool: failed to parse rawPayloadExtraJson, ignoring', err);
+      }
+    }
 
     const [signal] = await db
       .insert(tradeSignals)
@@ -90,7 +132,13 @@ export const createSignalTool = createTool({
         strategySource: strategySource ?? null,
         source: 'ai',
         status: 'pending',
-        rawPayload: { exchange: exchange ?? 'binance', smcLevels: smcLevels ?? [] },
+        analysisRunId: analysisRunId ?? null,
+        newsSentiment: newsSentiment ?? null,
+        newsSentimentScore: newsSentimentScore != null ? String(newsSentimentScore) : null,
+        onChainFundingRate: onChainFundingRate != null ? String(onChainFundingRate) : null,
+        onChainFundingBias: onChainFundingBias ?? null,
+        onChainNetflow: onChainNetflow != null ? String(onChainNetflow) : null,
+        rawPayload: { exchange: exchange ?? 'binance', smcLevels: smcLevels ?? [], ...rawPayloadExtra },
         expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1000),
       })
       .returning({

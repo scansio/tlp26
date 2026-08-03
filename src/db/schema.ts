@@ -156,12 +156,16 @@ export const tradeSignals = pgTable('trade_signals', {
   onChainFundingRate: numeric('on_chain_funding_rate', { precision: 12, scale: 8 }),
   onChainFundingBias: text('on_chain_funding_bias'), // BULLISH | BEARISH | NEUTRAL
   onChainNetflow: numeric('on_chain_netflow', { precision: 20, scale: 4 }),
+  // Shared by every signal produced from the same confluence-group analysis run
+  // (worker-generated signals only; null for single-user webhook/manual paths)
+  analysisRunId: uuid('analysis_run_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true }),
 }, (table) => [
   index('ts_user_id_idx').on(table.userId),
   index('ts_status_idx').on(table.status),
+  index('ts_analysis_run_id_idx').on(table.analysisRunId),
 ]);
 
 // ---------------------------------------------------------------------------

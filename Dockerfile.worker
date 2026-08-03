@@ -1,0 +1,18 @@
+# Confluence-group scheduled signal-generation worker — separate image from
+# the main app. Runs `tsx` directly (no build step; tsx resolves the `@/*`
+# path alias natively). Uses only the existing Postgres — no external
+# queue/scheduler. MUST NOT run database migrations — only the main app
+# container (Dockerfile) does that, since there is no cross-container
+# migration lock.
+
+FROM node:22-alpine AS worker
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY . .
+
+ENV NODE_ENV=production
+
+CMD ["npx", "tsx", "src/worker/index.ts"]
