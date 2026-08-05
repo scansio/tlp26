@@ -163,6 +163,40 @@ function withTimeout<T>(label: string, work: () => Promise<T>): Promise<T> {
   return Promise.race([work(), timeoutAfter(PHASE_TIMEOUT_MS, label)]);
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Retry attempts for the agentDecision LLM call (transient API failures). */
+const AGENT_RETRY_ATTEMPTS = Number(process.env.WORKER_AGENT_RETRY_ATTEMPTS ?? 3);
+/** Delay between agentDecision retry attempts, in ms. Defaults to 1 minute. */
+const AGENT_RETRY_DELAY_MS = Number(process.env.WORKER_AGENT_RETRY_DELAY_MS ?? 60_000);
+
+/** Retry `work` up to `attempts` times, waiting `delayMs` between failures. */
+async function withRetry<T>(
+  label: string,
+  attempts: number,
+  delayMs: number,
+  work: () => Promise<T>,
+): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await work();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < attempts) {
+        console.warn(
+          `[market-analysis] ${label} attempt ${attempt}/${attempts} failed, retrying in ${delayMs}ms`,
+          err,
+        );
+        await sleep(delayMs);
+      }
+    }
+  }
+  throw lastErr;
+}
+
 // ---------------------------------------------------------------------------
 // Input / output shapes
 // ---------------------------------------------------------------------------
@@ -519,13 +553,14 @@ export async function agentDecisionPhase<T extends AgentDecisionInput>(
     reasoning: string;
   }
 > {
-  return withTimeout('agentDecision', async () => {
-    const agent = mastra?.getAgent('tradingAgent');
-    if (!agent) throw new Error('tradingAgent not found in Mastra instance');
+  const agent = mastra?.getAgent('tradingAgent');
+  if (!agent) throw new Error('tradingAgent not found in Mastra instance');
 
-    const { news, onchain } = input;
-    const topDown = input.topDownBias;
-    const topDownSection = `## TOP-DOWN BIAS (HTF FILTER — MANDATORY CONSTRAINT)
+  const parsed = await withRetry('agentDecision', AGENT_RETRY_ATTEMPTS, AGENT_RETRY_DELAY_MS, () =>
+    withTimeout('agentDecision', async () => {
+      const { news, onchain } = input;
+      const topDown = input.topDownBias;
+      const topDownSection = `## TOP-DOWN BIAS (HTF FILTER — MANDATORY CONSTRAINT)
 HTF (1d): ${topDown.htfBias} — ${topDown.htfReason}
 Intermediate (4h): ${topDown.intermediateBias} — ${topDown.intermediateReason}
 Combined Trade Bias: ${topDown.tradeBias} (Strength: ${topDown.biasStrength})
@@ -537,7 +572,7 @@ RULES YOU MUST FOLLOW:
 - When a counter-trend trade would otherwise trigger, output HOLD and cite the HTF filter in reasoning.
 - Include "top-down-alignment" in strategiesTriggered when the LTF signal agrees with tradeBias.`;
 
-    const prompt = `You are the trading decision engine. Analyze the following data and return ONLY a valid JSON object with no prose.
+      const prompt = `You are the trading decision engine. Analyze the following data and return ONLY a valid JSON object with no prose.
 
 ${topDownSection}
 
@@ -588,34 +623,35 @@ ${JSON.stringify(onchain, null, 2)}
   "reasoning": "<string>"
 }`;
 
-    const response = await agent.generate([{ role: 'user', content: prompt }]);
+      const response = await agent.generate([{ role: 'user', content: prompt }]);
 
-    // Extract JSON from the agent text response
-    const rawText: string =
-      typeof response.text === 'string' ? response.text : JSON.stringify(response.text ?? '');
+      // Extract JSON from the agent text response
+      const rawText: string =
+        typeof response.text === 'string' ? response.text : JSON.stringify(response.text ?? '');
 
-    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error(`agentDecision: could not extract JSON from agent response: ${rawText}`);
-    }
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error(`agentDecision: could not extract JSON from agent response: ${rawText}`);
+      }
 
-    const parsed = JSON.parse(jsonMatch[0]) as {
-      bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
-      action: 'ENTER_LONG' | 'ENTER_SHORT' | 'HOLD';
-      entryZone: { low: number | null; high: number | null };
-      sl: number | null;
-      tp: number | null;
-      confidence: 'LOW' | 'MEDIUM' | 'HIGH';
-      primarySignalSource: string;
-      strategiesTriggered: string[];
-      reasoning: string;
-    };
+      return JSON.parse(jsonMatch[0]) as {
+        bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+        action: 'ENTER_LONG' | 'ENTER_SHORT' | 'HOLD';
+        entryZone: { low: number | null; high: number | null };
+        sl: number | null;
+        tp: number | null;
+        confidence: 'LOW' | 'MEDIUM' | 'HIGH';
+        primarySignalSource: string;
+        strategiesTriggered: string[];
+        reasoning: string;
+      };
+    }),
+  );
 
-    return {
-      ...input,
-      ...parsed,
-    };
-  });
+  return {
+    ...input,
+    ...parsed,
+  };
 }
 
 // ---------------------------------------------------------------------------
