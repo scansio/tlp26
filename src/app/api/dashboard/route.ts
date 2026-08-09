@@ -9,7 +9,7 @@
  *  - Trading mode (paper | live)
  *
  * Live exchange calls are only made when executionMode === 'live' and a connected exchange exists.
- * Paper mode: equity is the user's configured virtual balance (paperBalanceUsd); unrealized P&L is estimated from entry prices only.
+ * Paper mode: equity = paperBalanceUsd (starting capital) + all-time realized P&L + current unrealized P&L.
  */
 
 import { auth } from '@clerk/nextjs/server';
@@ -94,7 +94,7 @@ export async function GET() {
   const dayStart = startOfUtcDay();
 
   // Run independent queries in parallel
-  const [riskProfile, openPositionRows, closedToday, pendingCountRow, circuitBreaker] =
+  const [riskProfile, openPositionRows, closedToday, realizedAllTime, pendingCountRow, circuitBreaker] =
     await Promise.all([
       // Risk profile — for trading mode and daily limit
       db
@@ -143,6 +143,20 @@ export async function GET() {
         )
         .then((rows) => rows[0] ?? { realizedPnlToday: '0', tradesToday: 0 }),
 
+      // Realized P&L all-time (all closed trades, for live equity calc)
+      db
+        .select({
+          realizedPnlAllTime: sql<string>`COALESCE(SUM(${tradeExecutions.realizedPnl}), 0)`,
+        })
+        .from(tradeExecutions)
+        .where(
+          and(
+            eq(tradeExecutions.userId, userId),
+            eq(tradeExecutions.status, 'closed'),
+          ),
+        )
+        .then((rows) => rows[0]?.realizedPnlAllTime ?? '0'),
+
       // Pending signals count
       db
         .select({ cnt: count() })
@@ -169,10 +183,9 @@ export async function GET() {
   // For paper mode: skip balance fetch; still fetch public ticker for unrealized P&L.
   // -------------------------------------------------------------------------
 
-  // In paper mode, equity is the virtual paper balance (no exchange API call needed)
-  let equity: number | null = isPaper
-    ? Number(riskProfile?.paperBalanceUsd ?? '10000.00')
-    : null;
+  // In paper mode, equity is computed below (starting balance + realized + unrealized)
+  // once unrealizedPnl has been accumulated; no exchange API call needed.
+  let equity: number | null = null;
   let unrealizedPnl = 0;
 
   // Deduplicate symbols for batch ticker fetch
@@ -263,6 +276,13 @@ export async function GET() {
       entryAt: pos.entryAt,
     };
   });
+
+  if (isPaper) {
+    equity =
+      Number(riskProfile?.paperBalanceUsd ?? '10000.00') +
+      parseFloat(realizedAllTime) +
+      unrealizedPnl;
+  }
 
   return NextResponse.json({
     tradingMode,
