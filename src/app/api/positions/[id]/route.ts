@@ -19,6 +19,7 @@ import ccxt, { type Exchange } from 'ccxt';
 import { db } from '@/db';
 import { tradeExecutions, tradeSignals, userExchanges } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
+import { computePnlUsd } from '@/lib/pnl';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -157,8 +158,7 @@ export async function PATCH(
     let realizedPnl: number | null = null;
     if (entryPrice && positionSize) {
       const closedSize = positionSize * (clampedPct / 100);
-      const raw = (exitPrice - entryPrice) * closedSize;
-      realizedPnl = direction === 'LONG' ? raw : -raw;
+      realizedPnl = computePnlUsd(entryPrice, exitPrice, closedSize, direction);
     }
 
     if (isFull) {

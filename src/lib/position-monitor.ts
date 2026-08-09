@@ -48,6 +48,7 @@ import {
 import { decrypt } from '@/lib/crypto';
 import { sendNotification } from '@/lib/notifications';
 import { accruePublisherFee } from '@/lib/publisher-fee';
+import { computePnlUsd, type PositionDirection } from '@/lib/pnl';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -160,9 +161,7 @@ function computePnl(
   positionSize: number,
   direction: string = 'LONG',
 ): number {
-  return direction === 'LONG'
-    ? (exitPrice - entryPrice) * positionSize
-    : (entryPrice - exitPrice) * positionSize;
+  return computePnlUsd(entryPrice, exitPrice, positionSize, direction as PositionDirection);
 }
 
 // ---------------------------------------------------------------------------

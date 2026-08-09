@@ -15,6 +15,7 @@ import ccxt, { type Exchange } from 'ccxt';
 import { db } from '@/db';
 import { userExchanges, tradeExecutions, tradeSignals } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
+import { computePnlUsd, computePnlPct } from '@/lib/pnl';
 
 async function getExchangeClient(userId: string): Promise<Exchange | null> {
   const rows = await db
@@ -107,9 +108,8 @@ export async function GET() {
     let unrealizedPnlPct: number | null = null;
 
     if (entryPrice && positionSize && currentPrice) {
-      const raw = (currentPrice - entryPrice) * positionSize;
-      unrealizedPnlUsd = direction === 'LONG' ? raw : -raw;
-      unrealizedPnlPct = entryPrice > 0 ? (unrealizedPnlUsd / (entryPrice * positionSize)) * 100 : null;
+      unrealizedPnlUsd = computePnlUsd(entryPrice, currentPrice, positionSize, direction);
+      unrealizedPnlPct = computePnlPct(entryPrice, currentPrice, positionSize, direction);
     }
 
     return {

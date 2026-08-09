@@ -25,6 +25,7 @@ import {
 } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
 import { getCircuitBreakerState } from '@/lib/circuit-breaker';
+import { computePnlUsd, computePnlPct } from '@/lib/pnl';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -235,20 +236,21 @@ export async function GET() {
     const entryPrice = pos.entryPrice ? parseFloat(pos.entryPrice) : null;
     const positionSize = pos.positionSize ? parseFloat(pos.positionSize) : null;
     const currentPrice = pos.symbol ? (tickerMap.get(pos.symbol) ?? null) : null;
+    const direction = (pos.direction ?? 'LONG') as 'LONG' | 'SHORT';
 
     let unrealizedPnlUsd: number | null = null;
     let unrealizedPnlPct: number | null = null;
 
     if (entryPrice && positionSize && currentPrice) {
-      unrealizedPnlUsd = (currentPrice - entryPrice) * positionSize;
-      unrealizedPnlPct = entryPrice > 0 ? ((currentPrice - entryPrice) / entryPrice) * 100 : null;
+      unrealizedPnlUsd = computePnlUsd(entryPrice, currentPrice, positionSize, direction);
+      unrealizedPnlPct = computePnlPct(entryPrice, currentPrice, positionSize, direction);
       unrealizedPnl += unrealizedPnlUsd;
     }
 
     return {
       id: pos.id,
       symbol: pos.symbol,
-      direction: (pos.direction ?? 'LONG') as 'LONG' | 'SHORT',
+      direction,
       exchangeName: pos.exchangeName,
       entryPrice,
       currentPrice,
