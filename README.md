@@ -2,6 +2,26 @@
 
 A multi-user SaaS platform where a Mastra AI agent makes trading decisions based on real-time crypto news, OHLCV chart analysis, on-chain signals, and SMC/technical strategies, then executes trades via BingX, Binance, or Bybit.
 
+> **🏆 Hackathon submission:** see **[HACKATHON.md](./HACKATHON.md)** for the problem
+> statement, the Improvement Changelog, the measured baseline-vs-workflow evaluation,
+> the reproduction guide (one LLM key, no other infrastructure), and agent trajectories.
+
+## Who this is for, and the bottleneck it removes
+
+The intended user is a **retail crypto trader**. A disciplined trade decision requires
+reconciling seven heterogeneous sources — multi-timeframe OHLCV, technical indicators,
+smart-money-concept structures, chart patterns, order-book liquidity, news sentiment, and
+derivatives/on-chain data. Doing that by hand takes 30–60 minutes per symbol and the
+result decays within the hour. Doing it with a single LLM prompt produces confident but
+unsafe output: invented price levels, entries without stop-losses, counter-trend gambles.
+
+TLP26 replaces both with a 9-step agentic pipeline: deterministic code fetches and
+computes the evidence, a constrained decision agent synthesizes it under hard risk rules
+(no entry without SL/TP, no counter-trend entries, minimum 1.5 risk:reward), and every
+resulting signal is risk-sized and executed in **paper mode by default** — live trading
+requires the user's own exchange keys and explicit opt-in, and manual mode gates every
+trade behind human approval.
+
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) v20+
@@ -95,8 +115,18 @@ npm run dev          # Start Next.js dev server (localhost:3000)
 npm run build        # Production build
 npm run start        # Production server
 npm run lint         # ESLint
+npm run worker       # Background signal worker (scheduled analysis + SL/TP monitor)
 npm run db:generate  # Generate Drizzle migration from schema changes
 npm run db:migrate   # Apply pending migrations to the database
+
+# Evaluation harness (no DB/Clerk needed — one LLM API key only; see HACKATHON.md)
+npm run eval           # baseline + enriched + workflow (3 runs each) + report
+npm run eval:baseline  # direct prompt, raw candles only
+npm run eval:enriched  # direct prompt + tool data, no constraint rules
+npm run eval:solution  # full production pipeline on the frozen fixtures
+npm run eval:report    # aggregate results into eval/results/REPORT.md
+npm run eval:record    # (optional) re-record fixtures from live APIs
+npm run eval:challenge # (optional) derive the synthetic conflict case
 ```
 
 ---

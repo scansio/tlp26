@@ -1,0 +1,60 @@
+{
+ "agent": "setup-agent (conversational risk-profile onboarding)",
+ "note": "Recorded against the real mastra instance with Postgres-backed memory, same code path as /api/setup. userId travels via RequestContext, never via tool input. The final turn triggers the saveRiskProfile tool.",
+ "userId": "demo-judge-user",
+ "threadId": "setup-demo-judge-user",
+ "steps": [
+  {
+   "userMessage": "Hi! I want to trade using smart money concepts and chart patterns. Max 3 trades a day, risk 1% per trade, and stop me out if I lose 5% in a day. I want to approve every trade myself. Mostly 1h and 4h charts on BTC and ETH.",
+   "responseText": "Great! I have most of your profile details. To finish setting it up, I'll default your minimum Risk:Reward ratio to 1.5, which means you'd look for at least a 1:1.5 return on every trade. Does that work for you, or would you like to set a different minimum ratio (between 1 and 10)?",
+   "latencyMs": 5112,
+   "toolCalls": []
+  },
+  {
+   "userMessage": "1.5 sounds good, let's use that.",
+   "responseText": "Here is your trading risk profile:\n- Strategies: SMC, Chart Patterns\n- Max trades per day: 3\n- Risk per trade: 1%\n- Max daily loss: 5%\n- Min Risk:Reward ratio: 1:1.5\n- Execution mode: manual\n- Preferred timeframes: 1h, 4h\n- Allowed symbols: BTC/USDT, ETH/USDT\n\nWould you like me to save this profile? Reply 'yes', 'confirm', or 'save' to proceed, or tell me what to change.",
+   "latencyMs": 1966,
+   "toolCalls": []
+  },
+  {
+   "userMessage": "Yes, save it.",
+   "responseText": "Your profile has been saved successfully! You are all set—your risk management settings are now active and trading can begin. Happy trading!",
+   "latencyMs": 6653,
+   "toolCalls": [
+    {
+     "type": "tool-call",
+     "runId": "e1c12236-715b-44d1-ab8b-3c38d675c39b",
+     "from": "AGENT",
+     "payload": {
+      "toolCallId": "APhxA3HkFGyqICY1",
+      "toolName": "saveRiskProfileTool",
+      "args": {
+       "riskPerTradePct": 1,
+       "minRiskRewardRatio": 1.5,
+       "preferredTimeframes": [
+        "1h",
+        "4h"
+       ],
+       "executionMode": "manual",
+       "maxDailyLossPct": 5,
+       "strategies": [
+        "SMC",
+        "Chart Patterns"
+       ],
+       "allowedSymbols": [
+        "BTC/USDT",
+        "ETH/USDT"
+       ],
+       "maxTradesPerDay": 3
+      },
+      "providerMetadata": {
+       "google": {
+        "thoughtSignature": "EnEKbwERTTIPc8lm5Q7+HycI/ciKobEEvK7QPbyIvAACA60SXwrytoko2FEy6ND/XeqomAHiij2AiQHflpa9tS4ES6gWgOE72SFF+hYRUXAoV4uB9rd+SJzVnArR498nlWVrFifVj0+cbDoRn3HPSjianw=="
+       }
+      }
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -2,6 +2,7 @@ import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import ccxt from 'ccxt';
 import type { OrderBook, Exchange } from 'ccxt';
+import { applyPublicDataMirror } from './exchange-public-client';
 
 export const orderbookTool = createTool({
   id: 'orderbook-analysis',
@@ -112,6 +113,7 @@ async function analyzeOrderBook(
 
   const ExchangeClass = (ccxt as unknown as Record<string, new () => Exchange>)[exchangeId];
   const client = new ExchangeClass();
+  applyPublicDataMirror(client, exchangeId);
 
   let orderBook: OrderBook;
   try {

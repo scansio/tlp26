@@ -1,6 +1,7 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import ccxt, { type OHLCV, type Exchange, NetworkError, ExchangeError } from 'ccxt';
+import { applyPublicDataMirror } from './exchange-public-client';
 
 const SUPPORTED_EXCHANGES = ['binance', 'bingx', 'bybit'] as const;
 type SupportedExchange = (typeof SUPPORTED_EXCHANGES)[number];
@@ -56,6 +57,7 @@ export const marketDataTool = createTool({
     }
 
     const client = new ExchangeClass({ enableRateLimit: true });
+    applyPublicDataMirror(client, exchangeId);
 
     let rawCandles: OHLCV[];
     try {

@@ -1,0 +1,113 @@
+{
+ "system": "workflow",
+ "model": "google/gemini-3.1-flash-lite",
+ "caseId": "sol-usdt",
+ "run": 1,
+ "agent": "trading-agent via production pipeline",
+ "steps": [
+  {
+   "messages": [
+    {
+     "role": "user",
+     "content": "You are the trading decision engine. Analyze the following data and return ONLY a valid JSON object with no prose.\n\n## TOP-DOWN BIAS (HTF FILTER — MANDATORY CONSTRAINT)\nHTF (1d): BULLISH — ADX=46.0, EMA(above20/50/200)=true/true/true, MACD=BULLISH, score=4\nIntermediate (4h): BULLISH — ADX=38.5, EMA(above20/50/200)=true/true/true, MACD=BEARISH, score=2\nCombined Trade Bias: BULLISH (Strength: STRONG)\n\nRULES YOU MUST FOLLOW:\n- If tradeBias is BULLISH → only ENTER_LONG or HOLD are allowed. ENTER_SHORT is FORBIDDEN.\n- If tradeBias is BEARISH → only ENTER_SHORT or HOLD are allowed. ENTER_LONG is FORBIDDEN.\n- If tradeBias is NEUTRAL → ENTER_LONG or ENTER_SHORT are allowed but confidence must be MEDIUM or lower.\n- When a counter-trend trade would otherwise trigger, output HOLD and cite the HTF filter in reasoning.\n- Include \"top-down-alignment\" in strategiesTriggered when the LTF signal agrees with tradeBias.\n\n## Symbol\nSOL/USDT\n\n## Market Data (candle counts)\n- 1h candles: 200\n- 4h candles: 200\n- 1d candles: 200\n\n## Technical Indicators\n### 1h\n{\n  \"rsi\": {\n    \"value\": 39.66,\n    \"classification\": \"NEUTRAL\",\n    \"direction\": \"NEUTRAL\"\n  },\n  \"ema\": {\n    \"ema20\": 104.25203377076897,\n    \"ema50\": 104.13978781184318,\n    \"ema200\": 98.13845,\n    \"priceAboveEma20\": false,\n    \"priceAboveEma50\": false,\n    \"priceAboveEma200\": true,\n    \"direction\": \"NEUTRAL\"\n  },\n  \"macd\": {\n    \"macdLine\": -0.4901099404636824,\n    \"signalLine\": -0.4569551819139812,\n    \"histogram\": -0.03315475854970118,\n    \"crossoverDirection\": \"NO_CROSSOVER\",\n    \"direction\": \"BEARISH\"\n  },\n  \"bollingerBands\": {\n    \"upper\": 105.69280422204257,\n    \"middle\": 104.1579999999999,\n    \"lower\": 102.62319577795724,\n    \"bandwidthPercent\": 2.947069302487889,\n    \"pricePosition\": \"NEAR_LOWER\",\n    \"direction\": \"BEARISH\"\n  },\n  \"adx\": {\n    \"value\": 19.926794439978757,\n    \"trendStrength\": \"WEAK\",\n    \"direction\": \"NEUTRAL\"\n  },\n  \"candleCount\": 200\n}\n\n### 4h\n{\n  \"rsi\": {\n    \"value\": 55.27,\n    \"classification\": \"NEUTRAL\",\n    \"direction\": \"NEUTRAL\"\n  },\n  \"ema\": {\n    \"ema20\": 103.04916372162413,\n    \"ema50\": 97.94784049280882,\n    \"ema200\": 81.25355,\n    \"priceAboveEma20\": true,\n    \"priceAboveEma50\": true,\n    \"priceAboveEma200\": true,\n    \"direction\": \"BULLISH\"\n  },\n  \"macd\": {\n    \"macdLine\": 1.9774292336431643,\n    \"signalLine\": 2.584472101745934,\n    \"histogram\": -0.6070428681027695,\n    \"crossoverDirection\": \"NO_CROSSOVER\",\n    \"direction\": \"BEARISH\"\n  },\n  \"bollingerBands\": {\n    \"upper\": 111.01543389341207,\n    \"middle\": 103.20799999999997,\n    \"lower\": 95.40056610658787,\n    \"bandwidthPercent\": 15.129513009480075,\n    \"pricePosition\": \"MIDDLE\",\n    \"direction\": \"NEUTRAL\"\n  },\n  \"adx\": {\n    \"value\": 38.513175181769896,\n    \"trendStrength\": \"MODERATE\",\n    \"direction\": \"NEUTRAL\"\n  },\n  \"candleCount\": 200\n}\n\n### 1d\n{\n  \"rsi\": {\n    \"value\": 72.85,\n    \"classification\": \"OVERBOUGHT\",\n    \"direction\": \"BEARISH\"\n  },\n  \"ema\": {\n    \"ema20\": 91.28315847160276,\n    \"ema50\": 83.573495545081,\n    \"ema200\": 81.7103,\n    \"priceAboveEma20\": true,\n    \"priceAboveEma50\": true,\n    \"priceAboveEma200\": true,\n    \"direction\": \"BULLISH\"\n  },\n  \"macd\": {\n    \"macdLine\": 7.64929095919797,\n    \"signalLine\": 5.64274578192668,\n    \"histogram\": 2.0065451772712892,\n    \"crossoverDirection\": \"NO_CROSSOVER\",\n    \"direction\": \"BULLISH\"\n  },\n  \"bollingerBands\": {\n    \"upper\": 111.29051342835015,\n    \"middle\": 87.64650000000005,\n    \"lower\": 64.00248657164994,\n    \"bandwidthPercent\": 53.953126316167996,\n    \"pricePosition\": \"NEAR_UPPER\",\n    \"direction\": \"BULLISH\"\n  },\n  \"adx\": {\n    \"value\": 45.97005781911718,\n    \"trendStrength\": \"STRONG\",\n    \"direction\": \"NEUTRAL\"\n  },\n  \"candleCount\": 200\n}\n\n## SMC Structures\n{\n  \"fvgs\": [\n    {\n      \"type\": \"FVG\",\n      \"priceLevel\": 97.555,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.9213747645950897,\n      \"distanceFromCurrentPrice\": -5.616292569659436\n    },\n    {\n      \"type\": \"FVG\",\n      \"priceLevel\": 98.925,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -4.290828173374615\n    },\n    {\n      \"type\": \"FVG\",\n      \"priceLevel\": 108.32,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 0.6261770244821103,\n      \"distanceFromCurrentPrice\": 4.798761609907114\n    }\n  ],\n  \"orderBlocks\": [\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 91.875,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -11.111648606811144\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 93.965,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -9.089589783281731\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 99.46000000000001,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -3.7732198142414775\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 93.19999999999999,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -9.829721362229114\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 94.715,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -8.36397058823529\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 94.36,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -8.707430340557277\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 95.41,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -7.691563467492263\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 95.41499999999999,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -7.686726006191957\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 97.94,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -5.243808049535605\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 100.66499999999999,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -2.6073916408668802\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 102.16,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -1.1609907120743062\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 97.51499999999999,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -5.654992260061932\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 96.4,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -6.733746130030954\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 100.97999999999999,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": -2.3026315789473775\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 107.52,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": 4.024767801857582\n    },\n    {\n      \"type\": \"ORDER_BLOCK\",\n      \"priceLevel\": 105.16499999999999,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 1,\n      \"distanceFromCurrentPrice\": 1.7463235294117574\n    }\n  ],\n  \"bos\": [\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 92.16,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.017144097222222203,\n      \"distanceFromCurrentPrice\": -10.835913312693501\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 92.16,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.02322048611111112,\n      \"distanceFromCurrentPrice\": -10.835913312693501\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 92.16,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.01692708333333336,\n      \"distanceFromCurrentPrice\": -10.835913312693501\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 92.16,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.018771701388888933,\n      \"distanceFromCurrentPrice\": -10.835913312693501\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 92.16,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.016601562500000014,\n      \"distanceFromCurrentPrice\": -10.835913312693501\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 92.16,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.03765190972222221,\n      \"distanceFromCurrentPrice\": -10.835913312693501\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 92.16,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.05023871527777789,\n      \"distanceFromCurrentPrice\": -10.835913312693501\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 92.16,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.07584635416666677,\n      \"distanceFromCurrentPrice\": -10.835913312693501\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 92.58,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 0.003024411319939524,\n      \"distanceFromCurrentPrice\": -10.429566563467493\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 96.25,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.0020779220779221074,\n      \"distanceFromCurrentPrice\": -6.878869969040247\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 97.61,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.013932998668169239,\n      \"distanceFromCurrentPrice\": -5.563080495356036\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 97.61,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.04261858416145883,\n      \"distanceFromCurrentPrice\": -5.563080495356036\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 97.61,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.029300276611002967,\n      \"distanceFromCurrentPrice\": -5.563080495356036\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 97.61,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.033910459993853115,\n      \"distanceFromCurrentPrice\": -5.563080495356036\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 97.61,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.040979407847556604,\n      \"distanceFromCurrentPrice\": -5.563080495356036\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 97.61,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.03811084929822763,\n      \"distanceFromCurrentPrice\": -5.563080495356036\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 97.61,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.043847966396885575,\n      \"distanceFromCurrentPrice\": -5.563080495356036\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 97.88,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.0038823048630977695,\n      \"distanceFromCurrentPrice\": -5.301857585139323\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 97.88,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.01859419697588892,\n      \"distanceFromCurrentPrice\": -5.301857585139323\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 97.88,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.042807519411524296,\n      \"distanceFromCurrentPrice\": -5.301857585139323\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.02147179387077887,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.018934218231505096,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.01600624634003514,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.014542260394300304,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.01922701542065209,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.03513566269763819,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.04235799336326375,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.046261955885223596,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.06324419285574863,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.05582666406402512,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.05787624438805394,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.06763615069295342,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.06412258442318962,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.0611946125317198,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    },\n    {\n      \"type\": \"BOS\",\n      \"priceLevel\": 102.46,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.06578176849502254,\n      \"distanceFromCurrentPrice\": -0.8707430340557331\n    }\n  ],\n  \"choch\": [\n    {\n      \"type\": \"ChoCH\",\n      \"priceLevel\": 92.58,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 0.00021602937999563643,\n      \"distanceFromCurrentPrice\": -10.429566563467493\n    },\n    {\n      \"type\": \"ChoCH\",\n      \"priceLevel\": 96.25,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.00041558441558448055,\n      \"distanceFromCurrentPrice\": -6.878869969040247\n    }\n  ],\n  \"liquiditySweeps\": [\n    {\n      \"type\": \"LIQUIDITY_SWEEP\",\n      \"priceLevel\": 90.59,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.03168120101556468,\n      \"distanceFromCurrentPrice\": -12.354876160990708\n    },\n    {\n      \"type\": \"LIQUIDITY_SWEEP\",\n      \"priceLevel\": 95.9,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 0.003649635036496291,\n      \"distanceFromCurrentPrice\": -7.217492260061914\n    },\n    {\n      \"type\": \"LIQUIDITY_SWEEP\",\n      \"priceLevel\": 96.25,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 0.0008311688311688134,\n      \"distanceFromCurrentPrice\": -6.878869969040247\n    },\n    {\n      \"type\": \"LIQUIDITY_SWEEP\",\n      \"priceLevel\": 96.25,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 0.002909090909090921,\n      \"distanceFromCurrentPrice\": -6.878869969040247\n    },\n    {\n      \"type\": \"LIQUIDITY_SWEEP\",\n      \"priceLevel\": 96.25,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 0.0049870129870130285,\n      \"distanceFromCurrentPrice\": -6.878869969040247\n    },\n    {\n      \"type\": \"LIQUIDITY_SWEEP\",\n      \"priceLevel\": 97.61,\n      \"direction\": \"BEARISH\",\n      \"strengthScore\": 0.011269337158078008,\n      \"distanceFromCurrentPrice\": -5.563080495356036\n    },\n    {\n      \"type\": \"LIQUIDITY_SWEEP\",\n      \"priceLevel\": 96.21,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.009250597650971838,\n      \"distanceFromCurrentPrice\": -6.917569659442729\n    },\n    {\n      \"type\": \"LIQUIDITY_SWEEP\",\n      \"priceLevel\": 95.32,\n      \"direction\": \"BULLISH\",\n      \"strengthScore\": 0.0038816617708769445,\n      \"distanceFromCurrentPrice\": -7.77863777089784\n    }\n  ],\n  \"currentPrice\": 103.36,\n  \"candleCount\": 200\n}\n\n## Chart Patterns\n[\n  {\n    \"patternType\": \"Ascending Triangle\",\n    \"direction\": \"BULLISH\",\n    \"necklinePrice\": 196.67893996754287,\n    \"targetPrice\": 207.667785007651,\n    \"invalidationLevel\": 101.140808822371,\n    \"confidenceScore\": 0.905820363375974\n  }\n]\n\n## Order Book\n{\n  \"bidWalls\": [],\n  \"askWalls\": [],\n  \"imbalanceRatio\": 0.6766890127286121,\n  \"dominantSide\": \"NEUTRAL\",\n  \"currentSpread\": 0.009676326866312744\n}\n\n## News Sentiment\nOverall: NEUTRAL\n\n\n## On-Chain / Derivatives\n{\n  \"fundingRate\": 0,\n  \"fundingBias\": \"NEUTRAL\",\n  \"openInterest\": 0,\n  \"oiChange24h\": 0,\n  \"exchangeNetflow\": 0,\n  \"liquidationLevels\": []\n}\n\n## Required Output (JSON only — no markdown, no prose)\n{\n  \"bias\": \"BULLISH|BEARISH|NEUTRAL\",\n  \"action\": \"ENTER_LONG|ENTER_SHORT|HOLD\",\n  \"entryZone\": { \"low\": <number|null>, \"high\": <number|null> },\n  \"sl\": <number|null>,\n  \"tp\": <number|null>,\n  \"confidence\": \"LOW|MEDIUM|HIGH\",\n  \"primarySignalSource\": \"<string>\",\n  \"strategiesTriggered\": [\"<string>\"],\n  \"reasoning\": \"<string>\"\n}"
+    }
+   ],
+   "responseText": "{\n  \"bias\": \"BULLISH\",\n  \"action\": \"ENTER_LONG\",\n  \"entryZone\": {\n    \"low\": 102.16,\n    \"high\": 103.36\n  },\n  \"sl\": 101.14,\n  \"tp\": 108.32,\n  \"confidence\": \"MEDIUM\",\n  \"primarySignalSource\": \"Ascending Triangle\",\n  \"strategiesTriggered\": [\n    \"top-down-alignment\"\n  ],\n  \"reasoning\": \"HTF bias is BULLISH. SOL/USDT shows a strong Ascending Triangle pattern (confidence 0.905) with an invalidation level at 101.14. SMC analysis identifies a bearish FVG at 108.32, which serves as a logical take-profit level. The entry zone is defined near the 102.16 order block support. Confidence is MEDIUM due to 1h indicators being neutral and the 4h MACD currently showing a bearish trend direction despite the higher timeframe bullish alignment.\"\n}",
+   "latencyMs": 2261,
+   "usage": {
+    "inputTokens": 11368,
+    "outputTokens": 247,
+    "totalTokens": 11615,
+    "reasoningTokens": 0,
+    "cachedInputTokens": 0,
+    "raw": {
+     "inputTokens": {
+      "total": 11368,
+      "noCache": 11368,
+      "cacheRead": 0
+     },
+     "outputTokens": {
+      "total": 247,
+      "text": 247,
+      "reasoning": 0
+     },
+     "raw": {
+      "promptTokenCount": 11368,
+      "candidatesTokenCount": 247,
+      "totalTokenCount": 11615,
+      "promptTokensDetails": [
+       {
+        "modality": "TEXT",
+        "tokenCount": 11368
+       }
+      ]
+     }
+    }
+   }
+  }
+ ],
+ "parsedDecision": {
+  "bias": "BULLISH",
+  "action": "ENTER_LONG",
+  "entryZone": {
+   "low": 102.16,
+   "high": 103.36
+  },
+  "sl": 101.14,
+  "tp": 108.32,
+  "confidence": "MEDIUM",
+  "primarySignalSource": "Ascending Triangle",
+  "strategiesTriggered": [
+   "top-down-alignment"
+  ],
+  "reasoning": "HTF bias is BULLISH. SOL/USDT shows a strong Ascending Triangle pattern (confidence 0.905) with an invalidation level at 101.14. SMC analysis identifies a bearish FVG at 108.32, which serves as a logical take-profit level. The entry zone is defined near the 102.16 order block support. Confidence is MEDIUM due to 1h indicators being neutral and the 4h MACD currently showing a bearish trend direction despite the higher timeframe bullish alignment."
+ },
+ "score": {
+  "checks": [
+   {
+    "name": "schema_valid",
+    "pass": true,
+    "detail": "parsed and validated"
+   },
+   {
+    "name": "hold_nulls",
+    "pass": true,
+    "detail": "n/a (actionable)"
+   },
+   {
+    "name": "entry_complete",
+    "pass": true,
+    "detail": "entry zone, SL, TP all present"
+   },
+   {
+    "name": "levels_ordered",
+    "pass": true,
+    "detail": "ENTER_LONG: sl=101.14 entry=[102.16, 103.36] tp=108.32"
+   },
+   {
+    "name": "rr_ok",
+    "pass": true,
+    "detail": "R:R = 3.43 (min 1.5)"
+   },
+   {
+    "name": "grounded",
+    "pass": true,
+    "detail": "all levels within 0.5% of a tool-derived reference level"
+   },
+   {
+    "name": "entry_near_market",
+    "pass": true,
+    "detail": "entry mid 102.75999999999999 is 0.58% from current price 103.36"
+   },
+   {
+    "name": "htf_aligned",
+    "pass": true,
+    "detail": "tradeBias=BULLISH, action=ENTER_LONG"
+   }
+  ],
+  "violations": 0,
+  "pass": true,
+  "actionable": true
+ },
+ "error": null
+}
