@@ -24,7 +24,7 @@ trade behind human approval.
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org/) v20+
+- [Node.js](https://nodejs.org/) v22+ (the eval scripts use `--env-file-if-exists`, added in v22.9)
 - [Docker](https://docs.docker.com/get-docker/) + [Docker Compose](https://docs.docker.com/compose/install/) v2+
 - npm (comes with Node.js)
 

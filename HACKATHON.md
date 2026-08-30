@@ -220,7 +220,7 @@ Edit `.env` and set **only**:
 ```bash
 AI_PROVIDER=google            # or groq/openai/anthropic/… — any provider you have a key for
 GOOGLE_MODEL=gemini-3.1-flash-lite
-GOOGLE_API_KEY=<your key>
+GOOGLE_API_KEY=<your key>     # free key: https://aistudio.google.com/apikey
 ```
 
 No database, Clerk, or exchange keys are needed for the evaluation — the eval calls the
