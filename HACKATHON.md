@@ -1,7 +1,7 @@
 # TLP26 — micro1 Agentic Workflows Hackathon Submission
 
 **Project:** TLP26 AI Trading Hub — an agentic trade-decision workflow with measured guardrails
-**Solution video:** *(link here)*
+**Solution video:** [watch (Google Drive, ~4:30)](https://drive.google.com/file/d/1mwE7FqFhD9bxN7qFZJGrEPYsMRKHr1wX/view?usp=drive_link)
 
 ---
 
