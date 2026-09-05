@@ -2,6 +2,7 @@ import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import ccxt, { type OHLCV, type Exchange, NetworkError, ExchangeError } from 'ccxt';
 import { applyPublicDataMirror } from './exchange-public-client';
+import { toExchangeSymbol } from './market-symbol';
 
 const SUPPORTED_EXCHANGES = ['binance', 'bingx', 'bybit'] as const;
 type SupportedExchange = (typeof SUPPORTED_EXCHANGES)[number];
@@ -34,6 +35,13 @@ export const marketDataTool = createTool({
       .enum(SUPPORTED_EXCHANGES)
       .default('binance')
       .describe('Exchange to fetch from (default: binance)'),
+    marketType: z
+      .enum(['spot', 'swap'])
+      .default('spot')
+      .describe(
+        "'swap' = USDT-M perpetual futures. Pass the plain BASE/QUOTE symbol either way — " +
+        "never append TradingView-style '.P'/':USDT' suffixes yourself, the tool applies them.",
+      ),
   }),
   outputSchema: z.object({
     candles: z.array(candleSchema),
@@ -42,14 +50,16 @@ export const marketDataTool = createTool({
     exchange: z.string(),
   }),
   execute: async (inputData) => {
-    const { symbol, timeframe, limit, exchange } = inputData as {
+    const { symbol, timeframe, limit, exchange, marketType } = inputData as {
       symbol: string;
       timeframe: '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
       limit: number;
       exchange: SupportedExchange;
+      marketType: 'spot' | 'swap';
     };
 
     const exchangeId: SupportedExchange = exchange ?? 'binance';
+    const exchangeSymbol = toExchangeSymbol(symbol, marketType ?? 'spot');
 
     const ExchangeClass = ccxt[exchangeId as keyof typeof ccxt] as new (config?: object) => Exchange;
     if (!ExchangeClass) {
@@ -57,17 +67,18 @@ export const marketDataTool = createTool({
     }
 
     const client = new ExchangeClass({ enableRateLimit: true });
-    applyPublicDataMirror(client, exchangeId);
+    applyPublicDataMirror(client, exchangeId, marketType ?? 'spot');
 
     let rawCandles: OHLCV[];
     try {
       await client.loadMarkets();
-      if (!client.markets[symbol]) {
+      if (!client.markets[exchangeSymbol]) {
         throw new Error(
-          `Symbol '${symbol}' not found on ${exchangeId}. Check the trading pair format (e.g. BTC/USDT).`,
+          `Symbol '${symbol}' not found on ${exchangeId} (${marketType ?? 'spot'} market). ` +
+          `Check the trading pair format (e.g. BTC/USDT).`,
         );
       }
-      rawCandles = await client.fetchOHLCV(symbol, timeframe, undefined, limit);
+      rawCandles = await client.fetchOHLCV(exchangeSymbol, timeframe, undefined, limit);
     } catch (err: unknown) {
       if (err instanceof NetworkError) {
         throw new Error(

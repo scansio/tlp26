@@ -8,6 +8,7 @@ import { mastra } from '@/mastra'
 import { db } from '@/db'
 import { userRiskProfiles, userExchanges } from '@/db/schema'
 import { decrypt } from '@/lib/crypto'
+import { configureMarketType, type MarketType } from '@/mastra/tools/market-symbol'
 import { NextResponse } from 'next/server'
 
 // ---------------------------------------------------------------------------
@@ -69,6 +70,7 @@ async function buildRiskContext(userId: string): Promise<string> {
             secret,
             ...(password ? { password } : {}),
           });
+          configureMarketType(client, exchangeRow.exchangeName, (profile.marketType as MarketType) ?? 'spot');
 
           const fetchWithTimeout = Promise.race([
             client.fetchBalance(),
@@ -115,6 +117,7 @@ Strategies: ${strategies}
 Preferred Timeframes: ${timeframes}
 Allowed Symbols: ${symbols}
 Execution Mode: ${profile.tradingMode ?? 'manual'} (${isPaper ? 'paper' : 'live'} trading)
+Market Type: ${profile.marketType ?? 'spot'}${profile.marketType === 'swap' ? ` (leverage: ${profile.defaultLeverage ?? 1}x, margin: ${profile.marginMode ?? 'cross'})` : ''}
 ===`;
 }
 

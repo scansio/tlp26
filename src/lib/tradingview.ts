@@ -15,17 +15,31 @@ export const tvWebhookSchema = z.object({
 export type TvWebhookPayload = z.infer<typeof tvWebhookSchema>;
 
 // ---------------------------------------------------------------------------
-// Normalise symbol to CCXT format (e.g. BTCUSDT → BTC/USDT)
-// Already-slashed inputs are kept as-is.
+// Normalise symbol to CCXT spot format (e.g. BTCUSDT → BTC/USDT) and detect
+// TradingView's perpetual-futures ticker convention (a trailing ".P"/".PERP",
+// e.g. BTCUSDT.P) as a separate marketType flag — NOT baked into the symbol
+// string itself. The symbol always stays human "BASE/QUOTE"; the CCXT swap
+// suffix (BASE/QUOTE:SETTLE) is applied only at the exchange-call boundary
+// via toExchangeSymbol (src/mastra/tools/market-symbol.ts).
 // ---------------------------------------------------------------------------
-const QUOTE_ASSETS = ['USDT', 'USDC', 'BUSD', 'USD', 'USDT.P', 'BTC', 'ETH', 'BNB'];
+const PERP_SUFFIXES = ['.PERP', '.P'];
+const QUOTE_ASSETS = ['USDT', 'USDC', 'BUSD', 'USD', 'BTC', 'ETH', 'BNB'];
 
-export function normaliseSymbol(raw: string): string {
-  const upper = raw.trim().toUpperCase().replace(/[-_]/, '/');
+export function normaliseSymbol(raw: string): { symbol: string; marketType: 'spot' | 'swap' } {
+  let upper = raw.trim().toUpperCase().replace(/[-_]/, '/');
+  let marketType: 'spot' | 'swap' = 'spot';
 
-  // Already in CCXT format
+  for (const suffix of PERP_SUFFIXES) {
+    if (upper.endsWith(suffix)) {
+      upper = upper.slice(0, upper.length - suffix.length);
+      marketType = 'swap';
+      break;
+    }
+  }
+
+  // Already in CCXT spot format
   if (upper.includes('/')) {
-    return upper;
+    return { symbol: upper, marketType };
   }
 
   // Try longest quote asset first to avoid partial matches (e.g. USD before USDT)
@@ -34,13 +48,13 @@ export function normaliseSymbol(raw: string): string {
     if (upper.endsWith(quote)) {
       const base = upper.slice(0, upper.length - quote.length);
       if (base.length > 0) {
-        return `${base}/${quote}`;
+        return { symbol: `${base}/${quote}`, marketType };
       }
     }
   }
 
   // Fall back: return as-is and let downstream tools handle it
-  return upper;
+  return { symbol: upper, marketType };
 }
 
 // ---------------------------------------------------------------------------

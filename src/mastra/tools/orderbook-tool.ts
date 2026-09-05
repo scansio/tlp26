@@ -3,6 +3,7 @@ import { z } from 'zod';
 import ccxt from 'ccxt';
 import type { OrderBook, Exchange } from 'ccxt';
 import { applyPublicDataMirror } from './exchange-public-client';
+import { toExchangeSymbol, type MarketType } from './market-symbol';
 
 export const orderbookTool = createTool({
   id: 'orderbook-analysis',
@@ -12,6 +13,10 @@ export const orderbookTool = createTool({
     symbol: z.string().describe('Trading pair symbol, e.g. BTC/USDT'),
     exchange: z.string().default('binance').describe('Exchange id: binance, bybit, bingx'),
     depth: z.number().default(50).describe('Order book depth (number of levels per side)'),
+    marketType: z
+      .enum(['spot', 'swap'])
+      .default('spot')
+      .describe("'swap' = USDT-M perpetual futures. Pass the plain BASE/QUOTE symbol either way."),
   }),
   outputSchema: z.object({
     bidWalls: z.array(
@@ -33,8 +38,13 @@ export const orderbookTool = createTool({
     currentSpread: z.number().describe('Bid-ask spread as percentage of mid price'),
   }),
   execute: async (inputData) => {
-    const { symbol, exchange, depth } = inputData;
-    return await analyzeOrderBook(symbol, exchange, depth);
+    const { symbol, exchange, depth, marketType } = inputData as {
+      symbol: string;
+      exchange: string;
+      depth: number;
+      marketType: MarketType;
+    };
+    return await analyzeOrderBook(symbol, exchange, depth, marketType ?? 'spot');
   },
 });
 
@@ -95,6 +105,7 @@ async function analyzeOrderBook(
   symbol: string,
   exchange: string,
   depth: number,
+  marketType: MarketType,
 ): Promise<{
   bidWalls: LiquidityWall[];
   askWalls: LiquidityWall[];
@@ -113,14 +124,16 @@ async function analyzeOrderBook(
 
   const ExchangeClass = (ccxt as unknown as Record<string, new () => Exchange>)[exchangeId];
   const client = new ExchangeClass();
-  applyPublicDataMirror(client, exchangeId);
+  applyPublicDataMirror(client, exchangeId, marketType);
+
+  const exchangeSymbol = toExchangeSymbol(symbol, marketType);
 
   let orderBook: OrderBook;
   try {
-    orderBook = await client.fetchOrderBook(symbol, depth);
+    orderBook = await client.fetchOrderBook(exchangeSymbol, depth);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Order book unavailable for ${symbol} on ${exchangeId}: ${message}`);
+    throw new Error(`Order book unavailable for ${symbol} on ${exchangeId} (${marketType} market): ${message}`);
   }
 
   const bids: OrderBookLevel[] = (orderBook.bids as [number, number][]).map(

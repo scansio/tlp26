@@ -21,6 +21,9 @@ export const createSignalTool = createTool({
     reasoning: z.string().describe('Plain-English rationale citing specific tool output numbers'),
     strategySource: z.string().optional().describe('Primary signal source, e.g. SMC BOS, RSI divergence'),
     exchange: z.string().optional().describe('Exchange name, e.g. binance'),
+    marketType: z.enum(['spot', 'swap']).optional().describe("'swap' = USDT-M perpetual futures. From context's Market Type unless overridden."),
+    leverage: z.number().int().positive().optional().describe('Leverage to use if marketType=swap'),
+    marginMode: z.enum(['cross', 'isolated']).optional(),
     smcLevels: z
       .array(
         z.object({
@@ -78,6 +81,9 @@ export const createSignalTool = createTool({
       reasoning,
       strategySource,
       exchange,
+      marketType,
+      leverage,
+      marginMode,
       smcLevels,
       analysisRunId,
       newsSentiment,
@@ -98,6 +104,9 @@ export const createSignalTool = createTool({
       reasoning: string;
       strategySource?: string;
       exchange?: string;
+      marketType?: 'spot' | 'swap';
+      leverage?: number;
+      marginMode?: 'cross' | 'isolated';
       smcLevels?: Array<{ type: string; priceLevel: number; direction: 'BULLISH' | 'BEARISH' }>;
       analysisRunId?: string;
       newsSentiment?: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
@@ -132,6 +141,9 @@ export const createSignalTool = createTool({
         strategySource: strategySource ?? null,
         source: 'ai',
         status: 'pending',
+        marketType: marketType ?? 'spot',
+        leverage: leverage ?? 1,
+        marginMode: marginMode ?? 'cross',
         analysisRunId: analysisRunId ?? null,
         newsSentiment: newsSentiment ?? null,
         newsSentimentScore: newsSentimentScore != null ? String(newsSentimentScore) : null,

@@ -10,12 +10,17 @@ import type { Exchange } from 'ccxt';
  * Set BINANCE_MARKET_DATA_MIRROR to that URL to route the read-only tools
  * (market-data-tool, orderbook-tool) through the mirror. The mirror only
  * serves spot endpoints, so market loading is restricted to spot when it is
- * active. Trading/authenticated calls are unaffected — execute-trade-tool
- * never uses the mirror.
+ * active — it is skipped entirely for marketType='swap' since it can't serve
+ * futures data at all. Trading/authenticated calls are unaffected —
+ * execute-trade-tool never uses the mirror.
  */
-export function applyPublicDataMirror(client: Exchange, exchangeId: string): void {
+export function applyPublicDataMirror(
+  client: Exchange,
+  exchangeId: string,
+  marketType: 'spot' | 'swap' = 'spot',
+): void {
   const mirror = process.env.BINANCE_MARKET_DATA_MIRROR?.trim();
-  if (!mirror || exchangeId !== 'binance') return;
+  if (!mirror || exchangeId !== 'binance' || marketType === 'swap') return;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (client as any).urls.api.public = mirror;

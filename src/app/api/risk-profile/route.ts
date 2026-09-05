@@ -49,6 +49,9 @@ const riskProfileSchema = z.object({
     .max(10, 'minRiskRewardRatio cannot exceed 10')
     .optional()
     .default(1.5),
+  marketType: z.enum(['spot', 'swap']).optional().default('spot'),
+  defaultLeverage: z.number().int().min(1).max(125).optional().default(1),
+  marginMode: z.enum(['cross', 'isolated']).optional().default('cross'),
 });
 
 type RiskProfileInput = z.infer<typeof riskProfileSchema>;
@@ -121,6 +124,9 @@ export async function POST(req: Request) {
       slippagePct: String(data.slippagePct),
       paperBalanceUsd: String(data.paperBalanceUsd),
       minRiskRewardRatio: String(data.minRiskRewardRatio),
+      marketType: data.marketType,
+      defaultLeverage: data.defaultLeverage,
+      marginMode: data.marginMode,
       isActive: true,
       updatedAt: new Date(),
     })
@@ -137,6 +143,9 @@ export async function POST(req: Request) {
         slippagePct: String(data.slippagePct),
         paperBalanceUsd: String(data.paperBalanceUsd),
         minRiskRewardRatio: String(data.minRiskRewardRatio),
+        marketType: data.marketType,
+        defaultLeverage: data.defaultLeverage,
+        marginMode: data.marginMode,
         isActive: true,
         updatedAt: new Date(),
       },
@@ -199,6 +208,9 @@ function toResponse(profile: ProfileRow) {
     allowedSymbols: profile.allowedSymbols,
     slippagePct: Number(profile.slippagePct ?? '0.05'),
     minRiskRewardRatio: Number(profile.minRiskRewardRatio ?? '1.50'),
+    marketType: profile.marketType ?? 'spot',
+    defaultLeverage: profile.defaultLeverage ?? 1,
+    marginMode: profile.marginMode ?? 'cross',
     // Paper trading mode fields
     paperMode: (profile.executionMode ?? 'paper') === 'paper', // true = paper, false = live
     paperBalanceUsd: Number(profile.paperBalanceUsd ?? '10000.00'),

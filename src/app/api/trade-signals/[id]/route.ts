@@ -25,6 +25,7 @@ import { db } from '@/db';
 import { tradeSignals, tradeExecutions, userRiskProfiles } from '@/db/schema';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
 import { executeTradeTool } from '@/mastra/tools/execute-trade-tool';
+import { toExchangeSymbol, type MarketType } from '@/mastra/tools/market-symbol';
 import { noopObserve } from '@mastra/core/tools';
 
 // ---------------------------------------------------------------------------
@@ -51,13 +52,17 @@ function applySlippage(
  * Fetch the current public ticker price for a symbol using the exchange name
  * stored on the signal (falls back to binance if not found).
  */
-async function fetchLivePrice(symbol: string, exchangeName: string): Promise<number | null> {
+async function fetchLivePrice(
+  symbol: string,
+  exchangeName: string,
+  marketType: MarketType = 'spot',
+): Promise<number | null> {
   const name = (exchangeName ?? 'binance').toLowerCase();
   const ExchangeClass = (ccxt as unknown as Record<string, new (c: object) => Exchange>)[name];
   if (!ExchangeClass) return null;
   try {
     const ex = new ExchangeClass({});
-    const ticker = await ex.fetchTicker(symbol);
+    const ticker = await ex.fetchTicker(toExchangeSymbol(symbol, marketType));
     return ticker.last ?? null;
   } catch {
     return null;
@@ -208,7 +213,7 @@ export async function PATCH(
     if (!fillPrice) {
       const rawPayload = signal.rawPayload as Record<string, string> | null;
       const exchangeName = (rawPayload?.exchange as string) ?? 'binance';
-      fillPrice = await fetchLivePrice(signal.symbol, exchangeName);
+      fillPrice = await fetchLivePrice(signal.symbol, exchangeName, (signal.marketType as MarketType) ?? 'spot');
     }
 
     if (!fillPrice) {
@@ -248,6 +253,9 @@ export async function PATCH(
         positionSize: positionSize !== null ? String(positionSize) : null,
         mode: 'paper',
         status: 'open',
+        marketType: signal.marketType ?? 'spot',
+        leverage: signal.leverage ?? 1,
+        marginMode: signal.marginMode ?? 'cross',
         entryAt: new Date(),
       })
       .returning({ id: tradeExecutions.id });
@@ -278,10 +286,12 @@ export async function PATCH(
     | 'bybit'
     | 'bingx';
 
+  const signalMarketType = (signal.marketType as MarketType) ?? 'spot';
+
   const signalEntry = signal.entryPrice ? Number(signal.entryPrice) : null;
   let liveEntryPrice = signalEntry;
   if (!liveEntryPrice) {
-    liveEntryPrice = await fetchLivePrice(signal.symbol, exchangeName);
+    liveEntryPrice = await fetchLivePrice(signal.symbol, exchangeName, signalMarketType);
   }
 
   if (!liveEntryPrice) {
@@ -315,6 +325,9 @@ export async function PATCH(
       tp: Number(signal.takeProfit),
       mode: 'live',
       slippagePct,
+      marketType: signalMarketType,
+      leverage: signal.leverage ?? 1,
+      marginMode: (signal.marginMode as 'cross' | 'isolated') ?? 'cross',
     },
     { observe: noopObserve },
   ) as {

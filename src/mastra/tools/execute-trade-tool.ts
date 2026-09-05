@@ -23,6 +23,16 @@ import { db } from '@/db';
 import { tradeSignals, tradeExecutions, userExchanges } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
 import { and, eq } from 'drizzle-orm';
+import { toExchangeSymbol, type MarketType } from './market-symbol';
+
+// Idempotency: setting margin mode to what it already is throws on most
+// exchanges (e.g. binance -4046 "No need to change margin type") — swallow
+// only that class of error; anything else must abort order placement rather
+// than silently proceed at whatever margin mode the account happens to have.
+function isAlreadySetError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /no need to change|already.*(margin|leverage)|not modified/i.test(msg);
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -111,6 +121,9 @@ export const executeTradeTool = createTool({
       .max(5)
       .optional()
       .describe('Slippage % to apply to paper fills (default 0.05)'),
+    marketType: z.enum(['spot', 'swap']).default('spot').describe("'swap' = USDT-M perpetual futures"),
+    leverage: z.number().int().positive().optional().describe('Leverage to set before placing a swap order'),
+    marginMode: z.enum(['cross', 'isolated']).optional(),
   }),
 
   outputSchema: z.object({
@@ -134,6 +147,9 @@ export const executeTradeTool = createTool({
       positionSizeUsdt,
       mode,
       slippagePct: inputSlippage,
+      marketType,
+      leverage,
+      marginMode,
     } = inputData as {
       userId: string;
       signalId: string;
@@ -146,7 +162,14 @@ export const executeTradeTool = createTool({
       tp: number;
       mode: 'paper' | 'live';
       slippagePct?: number;
+      marketType: MarketType;
+      leverage?: number;
+      marginMode?: 'cross' | 'isolated';
     };
+
+    const effMarketType: MarketType = marketType ?? 'spot';
+    const effLeverage = leverage ?? 1;
+    const effMarginMode = marginMode ?? 'cross';
 
     const slippagePct = inputSlippage ?? DEFAULT_SLIPPAGE_PCT;
 
@@ -170,6 +193,9 @@ export const executeTradeTool = createTool({
           positionSize: String(positionSizeUnits),
           mode: 'paper',
           status: 'open',
+          marketType: effMarketType,
+          leverage: effLeverage,
+          marginMode: effMarginMode,
           entryAt: new Date(),
         })
         .returning({ id: tradeExecutions.id });
@@ -225,6 +251,8 @@ export const executeTradeTool = createTool({
       ...(creds.password ? { password: creds.password } : {}),
     });
 
+    const exchangeSymbol = toExchangeSymbol(symbol, effMarketType);
+
     // Amount in base asset units (CCXT always takes base units)
     const amountUnits = positionSizeUsdt / entryPrice;
 
@@ -233,15 +261,94 @@ export const executeTradeTool = createTool({
 
     let exchangeOrderId: string | null = null;
     let fillPrice: number | null = null;
+    let contractSize: number | null = null;
+    let orderContracts: number | null = null;
+
+    if (effMarketType === 'swap') {
+      // setLeverage/setMarginMode are real account mutations — only ever
+      // called for live swap orders, never in paper mode.
+      try {
+        await client.loadMarkets();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          success: false,
+          executionId: null,
+          exchangeOrderId: null,
+          fillPrice: null,
+          mode: 'live' as const,
+          signalStatus: 'pending',
+          message: `Failed to load ${exchange} markets: ${msg}`,
+        };
+      }
+
+      const market = client.markets[exchangeSymbol];
+      if (!market) {
+        return {
+          success: false,
+          executionId: null,
+          exchangeOrderId: null,
+          fillPrice: null,
+          mode: 'live' as const,
+          signalStatus: 'pending',
+          message: `Swap market '${exchangeSymbol}' not found on ${exchange}. Signal left as pending.`,
+        };
+      }
+
+      // CCXT's unified createOrder takes amount in CONTRACTS for markets with
+      // a contractSize != 1 — it does not divide this for you.
+      const resolvedContractSize =
+        typeof market.contractSize === 'number' && market.contractSize > 0 ? market.contractSize : 1;
+      contractSize = resolvedContractSize;
+      orderContracts = amountUnits / resolvedContractSize;
+
+      try {
+        await client.setMarginMode(effMarginMode, exchangeSymbol);
+      } catch (err) {
+        if (!isAlreadySetError(err)) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            success: false,
+            executionId: null,
+            exchangeOrderId: null,
+            fillPrice: null,
+            mode: 'live' as const,
+            signalStatus: 'pending',
+            message: `Failed to set margin mode on ${exchange}: ${msg}`,
+          };
+        }
+      }
+
+      try {
+        // BingX uniquely requires an explicit side ('LONG'/'SHORT') for setLeverage.
+        const leverageParams = exchange === 'bingx' ? { side: direction === 'LONG' ? 'LONG' : 'SHORT' } : {};
+        await client.setLeverage(effLeverage, exchangeSymbol, leverageParams);
+      } catch (err) {
+        if (!isAlreadySetError(err)) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            success: false,
+            executionId: null,
+            exchangeOrderId: null,
+            fillPrice: null,
+            mode: 'live' as const,
+            signalStatus: 'pending',
+            message: `Failed to set leverage on ${exchange}: ${msg}`,
+          };
+        }
+      }
+    }
+
+    const orderAmount = orderContracts ?? amountUnits;
 
     try {
-      const order = await client.createOrder(symbol, 'market', side, amountUnits);
+      const order = await client.createOrder(exchangeSymbol, 'market', side, orderAmount);
       exchangeOrderId = order.id ?? null;
       // Use actual fill price if returned, otherwise fall back to entry price
       fillPrice = order.average ?? order.price ?? entryPrice;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[execute-trade-tool] CCXT createOrder failed for ${exchange}/${symbol}:`, msg);
+      console.error(`[execute-trade-tool] CCXT createOrder failed for ${exchange}/${exchangeSymbol}:`, msg);
       return {
         success: false,
         executionId: null,
@@ -267,6 +374,11 @@ export const executeTradeTool = createTool({
         positionSize: String(positionSizeUnits),
         mode: 'live',
         status: 'open',
+        marketType: effMarketType,
+        leverage: effLeverage,
+        marginMode: effMarginMode,
+        contractSize: contractSize != null ? String(contractSize) : null,
+        orderContracts: orderContracts != null ? String(orderContracts) : null,
         entryAt: new Date(),
       })
       .returning({ id: tradeExecutions.id });

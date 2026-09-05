@@ -141,6 +141,20 @@
       "when": 1788624672576,
       "tag": "0019_aspiring_avengers",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1788630971839,
+      "tag": "0020_broken_naoko",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1788631692222,
+      "tag": "0021_clumsy_vindicator",
+      "breakpoints": true
     }
   ]
 }

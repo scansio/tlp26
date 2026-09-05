@@ -55,6 +55,12 @@ export const userRiskProfiles = pgTable('user_risk_profiles', {
   trailActivationPct: numeric('trail_activation_pct', { precision: 5, scale: 3 }).default('0.000'),
   // Minimum Risk:Reward ratio required to take a trade (e.g. 1.5 means TP must be ≥1.5× the SL distance)
   minRiskRewardRatio: numeric('min_risk_reward_ratio', { precision: 5, scale: 2 }).default('1.50'),
+  // Market type: 'spot' or 'swap' (USDT-M perpetual futures). Captured onto each
+  // trade_signal/trade_execution at creation time so a position keeps the type
+  // it was opened under even if this default changes later.
+  marketType: varchar('market_type', { length: 10 }).default('spot'),
+  defaultLeverage: integer('default_leverage').default(1),
+  marginMode: varchar('margin_mode', { length: 20 }).default('cross'), // cross | isolated
   isActive: boolean('is_active').default(true),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => [
@@ -159,6 +165,12 @@ export const tradeSignals = pgTable('trade_signals', {
   // Shared by every signal produced from the same confluence-group analysis run
   // (worker-generated signals only; null for single-user webhook/manual paths)
   analysisRunId: uuid('analysis_run_id'),
+  // Market type snapshotted at signal-creation time (from user_risk_profiles or,
+  // for TradingView '.P'/'.PERP' tickers, inferred from the alert itself) — never
+  // read live from the profile again once a signal exists.
+  marketType: varchar('market_type', { length: 10 }).default('spot'),
+  leverage: integer('leverage').default(1),
+  marginMode: varchar('margin_mode', { length: 20 }).default('cross'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true }),
@@ -195,6 +207,17 @@ export const tradeExecutions = pgTable('trade_executions', {
   trailSlPrice: numeric('trail_sl_price', { precision: 20, scale: 8 }),
   // trailTpActive: true once price first reaches the initial TP target
   trailTpActive: boolean('trail_tp_active').default(false),
+  // Market type this position was opened under (snapshotted from trade_signals
+  // at execution time) — position-monitor and close orders must keep using
+  // this, not the user's current profile setting, in case it changes mid-trade.
+  marketType: varchar('market_type', { length: 10 }).default('spot'),
+  leverage: integer('leverage').default(1),
+  marginMode: varchar('margin_mode', { length: 20 }).default('cross'),
+  // CCXT contract size for the market at execution time (null for spot / 1-unit
+  // contracts) — kept so position-monitor/close-order code reconstructs the
+  // exact "amount in contracts" the entry order used, instead of re-deriving it.
+  contractSize: numeric('contract_size', { precision: 20, scale: 8 }),
+  orderContracts: numeric('order_contracts', { precision: 20, scale: 8 }),
   // trailTpPrice: current trailing TP level (set when trailTpActive = true)
   trailTpPrice: numeric('trail_tp_price', { precision: 20, scale: 8 }),
   entryAt: timestamp('entry_at', { withTimezone: true }).defaultNow(),
@@ -216,10 +239,13 @@ export const priceWatches = pgTable('price_watches', {
   targetPrice: numeric('target_price', { precision: 20, scale: 8 }).notNull(),
   // Derived server-side at creation from targetPrice vs the live price — never LLM-supplied.
   direction: varchar('direction', { length: 10 }).notNull(), // above | below
+  marketType: varchar('market_type', { length: 10 }).notNull().default('spot'),
   note: text('note'),
   // notify: just alert; trade: also create (and, if tradingMode=auto, execute) a signal on trigger
   actionType: varchar('action_type', { length: 20 }).notNull().default('notify'),
   tradeDirection: varchar('trade_direction', { length: 10 }), // LONG | SHORT — required if actionType=trade
+  leverage: integer('leverage').default(1),
+  marginMode: varchar('margin_mode', { length: 20 }).default('cross'),
   stopLoss: numeric('stop_loss', { precision: 20, scale: 8 }),
   takeProfit: numeric('take_profit', { precision: 20, scale: 8 }),
   confidence: text('confidence'), // LOW | MEDIUM | HIGH

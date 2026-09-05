@@ -39,6 +39,9 @@ interface RiskProfile {
   allowedSymbols: string[];
   paperMode: boolean;
   paperBalanceUsd: number;
+  marketType: 'spot' | 'swap';
+  defaultLeverage: number;
+  marginMode: 'cross' | 'isolated';
   isActive: boolean;
   updatedAt: string | null;
 }
@@ -53,6 +56,9 @@ interface FormState {
   preferredTimeframes: string[];
   allowedSymbols: string[];
   paperBalanceUsd: number;
+  marketType: 'spot' | 'swap';
+  defaultLeverage: number;
+  marginMode: 'cross' | 'isolated';
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +84,9 @@ const DEFAULT_FORM: FormState = {
   preferredTimeframes: [],
   allowedSymbols: [],
   paperBalanceUsd: 10_000,
+  marketType: 'spot',
+  defaultLeverage: 1,
+  marginMode: 'cross',
 };
 
 // ---------------------------------------------------------------------------
@@ -199,6 +208,9 @@ function FallbackForm({
         preferredTimeframes: profile.preferredTimeframes ?? [],
         allowedSymbols: profile.allowedSymbols ?? [],
         paperBalanceUsd: profile.paperBalanceUsd ?? 10_000,
+        marketType: profile.marketType ?? 'spot',
+        defaultLeverage: profile.defaultLeverage ?? 1,
+        marginMode: profile.marginMode ?? 'cross',
       });
     }
   }, [profile]);
@@ -238,6 +250,9 @@ function FallbackForm({
       preferredTimeframes: form.preferredTimeframes,
       allowedSymbols: form.allowedSymbols,
       paperBalanceUsd: form.paperBalanceUsd,
+      marketType: form.marketType,
+      defaultLeverage: form.defaultLeverage,
+      marginMode: form.marginMode,
     };
 
     try {
@@ -433,6 +448,106 @@ function FallbackForm({
             : 'The AI places trades automatically within your risk limits.'}
         </p>
       </div>
+
+      <Separator />
+
+      {/* Market type */}
+      <div className="space-y-2">
+        <label className="text-sm font-medium">Market Type</label>
+        <div className="flex gap-3">
+          {(['spot', 'swap'] as const).map((mt) => (
+            <label
+              key={mt}
+              className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2 cursor-pointer ${
+                form.marketType === mt
+                  ? 'border-primary bg-primary/10 font-medium'
+                  : 'border-input hover:bg-accent'
+              }`}
+            >
+              <input
+                type="radio"
+                name="marketType"
+                value={mt}
+                checked={form.marketType === mt}
+                onChange={() => {
+                  setForm((f) => ({ ...f, marketType: mt }));
+                  setSaveMessage('');
+                }}
+                className="accent-primary"
+              />
+              <span className="text-sm capitalize">{mt === 'swap' ? 'Perpetual Futures' : 'Spot'}</span>
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {form.marketType === 'swap'
+            ? 'Trades use USDT-M perpetual futures with leverage. Higher risk — liquidation is possible.'
+            : 'Trades buy/sell the underlying asset directly. No leverage, no liquidation risk.'}
+        </p>
+      </div>
+
+      {form.marketType === 'swap' && (
+        <>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">Default Leverage</label>
+              <span className="text-sm font-semibold tabular-nums">{form.defaultLeverage}x</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={20}
+              step={1}
+              value={form.defaultLeverage}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, defaultLeverage: Number(e.target.value) }));
+                setSaveMessage('');
+              }}
+              className="w-full accent-primary"
+            />
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>1x</span>
+              <span>20x</span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Higher leverage means a smaller price move can liquidate your position.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Margin Mode</label>
+            <div className="flex gap-3">
+              {(['cross', 'isolated'] as const).map((mm) => (
+                <label
+                  key={mm}
+                  className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2 cursor-pointer ${
+                    form.marginMode === mm
+                      ? 'border-primary bg-primary/10 font-medium'
+                      : 'border-input hover:bg-accent'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="marginMode"
+                    value={mm}
+                    checked={form.marginMode === mm}
+                    onChange={() => {
+                      setForm((f) => ({ ...f, marginMode: mm }));
+                      setSaveMessage('');
+                    }}
+                    className="accent-primary"
+                  />
+                  <span className="text-sm capitalize">{mm}</span>
+                </label>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Isolated limits loss on a position to its own margin; cross shares margin across positions
+              (a loss on one position can draw down the others).
+            </p>
+          </div>
+        </>
+      )}
 
       <Separator />
 

@@ -5,22 +5,30 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { priceWatches } from '@/db/schema';
 import { applyPublicDataMirror } from './exchange-public-client';
+import { toExchangeSymbol, type MarketType } from './market-symbol';
 
 const SUPPORTED_EXCHANGES = ['binance', 'bingx', 'bybit'] as const;
 type SupportedExchange = (typeof SUPPORTED_EXCHANGES)[number];
 
-async function fetchLastPrice(symbol: string, exchangeId: SupportedExchange): Promise<number> {
+async function fetchLastPrice(
+  symbol: string,
+  exchangeId: SupportedExchange,
+  marketType: MarketType,
+): Promise<number> {
   const ExchangeClass = ccxt[exchangeId as keyof typeof ccxt] as new (config?: object) => Exchange;
   if (!ExchangeClass) {
     throw new Error(`Exchange '${exchangeId}' is not supported by CCXT.`);
   }
   const client = new ExchangeClass({ enableRateLimit: true });
-  applyPublicDataMirror(client, exchangeId);
+  applyPublicDataMirror(client, exchangeId, marketType);
+  const exchangeSymbol = toExchangeSymbol(symbol, marketType);
   await client.loadMarkets();
-  if (!client.markets[symbol]) {
-    throw new Error(`Symbol '${symbol}' not found on ${exchangeId}. Check the trading pair format (e.g. BTC/USDT).`);
+  if (!client.markets[exchangeSymbol]) {
+    throw new Error(
+      `Symbol '${symbol}' not found on ${exchangeId} (${marketType} market). Check the trading pair format (e.g. BTC/USDT).`,
+    );
   }
-  const ticker = await client.fetchTicker(symbol);
+  const ticker = await client.fetchTicker(exchangeSymbol);
   const price = ticker.last ?? ticker.close;
   if (typeof price !== 'number') {
     throw new Error(`Could not read a last price for ${symbol} on ${exchangeId}.`);
@@ -45,10 +53,16 @@ export const createPriceWatchTool = createTool({
     userId: z.string().describe('Clerk user ID — read from the system context message, do not invent'),
     symbol: z.string().describe('Trading pair, e.g. BTC/USDT'),
     exchange: z.enum(SUPPORTED_EXCHANGES).default('binance'),
+    marketType: z
+      .enum(['spot', 'swap'])
+      .default('spot')
+      .describe("'swap' = USDT-M perpetual futures — use the context's Market Type default unless the user says otherwise."),
     targetPrice: z.number().positive().describe('Price level to watch for'),
     note: z.string().optional().describe("Short human-readable label, e.g. 'BTC support retest'"),
     actionType: z.enum(['notify', 'trade']).default('notify'),
     tradeDirection: z.enum(['LONG', 'SHORT']).optional().describe('Required if actionType=trade'),
+    leverage: z.number().int().positive().optional().describe('Leverage for the trade action if marketType=swap'),
+    marginMode: z.enum(['cross', 'isolated']).optional(),
     sl: z.number().positive().optional().describe('Stop-loss — required if actionType=trade, from real tool data'),
     tp: z.number().positive().optional().describe('Take-profit — required if actionType=trade, from real tool data'),
     confidence: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional(),
@@ -67,16 +81,19 @@ export const createPriceWatchTool = createTool({
   }),
   execute: async (inputData) => {
     const {
-      userId, symbol, exchange, targetPrice, note, actionType,
-      tradeDirection, sl, tp, confidence, reasoning, strategySource, timeframe,
+      userId, symbol, exchange, marketType, targetPrice, note, actionType,
+      tradeDirection, leverage, marginMode, sl, tp, confidence, reasoning, strategySource, timeframe,
     } = inputData as {
       userId: string;
       symbol: string;
       exchange: SupportedExchange;
+      marketType: MarketType;
       targetPrice: number;
       note?: string;
       actionType: 'notify' | 'trade';
       tradeDirection?: 'LONG' | 'SHORT';
+      leverage?: number;
+      marginMode?: 'cross' | 'isolated';
       sl?: number;
       tp?: number;
       confidence?: 'LOW' | 'MEDIUM' | 'HIGH';
@@ -89,7 +106,7 @@ export const createPriceWatchTool = createTool({
       throw new Error('actionType=trade requires tradeDirection, sl, and tp.');
     }
 
-    const currentPrice = await fetchLastPrice(symbol, exchange ?? 'binance');
+    const currentPrice = await fetchLastPrice(symbol, exchange ?? 'binance', marketType ?? 'spot');
     const direction: 'above' | 'below' = targetPrice >= currentPrice ? 'above' : 'below';
 
     const [watch] = await db
@@ -98,11 +115,14 @@ export const createPriceWatchTool = createTool({
         userId,
         symbol,
         exchange: exchange ?? 'binance',
+        marketType: marketType ?? 'spot',
         targetPrice: String(targetPrice),
         direction,
         note: note ?? null,
         actionType,
         tradeDirection: tradeDirection ?? null,
+        leverage: leverage ?? 1,
+        marginMode: marginMode ?? 'cross',
         stopLoss: sl != null ? String(sl) : null,
         takeProfit: tp != null ? String(tp) : null,
         confidence: confidence ?? null,
@@ -145,6 +165,7 @@ export const listPriceWatchesTool = createTool({
         id: z.string(),
         symbol: z.string(),
         exchange: z.string(),
+        marketType: z.string(),
         targetPrice: z.number(),
         direction: z.string(),
         note: z.string().nullable(),
@@ -173,6 +194,7 @@ export const listPriceWatchesTool = createTool({
         id: w.id,
         symbol: w.symbol,
         exchange: w.exchange,
+        marketType: w.marketType,
         targetPrice: Number(w.targetPrice),
         direction: w.direction,
         note: w.note,

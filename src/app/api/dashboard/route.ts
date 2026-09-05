@@ -26,6 +26,7 @@ import {
 import { decrypt } from '@/lib/crypto';
 import { getCircuitBreakerState } from '@/lib/circuit-breaker';
 import { computePnlUsd, computePnlPct } from '@/lib/pnl';
+import { toExchangeSymbol, configureMarketType, type MarketType } from '@/mastra/tools/market-symbol';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -38,7 +39,9 @@ function startOfUtcDay(): Date {
   );
 }
 
-async function getExchangeClient(userId: string): Promise<Exchange | null> {
+async function getExchangeClient(
+  userId: string,
+): Promise<{ client: Exchange; exchangeName: string } | null> {
   const rows = await db
     .select({
       exchangeName: userExchanges.exchangeName,
@@ -74,11 +77,12 @@ async function getExchangeClient(userId: string): Promise<Exchange | null> {
   const ExchangeClass = (ccxt as unknown as Record<string, new (config: object) => Exchange>)[exchangeName];
   if (!ExchangeClass) return null;
 
-  return new ExchangeClass({
+  const client = new ExchangeClass({
     apiKey,
     secret,
     ...(password ? { password } : {}),
   });
+  return { client, exchangeName };
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +117,7 @@ export async function GET() {
           positionSize: tradeExecutions.positionSize,
           mode: tradeExecutions.mode,
           exchangeName: tradeExecutions.exchangeName,
+          marketType: tradeExecutions.marketType,
           direction: tradeSignals.direction,
           stopLoss: tradeSignals.stopLoss,
           takeProfit: tradeSignals.takeProfit,
@@ -188,18 +193,32 @@ export async function GET() {
   let equity: number | null = null;
   let unrealizedPnl = 0;
 
-  // Deduplicate symbols for batch ticker fetch
-  const uniqueSymbols = [...new Set(openPositionRows.map((p) => p.symbol).filter(Boolean))];
-  const tickerMap = new Map<string, number>(); // symbol -> last price
+  // Group open positions by (marketType, symbol) — a symbol can be open as
+  // both spot and swap if the user changed their market-type setting between
+  // trades — for batch ticker fetch.
+  const uniquePairs = [
+    ...new Map(
+      openPositionRows
+        .filter((p) => p.symbol)
+        .map((p) => {
+          const marketType = (p.marketType as MarketType) ?? 'spot';
+          return [`${marketType}::${p.symbol}`, { marketType, symbol: p.symbol }] as const;
+        }),
+    ).values(),
+  ];
+  const tickerMap = new Map<string, number>(); // "marketType::symbol" -> last price
+
+  const profileMarketType = (riskProfile?.marketType as MarketType) ?? 'spot';
 
   // Live-mode balance fetch must not depend on having open positions — a
   // freshly-connected live exchange with zero positions should still show
   // its real balance instead of "N/A".
   let exchangeClient: Exchange | null = null;
   if (!isPaper) {
-    exchangeClient = await getExchangeClient(userId).catch(() => null);
-
-    if (exchangeClient) {
+    const resolved = await getExchangeClient(userId).catch(() => null);
+    if (resolved) {
+      exchangeClient = resolved.client;
+      configureMarketType(exchangeClient, resolved.exchangeName, profileMarketType);
       try {
         const balance = await exchangeClient.fetchBalance();
         // Total equity = total USDT/USDC free + used (including margin)
@@ -214,7 +233,7 @@ export async function GET() {
     }
   }
 
-  if (uniqueSymbols.length > 0) {
+  if (uniquePairs.length > 0) {
     // For live mode: reuse the authenticated client above.
     // For paper mode (or missing/invalid live credentials): use a public
     // (unauthenticated) client so ticker data is still available.
@@ -232,10 +251,10 @@ export async function GET() {
     if (client) {
       // Fetch tickers in parallel; skip any that fail
       await Promise.allSettled(
-        uniqueSymbols.map(async (symbol) => {
+        uniquePairs.map(async (pair) => {
           try {
-            const ticker = await client.fetchTicker(symbol);
-            if (ticker.last) tickerMap.set(symbol, ticker.last);
+            const ticker = await client.fetchTicker(toExchangeSymbol(pair.symbol, pair.marketType));
+            if (ticker.last) tickerMap.set(`${pair.marketType}::${pair.symbol}`, ticker.last);
           } catch {
             // individual symbol failure — skip silently
           }
@@ -248,7 +267,8 @@ export async function GET() {
   const openPositions = openPositionRows.map((pos) => {
     const entryPrice = pos.entryPrice ? parseFloat(pos.entryPrice) : null;
     const positionSize = pos.positionSize ? parseFloat(pos.positionSize) : null;
-    const currentPrice = pos.symbol ? (tickerMap.get(pos.symbol) ?? null) : null;
+    const posMarketType = (pos.marketType as MarketType) ?? 'spot';
+    const currentPrice = pos.symbol ? (tickerMap.get(`${posMarketType}::${pos.symbol}`) ?? null) : null;
     const direction = (pos.direction ?? 'LONG') as 'LONG' | 'SHORT';
 
     let unrealizedPnlUsd: number | null = null;

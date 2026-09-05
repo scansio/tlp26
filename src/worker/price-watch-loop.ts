@@ -13,6 +13,7 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { priceWatches } from '@/db/schema';
 import { applyPublicDataMirror } from '@/mastra/tools/exchange-public-client';
+import { toExchangeSymbol, type MarketType } from '@/mastra/tools/market-symbol';
 import { finalizePriceWatchTrade } from '@/lib/analysis/finalize-price-watch';
 import { sendNotification } from '@/lib/notifications';
 import { mastra } from '@/mastra';
@@ -89,7 +90,7 @@ async function pollOnce(): Promise<void> {
 
   const groups = new Map<string, PriceWatchRow[]>();
   for (const watch of active) {
-    const key = `${watch.exchange}:${watch.symbol}`;
+    const key = `${watch.exchange}:${watch.marketType}:${watch.symbol}`;
     const list = groups.get(key) ?? [];
     list.push(watch);
     groups.set(key, list);
@@ -97,14 +98,14 @@ async function pollOnce(): Promise<void> {
 
   await Promise.all(
     Array.from(groups.entries()).map(async ([key, watches]) => {
-      const [exchangeId, symbol] = key.split(':');
+      const [exchangeId, marketType, symbol] = key.split(':') as [string, MarketType, string];
       try {
         const ExchangeClass = ccxt[exchangeId as keyof typeof ccxt] as new (config?: object) => Exchange;
         if (!ExchangeClass) return;
         const client = new ExchangeClass({ enableRateLimit: true });
-        applyPublicDataMirror(client, exchangeId);
+        applyPublicDataMirror(client, exchangeId, marketType);
 
-        const price = await fetchLastPrice(client, symbol);
+        const price = await fetchLastPrice(client, toExchangeSymbol(symbol, marketType));
         if (price == null) return;
 
         const fired = watches.filter((w) => isTriggered(w, price));

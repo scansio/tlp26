@@ -40,7 +40,7 @@ export async function POST(req: Request) {
 
   const profile = profiles[0];
   const userId = profile.userId;
-  const normalisedSymbol = normaliseSymbol(symbol);
+  const { symbol: normalisedSymbol, marketType } = normaliseSymbol(symbol);
   const direction = actionToDirection(action);
 
   // --- Circuit breaker check ---
@@ -102,6 +102,11 @@ export async function POST(req: Request) {
       entryPrice: price != null ? String(price) : null,
       stopLoss: String(sl),
       takeProfit: String(tp),
+      // The ".P"/".PERP" ticker suffix is a stronger signal than the profile
+      // default for this specific alert; leverage/margin still come from profile.
+      marketType,
+      leverage: profile.defaultLeverage ?? 1,
+      marginMode: profile.marginMode ?? 'cross',
       source: 'tradingview',
       status: 'pending',
       rawPayload: body as Record<string, unknown>,

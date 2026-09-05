@@ -49,6 +49,7 @@ import { decrypt } from '@/lib/crypto';
 import { sendNotification } from '@/lib/notifications';
 import { accruePublisherFee } from '@/lib/publisher-fee';
 import { computePnlUsd, type PositionDirection } from '@/lib/pnl';
+import { toExchangeSymbol, type MarketType } from '@/mastra/tools/market-symbol';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -69,6 +70,7 @@ interface OpenPosition {
   mode: string | null;
   positionSize: string | null;
   direction: string | null;
+  marketType: string | null;
   // Trailing config (resolved: signal override → user profile → defaults)
   exitMode: string;            // 'fixed' | 'trailing'
   trailSlPct: number;          // e.g. 1.0 = 1%
@@ -268,6 +270,7 @@ async function fetchOpenPositions(
       direction: tradeSignals.direction,
       mode: tradeExecutions.mode,
       positionSize: tradeExecutions.positionSize,
+      marketType: tradeExecutions.marketType,
       // Per-signal trailing overrides
       signalExitMode: tradeSignals.exitMode,
       signalTrailSlPct: tradeSignals.trailSlPct,
@@ -314,6 +317,7 @@ async function fetchOpenPositions(
       direction: r.direction ?? null,
       mode: r.mode,
       positionSize: r.positionSize,
+      marketType: r.marketType,
       exitMode,
       trailSlPct,
       trailTpPct,
@@ -828,21 +832,36 @@ class PositionMonitorManager {
             continue;
           }
 
-          const symbols = [...new Set(trailingPositions.map((p) => p.symbol))];
+          // Group by (marketType, symbol) — the same human symbol can have
+          // both a spot and a swap position open if the user changed their
+          // market-type setting between trades.
+          const pairs = [
+            ...new Map(
+              trailingPositions.map((p) => {
+                const marketType = (p.marketType as MarketType) ?? 'spot';
+                return [`${marketType}::${p.symbol}`, { marketType, symbol: p.symbol }] as const;
+              }),
+            ).values(),
+          ];
+          const exchangeSymbolToPair = new Map(
+            pairs.map((p) => [toExchangeSymbol(p.symbol, p.marketType), p]),
+          );
 
           // Watch tickers for all trailing symbols simultaneously
           const tickers = await (exchange as unknown as {
             watchTickers: (symbols: string[]) => Promise<Record<string, { last?: number | null }>>;
-          }).watchTickers(symbols);
+          }).watchTickers([...exchangeSymbolToPair.keys()]);
 
           if (state.stopped) break;
 
-          for (const [symbol, ticker] of Object.entries(tickers)) {
+          for (const [exchangeSymbol, ticker] of Object.entries(tickers)) {
+            const pair = exchangeSymbolToPair.get(exchangeSymbol);
+            if (!pair) continue;
             const currentPrice = ticker.last ?? 0;
             if (!currentPrice) continue;
 
             const symbolPositions = trailingPositions.filter(
-              (p) => p.symbol === symbol,
+              (p) => p.symbol === pair.symbol && ((p.marketType as MarketType) ?? 'spot') === pair.marketType,
             );
 
             for (const position of symbolPositions) {
@@ -888,12 +907,19 @@ class PositionMonitorManager {
         if (!ExchangeClass) return;
 
         const publicExchange = new ExchangeClass({});
-        const symbols = [...new Set(positions.map((p) => p.symbol))];
+        const pairs = [
+          ...new Map(
+            positions.map((p) => {
+              const marketType = (p.marketType as MarketType) ?? 'spot';
+              return [`${marketType}::${p.symbol}`, { marketType, symbol: p.symbol }] as const;
+            }),
+          ).values(),
+        ];
 
-        for (const symbol of symbols) {
+        for (const pair of pairs) {
           let ticker: Ticker;
           try {
-            ticker = await publicExchange.fetchTicker(symbol);
+            ticker = await publicExchange.fetchTicker(toExchangeSymbol(pair.symbol, pair.marketType));
           } catch {
             continue;
           }
@@ -901,7 +927,9 @@ class PositionMonitorManager {
           const currentPrice = ticker.last ?? 0;
           if (!currentPrice) continue;
 
-          const symbolPositions = positions.filter((p) => p.symbol === symbol);
+          const symbolPositions = positions.filter(
+            (p) => p.symbol === pair.symbol && ((p.marketType as MarketType) ?? 'spot') === pair.marketType,
+          );
 
           for (const position of symbolPositions) {
             // Trailing mode: delegate entirely to applyTrailingLogic

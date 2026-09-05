@@ -152,6 +152,9 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
   let executionMode = 'paper'; // 'paper' | 'live'
   let tradingMode = 'manual'; // 'auto' | 'manual'
   let paperBalanceUsd: string | null = null;
+  let marketType: 'spot' | 'swap' = 'spot';
+  let leverage = 1;
+  let marginMode: 'cross' | 'isolated' = 'cross';
   try {
     const [profile] = await db
       .select()
@@ -164,6 +167,9 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
       executionMode = profile.executionMode ?? 'paper';
       tradingMode = profile.tradingMode ?? 'manual';
       paperBalanceUsd = profile.paperBalanceUsd ?? null;
+      marketType = (profile.marketType as 'spot' | 'swap') ?? 'spot';
+      leverage = profile.defaultLeverage ?? 1;
+      marginMode = (profile.marginMode as 'cross' | 'isolated') ?? 'cross';
     }
   } catch (err) {
     console.warn('finalizeForUser: could not load risk profile, using defaults', err);
@@ -215,6 +221,9 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
       reasoning,
       strategySource: strategiesTriggered.join(', '),
       exchange: executionExchange,
+      marketType,
+      leverage,
+      marginMode,
       analysisRunId: analysisRunId ?? undefined,
       newsSentiment: analysis.news?.overallSentiment,
       newsSentimentScore: avgSentimentScore,
@@ -263,6 +272,9 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
           tp: analysis.tp,
           mode: toolMode,
           slippagePct,
+          marketType,
+          leverage,
+          marginMode,
         },
         { observe: noopObserve },
       )) as FinalizeForUserResult['executionResult'];

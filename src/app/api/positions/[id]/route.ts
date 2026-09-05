@@ -20,17 +20,22 @@ import { db } from '@/db';
 import { tradeExecutions, tradeSignals, userExchanges } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
 import { computePnlUsd } from '@/lib/pnl';
+import { toExchangeSymbol, type MarketType } from '@/mastra/tools/market-symbol';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function getCurrentPrice(exchangeName: string, symbol: string): Promise<number | null> {
+async function getCurrentPrice(
+  exchangeName: string,
+  symbol: string,
+  marketType: MarketType = 'spot',
+): Promise<number | null> {
   try {
     const ExClass = (ccxt as unknown as Record<string, new (c: object) => Exchange>)[exchangeName];
     if (!ExClass) return null;
     const client = new ExClass({});
-    const ticker = await client.fetchTicker(symbol);
+    const ticker = await client.fetchTicker(toExchangeSymbol(symbol, marketType));
     return ticker.last ?? null;
   } catch {
     return null;
@@ -103,6 +108,8 @@ export async function PATCH(
       status: tradeExecutions.status,
       signalId: tradeExecutions.signalId,
       direction: tradeSignals.direction,
+      marketType: tradeExecutions.marketType,
+      contractSize: tradeExecutions.contractSize,
     })
     .from(tradeExecutions)
     .leftJoin(tradeSignals, eq(tradeExecutions.signalId, tradeSignals.id))
@@ -117,6 +124,9 @@ export async function PATCH(
   const positionSize = exec.positionSize ? parseFloat(exec.positionSize) : null;
   const direction = (exec.direction ?? 'LONG') as 'LONG' | 'SHORT';
   const isLive = exec.mode === 'live';
+  const marketType = (exec.marketType as MarketType) ?? 'spot';
+  const exchangeSymbol = toExchangeSymbol(exec.symbol, marketType);
+  const contractSize = exec.contractSize ? parseFloat(exec.contractSize) : 1;
 
   // ---------------------------------------------------------------------------
   // CLOSE / PARTIAL_CLOSE
@@ -140,15 +150,23 @@ export async function PATCH(
       }
 
       const closeSide = direction === 'LONG' ? 'sell' : 'buy';
+      const closeAmount = marketType === 'swap' ? closeSize / contractSize : closeSize;
       try {
-        const order = await client.createOrder(exec.symbol, 'market', closeSide, closeSize);
+        const order = await client.createOrder(
+          exchangeSymbol,
+          'market',
+          closeSide,
+          closeAmount,
+          undefined,
+          marketType === 'swap' ? { reduceOnly: true } : undefined,
+        );
         exitPrice = order.average ?? order.price ?? null;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return NextResponse.json({ error: `Exchange order failed: ${msg}` }, { status: 502 });
       }
     } else {
-      exitPrice = await getCurrentPrice(exec.exchangeName, exec.symbol);
+      exitPrice = await getCurrentPrice(exec.exchangeName, exec.symbol, marketType);
     }
 
     if (!exitPrice) {
