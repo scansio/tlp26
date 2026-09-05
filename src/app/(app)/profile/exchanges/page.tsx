@@ -12,6 +12,7 @@ import {
   WifiOff,
   Loader2,
   AlertTriangle,
+  Server,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -125,6 +126,11 @@ export default function ExchangesPage() {
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState('');
 
+  // Server IP (for exchanges that require IP-whitelisting an API key)
+  const [serverIp, setServerIp] = useState<string | null>(null);
+  const [serverIpError, setServerIpError] = useState(false);
+  const [ipCopied, setIpCopied] = useState(false);
+
   const fetchData = useCallback(async () => {
     try {
       const res = await fetch('/api/exchanges');
@@ -142,6 +148,23 @@ export default function ExchangesPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    fetch('/api/exchanges/server-ip')
+      .then(async (res) => {
+        if (!res.ok) throw new Error();
+        const json: { ip: string } = await res.json();
+        setServerIp(json.ip);
+      })
+      .catch(() => setServerIpError(true));
+  }, []);
+
+  async function handleCopyIp() {
+    if (!serverIp) return;
+    await navigator.clipboard.writeText(serverIp);
+    setIpCopied(true);
+    setTimeout(() => setIpCopied(false), 2000);
+  }
 
   // ------------------------------------------------------------------
   // Add exchange
@@ -402,6 +425,36 @@ export default function ExchangesPage() {
             ))}
           </ul>
         )}
+      </Card>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Server IP — needed if your exchange requires IP-whitelisting a key   */}
+      {/* ------------------------------------------------------------------ */}
+      <Card className="p-6 space-y-3">
+        <div className="flex items-center gap-2">
+          <Server className="w-4 h-4 text-muted-foreground" />
+          <h2 className="text-lg font-semibold">Server IP Address</h2>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Some exchanges require whitelisting an IP address on the API key. If prompted, add
+          this address to the key&apos;s IP whitelist.
+        </p>
+        <div className="flex items-center gap-2">
+          <Input
+            readOnly
+            value={serverIpError ? 'Unable to determine server IP' : serverIp ?? 'Loading…'}
+            className="font-mono text-xs bg-muted"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCopyIp}
+            disabled={!serverIp}
+            aria-label="Copy server IP"
+          >
+            {ipCopied ? <CheckCircle className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+          </Button>
+        </div>
       </Card>
 
       {/* ------------------------------------------------------------------ */}
