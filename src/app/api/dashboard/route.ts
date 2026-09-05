@@ -192,17 +192,32 @@ export async function GET() {
   const uniqueSymbols = [...new Set(openPositionRows.map((p) => p.symbol).filter(Boolean))];
   const tickerMap = new Map<string, number>(); // symbol -> last price
 
-  if (uniqueSymbols.length > 0) {
-    // For live mode: try authenticated client first; fall back to public on error.
-    // For paper mode: always use public (unauthenticated) client.
-    let exchangeClient: Exchange | null = null;
+  // Live-mode balance fetch must not depend on having open positions — a
+  // freshly-connected live exchange with zero positions should still show
+  // its real balance instead of "N/A".
+  let exchangeClient: Exchange | null = null;
+  if (!isPaper) {
+    exchangeClient = await getExchangeClient(userId).catch(() => null);
 
-    if (!isPaper) {
-      exchangeClient = await getExchangeClient(userId).catch(() => null);
+    if (exchangeClient) {
+      try {
+        const balance = await exchangeClient.fetchBalance();
+        // Total equity = total USDT/USDC free + used (including margin)
+        const usdtTotal =
+          (balance['USDT']?.total ?? 0) +
+          (balance['USDC']?.total ?? 0) +
+          (balance['USD']?.total ?? 0);
+        if (usdtTotal > 0) equity = usdtTotal;
+      } catch {
+        // Exchange fetch failed — leave equity as null
+      }
     }
+  }
 
-    // If we still have no client (paper mode or credentials missing), use first open
-    // position's exchange with no auth for public ticker data
+  if (uniqueSymbols.length > 0) {
+    // For live mode: reuse the authenticated client above.
+    // For paper mode (or missing/invalid live credentials): use a public
+    // (unauthenticated) client so ticker data is still available.
     const firstExchange = openPositionRows[0]?.exchangeName;
     const publicExchange =
       firstExchange
@@ -226,21 +241,6 @@ export async function GET() {
           }
         }),
       );
-
-      // Fetch balance for live mode equity
-      if (!isPaper && exchangeClient) {
-        try {
-          const balance = await exchangeClient.fetchBalance();
-          // Total equity = total USDT/USDC free + used (including margin)
-          const usdtTotal =
-            (balance['USDT']?.total ?? 0) +
-            (balance['USDC']?.total ?? 0) +
-            (balance['USD']?.total ?? 0);
-          if (usdtTotal > 0) equity = usdtTotal;
-        } catch {
-          // Exchange fetch failed — leave equity as null
-        }
-      }
     }
   }
 
