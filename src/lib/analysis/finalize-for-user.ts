@@ -58,7 +58,7 @@ export interface FinalizeForUserResult {
 // across src/app/api/dashboard/route.ts and src/app/api/positions/route.ts)
 // ---------------------------------------------------------------------------
 
-async function getUserActiveExchangeClient(userId: string): Promise<Exchange | null> {
+export async function getUserActiveExchangeClient(userId: string): Promise<Exchange | null> {
   const [row] = await db
     .select({
       exchangeName: userExchanges.exchangeName,
@@ -88,7 +88,7 @@ async function getUserActiveExchangeClient(userId: string): Promise<Exchange | n
   }
 }
 
-async function resolveAccountBalance(
+export async function resolveAccountBalance(
   userId: string,
   executionMode: string,
   paperBalanceUsd: string | null,

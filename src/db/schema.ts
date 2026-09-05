@@ -206,6 +206,39 @@ export const tradeExecutions = pgTable('trade_executions', {
 ]);
 
 // ---------------------------------------------------------------------------
+// price_watches — "notify me / act when price hits X" (chat-created watches)
+// ---------------------------------------------------------------------------
+export const priceWatches = pgTable('price_watches', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 255 }).notNull(),
+  symbol: varchar('symbol', { length: 30 }).notNull(),
+  exchange: varchar('exchange', { length: 50 }).notNull().default('binance'),
+  targetPrice: numeric('target_price', { precision: 20, scale: 8 }).notNull(),
+  // Derived server-side at creation from targetPrice vs the live price — never LLM-supplied.
+  direction: varchar('direction', { length: 10 }).notNull(), // above | below
+  note: text('note'),
+  // notify: just alert; trade: also create (and, if tradingMode=auto, execute) a signal on trigger
+  actionType: varchar('action_type', { length: 20 }).notNull().default('notify'),
+  tradeDirection: varchar('trade_direction', { length: 10 }), // LONG | SHORT — required if actionType=trade
+  stopLoss: numeric('stop_loss', { precision: 20, scale: 8 }),
+  takeProfit: numeric('take_profit', { precision: 20, scale: 8 }),
+  confidence: text('confidence'), // LOW | MEDIUM | HIGH
+  reasoning: text('reasoning'),
+  strategySource: text('strategy_source'),
+  timeframe: varchar('timeframe', { length: 10 }),
+  status: varchar('status', { length: 20 }).notNull().default('active'), // active | triggered | cancelled
+  triggeredPrice: numeric('triggered_price', { precision: 20, scale: 8 }),
+  triggeredAt: timestamp('triggered_at', { withTimezone: true }),
+  // Populated when actionType=trade and a signal was actually created on trigger
+  resultSignalId: uuid('result_signal_id').references(() => tradeSignals.id),
+  resultMessage: text('result_message'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index('pw_user_id_idx').on(table.userId),
+  index('pw_status_idx').on(table.status),
+]);
+
+// ---------------------------------------------------------------------------
 // signal_subscriptions (copy trading — subscription flow TLP-33)
 // ---------------------------------------------------------------------------
 export const signalSubscriptions = pgTable('signal_subscriptions', {

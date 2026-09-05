@@ -10,10 +10,12 @@ import { mastra } from '@/mastra';
 import { scheduleWorkerTicks } from './schedule';
 import { runTick } from './tick';
 import { startPositionMonitorLoop } from './position-monitor-loop';
+import { startPriceWatchLoop } from './price-watch-loop';
 
 console.log('[worker] starting — confluence-group trade-analysis worker');
 scheduleWorkerTicks(mastra);
 startPositionMonitorLoop();
+startPriceWatchLoop();
 
 if (process.env.WORKER_RUN_ON_BOOT === 'true') {
   console.log('[worker] WORKER_RUN_ON_BOOT=true — running one tick immediately');

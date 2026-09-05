@@ -134,6 +134,13 @@
       "when": 1785767287736,
       "tag": "0018_fast_sharon_carter",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788624672576,
+      "tag": "0019_aspiring_avengers",
+      "breakpoints": true
     }
   ]
 }

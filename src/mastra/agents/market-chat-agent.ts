@@ -11,6 +11,7 @@ import { orderbookTool } from '../tools/orderbook-tool';
 import { riskTool } from '../tools/risk-tool';
 import { chartTool } from '../tools/chart-tool';
 import { createSignalTool } from '../tools/create-signal-tool';
+import { createPriceWatchTool, listPriceWatchesTool, cancelPriceWatchTool } from '../tools/price-watch-tool';
 
 export const marketChatAgent = new Agent({
   id: 'market-chat-agent',
@@ -54,6 +55,17 @@ SIGNAL RULES:
   Prioritise ChoCH and BOS first, then FVG and ORDER_BLOCK, then sweeps.
   Each entry must have exactly: { type, priceLevel, direction } — taken verbatim from smc-tool output.
 
+WATCH RULES (create-price-watch-tool / list-price-watches-tool / cancel-price-watch-tool):
+- Use when the user asks to be told when a price hits/retests/breaks a level ("watch", "alert me", "let me know when").
+- Do NOT call market-data-tool first just to get a current price — create-price-watch-tool fetches the live price itself.
+- Only set actionType=trade if the user explicitly asked for a trade to happen at that level (e.g. "buy when it hits X").
+  In that case sl/tp must come from real tool data (indicators/smc/risk-tool) and you must still apply the
+  R:R-vs-context check described in SIGNAL RULES before proposing them.
+- Tell the user plainly what happens on trigger: check "Execution Mode" in context — if it says manual, a
+  trade action creates a pending signal for approval — it does NOT place an order by itself. If it says
+  auto, it will execute automatically.
+- Use list-price-watches-tool when asked "did my watch fire?" or to see active watches.
+
 ERROR RECOVERY: If a tool returns an error, do NOT stop silently. Write a plain-English message explaining what went wrong and what the user can do. For symbol-not-found errors, correct the format yourself (e.g. BEATUSDT → BEA/USDT) and retry the tool before responding. Always end every response with at least one text message — never finish on a bare tool call.
 
 After tool calls, give a brief plain-English summary: price, key indicator, bias, confidence.`,
@@ -69,6 +81,9 @@ After tool calls, give a brief plain-English summary: price, key indicator, bias
     onchainTool,
     riskTool,
     createSignalTool,
+    createPriceWatchTool,
+    listPriceWatchesTool,
+    cancelPriceWatchTool,
   },
   memory: new Memory(),
 });
