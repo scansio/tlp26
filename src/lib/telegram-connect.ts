@@ -14,7 +14,12 @@ import { eq, and, gt } from 'drizzle-orm';
 const CONNECT_TOKEN_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 export function getTelegramBotUsername(): string | undefined {
-  return process.env.TELEGRAM_BOT_USERNAME;
+  // A `t.me/@username?start=...` link is invalid and silently redirects to
+  // telegram.org's homepage — strip a leading "@" in case it was pasted from
+  // BotFather (which displays the username with one) straight into the env var.
+  const raw = process.env.TELEGRAM_BOT_USERNAME?.trim();
+  if (!raw) return undefined;
+  return raw.replace(/^@/, '');
 }
 
 /**
