@@ -96,12 +96,18 @@ export const userNotifications = pgTable('user_notifications', {
   userId: varchar('user_id', { length: 255 }).notNull().unique(),
   telegramBotToken: text('telegram_bot_token'),
   telegramChatId: varchar('telegram_chat_id', { length: 100 }),
+  // Single-use, expiring token embedded in the `t.me/<bot>?start=<token>` deep link
+  // used to link a Telegram chat to this account without the user hand-entering a chat ID.
+  telegramConnectToken: varchar('telegram_connect_token', { length: 64 }),
+  telegramConnectTokenExpiresAt: timestamp('telegram_connect_token_expires_at', { withTimezone: true }),
   discordWebhookUrl: text('discord_webhook_url'),
   quietHoursStart: integer('quiet_hours_start'),
   quietHoursEnd: integer('quiet_hours_end'),
   timezone: varchar('timezone', { length: 64 }).default('UTC'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
-});
+}, (table) => [
+  index('un_telegram_connect_token_idx').on(table.telegramConnectToken),
+]);
 
 // ---------------------------------------------------------------------------
 // signal_publishers (copy trading — schema only, feature post-launch)

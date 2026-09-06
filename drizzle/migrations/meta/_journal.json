@@ -169,6 +169,13 @@
       "when": 1788693887383,
       "tag": "0023_bright_morgan_stark",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788711385979,
+      "tag": "0024_old_wonder_man",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,13 +22,13 @@ interface NotificationConfig {
 }
 
 interface FormState {
-  telegramBotToken: string;
-  telegramChatId: string;
   discordWebhookUrl: string;
   quietHoursStart: string;
   quietHoursEnd: string;
   timezone: string;
 }
+
+type TelegramConnectState = 'idle' | 'connecting' | 'error';
 
 // ---------------------------------------------------------------------------
 // Common IANA timezone options (representative subset)
@@ -60,6 +60,9 @@ function hourLabel(h: number): string {
   return `${pad(h)}:00`;
 }
 
+const TELEGRAM_POLL_INTERVAL_MS = 2000;
+const TELEGRAM_POLL_TIMEOUT_MS = 2 * 60 * 1000;
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -71,13 +74,17 @@ export function NotificationsSection() {
   const [saveMessage, setSaveMessage] = useState('');
 
   const [form, setForm] = useState<FormState>({
-    telegramBotToken: '',
-    telegramChatId: '',
     discordWebhookUrl: '',
     quietHoursStart: '',
     quietHoursEnd: '',
     timezone: 'UTC',
   });
+
+  const [telegramState, setTelegramState] = useState<TelegramConnectState>('idle');
+  const [telegramError, setTelegramError] = useState('');
+  const [telegramConnectUrl, setTelegramConnectUrl] = useState('');
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollDeadlineRef = useRef<number>(0);
 
   const [testState, setTestState] = useState<{
     telegram: 'idle' | 'loading' | 'ok' | 'error';
@@ -86,16 +93,19 @@ export function NotificationsSection() {
     discordError?: string;
   }>({ telegram: 'idle', discord: 'idle' });
 
+  async function refreshConfig() {
+    const data: NotificationConfig | null = await fetch('/api/notifications').then((r) => r.json());
+    setConfig(data);
+    return data;
+  }
+
   // Load existing config on mount
   useEffect(() => {
-    fetch('/api/notifications')
-      .then((r) => r.json())
-      .then((data: NotificationConfig | null) => {
-        setConfig(data);
+    refreshConfig()
+      .then((data) => {
         if (data) {
           setForm((f) => ({
             ...f,
-            telegramChatId: data.telegramChatId ?? '',
             quietHoursStart: data.quietHoursStart != null ? String(data.quietHoursStart) : '',
             quietHoursEnd: data.quietHoursEnd != null ? String(data.quietHoursEnd) : '',
             timezone: data.timezone ?? 'UTC',
@@ -104,7 +114,66 @@ export function NotificationsSection() {
       })
       .catch(console.error)
       .finally(() => setLoading(false));
+
+    return () => stopPolling();
+     
   }, []);
+
+  function stopPolling() {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }
+
+  async function handleConnectTelegram() {
+    setTelegramState('connecting');
+    setTelegramError('');
+
+    try {
+      const res = await fetch('/api/notifications/telegram/connect', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.url) {
+        setTelegramState('error');
+        setTelegramError(data.error ?? 'Could not start Telegram connect.');
+        return;
+      }
+
+      const popup = window.open(data.url, '_blank', 'noopener,noreferrer');
+      setTelegramConnectUrl(popup ? '' : data.url);
+
+      pollDeadlineRef.current = Date.now() + TELEGRAM_POLL_TIMEOUT_MS;
+      stopPolling();
+      pollTimerRef.current = setInterval(async () => {
+        const updated = await refreshConfig().catch(() => null);
+        if (updated?.hasTelegramChatId) {
+          stopPolling();
+          setTelegramState('idle');
+          setTelegramConnectUrl('');
+        } else if (Date.now() > pollDeadlineRef.current) {
+          stopPolling();
+          setTelegramState('error');
+          setTelegramError('Timed out waiting for Telegram confirmation. Try again.');
+          setTelegramConnectUrl('');
+        }
+      }, TELEGRAM_POLL_INTERVAL_MS);
+    } catch {
+      setTelegramState('error');
+      setTelegramError('Network error. Please try again.');
+    }
+  }
+
+  async function handleDisconnectTelegram() {
+    stopPolling();
+    setTelegramState('idle');
+    setTelegramError('');
+    await fetch('/api/notifications', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telegramChatId: null }),
+    });
+    await refreshConfig();
+  }
 
   function setField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -116,17 +185,11 @@ export function NotificationsSection() {
     setSaveMessage('');
 
     const body: Record<string, unknown> = {
-      telegramChatId: form.telegramChatId || null,
       discordWebhookUrl: form.discordWebhookUrl || null,
       quietHoursStart: form.quietHoursStart !== '' ? parseInt(form.quietHoursStart, 10) : null,
       quietHoursEnd: form.quietHoursEnd !== '' ? parseInt(form.quietHoursEnd, 10) : null,
       timezone: form.timezone || 'UTC',
     };
-
-    // Only send token if user typed something new (don't overwrite with empty)
-    if (form.telegramBotToken) {
-      body.telegramBotToken = form.telegramBotToken;
-    }
 
     try {
       const res = await fetch('/api/notifications', {
@@ -136,10 +199,7 @@ export function NotificationsSection() {
       });
       if (res.ok) {
         setSaveMessage('Settings saved successfully.');
-        // Refresh config
-        const updated = await fetch('/api/notifications').then((r) => r.json());
-        setConfig(updated);
-        setForm((f) => ({ ...f, telegramBotToken: '' })); // clear token field after save
+        await refreshConfig();
       } else {
         setSaveMessage('Failed to save settings.');
       }
@@ -203,44 +263,80 @@ export function NotificationsSection() {
       {/* Telegram */}
       <div className="space-y-3">
         <h3 className="font-medium">Telegram</h3>
-        {config?.hasTelegramToken && (
-          <p className="text-xs text-green-600">Bot token is saved (hidden for security).</p>
+
+        {config?.hasTelegramChatId ? (
+          <div className="space-y-3">
+            <p className="text-sm text-green-600">✅ Telegram is connected.</p>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={testState.telegram === 'loading'}
+                onClick={() => handleTest('telegram')}
+              >
+                {testState.telegram === 'loading' ? 'Sending...' : 'Send Test Message'}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleDisconnectTelegram}>
+                Disconnect
+              </Button>
+              {testState.telegram === 'ok' && (
+                <span className="text-sm text-green-600">Test sent successfully!</span>
+              )}
+              {testState.telegram === 'error' && (
+                <span className="text-sm text-red-600">{testState.telegramError}</span>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Connect your Telegram account to get instant trade alerts — no bot setup required.
+            </p>
+            <div className="flex items-center gap-3">
+              <Button
+                onClick={handleConnectTelegram}
+                disabled={telegramState === 'connecting'}
+              >
+                {telegramState === 'connecting' ? 'Waiting for confirmation…' : 'Connect Telegram'}
+              </Button>
+              {telegramState === 'connecting' && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    stopPolling();
+                    setTelegramState('idle');
+                    setTelegramConnectUrl('');
+                  }}
+                >
+                  Cancel
+                </Button>
+              )}
+            </div>
+            {telegramState === 'connecting' && telegramConnectUrl && (
+              <p className="text-xs text-muted-foreground">
+                Your browser blocked the popup —{' '}
+                <a
+                  href={telegramConnectUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                >
+                  open Telegram
+                </a>{' '}
+                to finish connecting.
+              </p>
+            )}
+            {telegramState === 'connecting' && !telegramConnectUrl && (
+              <p className="text-xs text-muted-foreground">
+                A Telegram chat opened in a new tab — tap &ldquo;Start&rdquo; there to finish connecting.
+              </p>
+            )}
+            {telegramState === 'error' && (
+              <p className="text-sm text-red-600">{telegramError}</p>
+            )}
+          </div>
         )}
-        <div className="space-y-2">
-          <label className="text-sm font-medium">
-            Bot Token{config?.hasTelegramToken ? ' (leave blank to keep current)' : ''}
-          </label>
-          <Input
-            type="password"
-            placeholder={config?.hasTelegramToken ? '••••••••' : 'Enter bot token from @BotFather'}
-            value={form.telegramBotToken}
-            onChange={(e) => setField('telegramBotToken', e.target.value)}
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium">Chat ID</label>
-          <Input
-            placeholder="e.g. -1001234567890"
-            value={form.telegramChatId}
-            onChange={(e) => setField('telegramChatId', e.target.value)}
-          />
-        </div>
-        <div className="flex items-center gap-3">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={testState.telegram === 'loading'}
-            onClick={() => handleTest('telegram')}
-          >
-            {testState.telegram === 'loading' ? 'Sending...' : 'Send Test Message'}
-          </Button>
-          {testState.telegram === 'ok' && (
-            <span className="text-sm text-green-600">Test sent successfully!</span>
-          )}
-          {testState.telegram === 'error' && (
-            <span className="text-sm text-red-600">{testState.telegramError}</span>
-          )}
-        </div>
       </div>
 
       <Separator />

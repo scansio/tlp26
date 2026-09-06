@@ -185,10 +185,25 @@ function isInQuietHours(
 }
 
 // ---------------------------------------------------------------------------
+// Telegram bot token resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Prefer a user-supplied bot token (advanced/self-hosted bot) if one is on
+ * file, otherwise fall back to the shared platform bot used by the one-click
+ * "Connect Telegram" flow.
+ */
+export function resolveTelegramBotToken(
+  config: Pick<typeof userNotifications.$inferSelect, 'telegramBotToken'> | undefined
+): string | undefined {
+  return config?.telegramBotToken ?? process.env.TELEGRAM_BOT_TOKEN;
+}
+
+// ---------------------------------------------------------------------------
 // Low-level channel senders
 // ---------------------------------------------------------------------------
 
-async function sendTelegram(
+export async function sendTelegram(
   botToken: string,
   chatId: string,
   text: string
@@ -256,9 +271,10 @@ export async function sendNotification(
 
   const sends: Promise<void>[] = [];
 
-  if (config.telegramBotToken && config.telegramChatId) {
+  const telegramBotToken = resolveTelegramBotToken(config);
+  if (telegramBotToken && config.telegramChatId) {
     sends.push(
-      sendTelegram(config.telegramBotToken, config.telegramChatId, message).catch(
+      sendTelegram(telegramBotToken, config.telegramChatId, message).catch(
         (err) => console.error('[notifications] Telegram send failed:', err)
       )
     );
@@ -304,10 +320,11 @@ export async function sendTestNotification(
 
   try {
     if (channel === 'telegram') {
-      if (!config.telegramBotToken || !config.telegramChatId) {
-        return { ok: false, error: 'Telegram Bot Token and Chat ID are required' };
+      const telegramBotToken = resolveTelegramBotToken(config);
+      if (!telegramBotToken || !config.telegramChatId) {
+        return { ok: false, error: 'Connect Telegram first — no linked chat found.' };
       }
-      await sendTelegram(config.telegramBotToken, config.telegramChatId, message);
+      await sendTelegram(telegramBotToken, config.telegramChatId, message);
     } else {
       if (!config.discordWebhookUrl) {
         return { ok: false, error: 'Discord Webhook URL is required' };
