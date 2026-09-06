@@ -88,24 +88,27 @@ export async function getUserActiveExchangeClient(userId: string): Promise<Excha
   }
 }
 
+/**
+ * Resolves the balance to size a position against. In paper mode this is
+ * always the configured paper balance. In live mode it must be the real
+ * exchange balance — returns null (never a guessed/paper number) if that
+ * can't be determined, so callers can skip sizing/execution rather than
+ * computing against an unknown balance.
+ */
 export async function resolveAccountBalance(
   userId: string,
   executionMode: string,
   paperBalanceUsd: string | null,
-): Promise<number> {
-  const fallback = Number(paperBalanceUsd ?? '10000.00');
-
+): Promise<number | null> {
   if (executionMode !== 'live') {
-    return fallback;
+    return Number(paperBalanceUsd ?? '10000.00');
   }
 
   try {
     const client = await getUserActiveExchangeClient(userId);
     if (!client) {
-      console.warn(
-        `finalizeForUser: live mode but no active exchange connected for userId=${userId}, falling back to paper balance`,
-      );
-      return fallback;
+      console.warn(`finalizeForUser: live mode but no active exchange connected for userId=${userId}`);
+      return null;
     }
 
     const balance = await client.fetchBalance();
@@ -114,13 +117,11 @@ export async function resolveAccountBalance(
     const usdt = totals?.USDT ?? free?.USDT;
     if (typeof usdt === 'number' && usdt > 0) return usdt;
 
-    console.warn(
-      `finalizeForUser: live balance fetch returned no USDT for userId=${userId}, falling back to paper balance`,
-    );
-    return fallback;
+    console.warn(`finalizeForUser: live balance fetch returned no USDT for userId=${userId}`);
+    return null;
   } catch (err) {
-    console.warn(`finalizeForUser: fetchBalance failed for userId=${userId}, falling back to paper balance`, err);
-    return fallback;
+    console.warn(`finalizeForUser: fetchBalance failed for userId=${userId}`, err);
+    return null;
   }
 }
 
@@ -179,25 +180,33 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
   const accountBalance = await resolveAccountBalance(userId, executionMode, paperBalanceUsd);
 
   // --- Risk sizing ---
+  // accountBalance is null only when live mode couldn't determine a real
+  // balance — skip sizing entirely rather than computing against a guess.
   let riskCalculation: Record<string, unknown> | null = null;
   const riskTool = mastra?.getTool('riskTool');
   if (!riskTool) throw new Error('riskTool not found in Mastra instance');
-  try {
-    riskCalculation = (await riskTool.execute!(
-      {
-        exchange: executionExchange,
-        accountBalance,
-        riskPerTradePct,
-        entryPrice,
-        stopLossPrice: analysis.sl,
-        takeProfitPrice: analysis.tp,
-        direction,
-        slippagePct,
-      },
-      {},
-    )) as Record<string, unknown>;
-  } catch (err) {
-    console.warn('finalizeForUser: riskTool failed', err);
+  if (accountBalance !== null) {
+    try {
+      riskCalculation = (await riskTool.execute!(
+        {
+          exchange: executionExchange,
+          accountBalance,
+          riskPerTradePct,
+          entryPrice,
+          stopLossPrice: analysis.sl,
+          takeProfitPrice: analysis.tp,
+          direction,
+          slippagePct,
+        },
+        {},
+      )) as Record<string, unknown>;
+    } catch (err) {
+      console.warn('finalizeForUser: riskTool failed', err);
+    }
+  } else {
+    console.warn(
+      `finalizeForUser: live account balance unavailable for userId=${userId} — creating signal without a computed position size.`,
+    );
   }
 
   // --- News/on-chain snapshot for persistence ---
@@ -253,9 +262,9 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
   // not on executionMode (which only ever selects paper vs live venue). ---
   let executionResult: FinalizeForUserResult['executionResult'] = null;
   const shouldAutoExecute = tradingMode === 'auto';
+  const positionSizeUsdt = riskCalculation?.positionSizeUsdt as number | undefined;
 
-  if (shouldAutoExecute && signalId) {
-    const positionSizeUsdt = (riskCalculation?.positionSizeUsdt as number | undefined) ?? 100;
+  if (shouldAutoExecute && signalId && typeof positionSizeUsdt === 'number' && positionSizeUsdt > 0) {
     const toolMode = executionMode === 'live' ? 'live' : 'paper';
 
     try {
@@ -281,6 +290,10 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
     } catch (err) {
       console.error('finalizeForUser: execute-trade-tool threw unexpectedly', err);
     }
+  } else if (shouldAutoExecute && signalId) {
+    console.error(
+      `finalizeForUser: skipping auto-execution for userId=${userId} — no valid computed position size (unknown balance or invalid risk sizing); signal ${signalId} left pending for manual approval.`,
+    );
   }
 
   return { signalId, action, symbol, userId, executionMode, executionResult };

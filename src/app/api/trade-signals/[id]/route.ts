@@ -24,6 +24,7 @@ import ccxt, { type Exchange } from 'ccxt';
 import { db } from '@/db';
 import { tradeSignals, tradeExecutions, userRiskProfiles } from '@/db/schema';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
+import { getUserActiveExchangeClient } from '@/lib/analysis/finalize-for-user';
 import { executeTradeTool } from '@/mastra/tools/execute-trade-tool';
 import { toExchangeSymbol, type MarketType } from '@/mastra/tools/market-symbol';
 import { noopObserve } from '@mastra/core/tools';
@@ -301,16 +302,56 @@ export async function PATCH(
     );
   }
 
-  // Compute position size in USDT from risk profile
-  const paperBalance = profile?.paperBalanceUsd ? Number(profile.paperBalanceUsd) : 10_000;
+  // Compute position size in USDT from risk profile, sized against the real
+  // exchange balance — never the paper-trading balance setting. Unlike
+  // resolveAccountBalance() (used by the AI auto-signal path), this route
+  // fails closed: an unknown live balance must never silently fall back to
+  // a paper number and produce a wrong-sized real order.
   const riskPct = profile?.riskPerTradePct ? Number(profile.riskPerTradePct) : 1;
   const signalStopLoss = signal.stopLoss ? Number(signal.stopLoss) : null;
-  let positionSizeUsdt = 100; // fallback
-  if (signalStopLoss !== null && Math.abs(liveEntryPrice - signalStopLoss) > 0) {
-    const riskAmount = paperBalance * (riskPct / 100);
-    const slDistance = Math.abs(liveEntryPrice - signalStopLoss);
-    positionSizeUsdt = (riskAmount / slDistance) * liveEntryPrice;
+
+  const liveExchangeClient = await getUserActiveExchangeClient(userId);
+  if (!liveExchangeClient) {
+    return NextResponse.json(
+      {
+        error: `No active ${exchangeName} connection found. Connect your exchange before approving a live signal.`,
+      },
+      { status: 422 },
+    );
   }
+
+  let liveBalance: number;
+  try {
+    const balance = await liveExchangeClient.fetchBalance();
+    const totals = balance?.total as unknown as Record<string, number> | undefined;
+    const free = balance?.free as unknown as Record<string, number> | undefined;
+    const usdt = totals?.USDT ?? free?.USDT;
+    if (typeof usdt !== 'number' || usdt <= 0) {
+      return NextResponse.json(
+        {
+          error: `Could not determine a valid USDT balance on ${exchangeName}. Refusing to size a live position from an unknown balance.`,
+        },
+        { status: 422 },
+      );
+    }
+    liveBalance = usdt;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      { error: `Failed to fetch live account balance from ${exchangeName}: ${msg}` },
+      { status: 422 },
+    );
+  }
+
+  if (signalStopLoss === null || Math.abs(liveEntryPrice - signalStopLoss) <= 0) {
+    return NextResponse.json(
+      { error: 'Cannot size a live position: stop-loss is missing or equal to the entry price.' },
+      { status: 422 },
+    );
+  }
+  const riskAmount = liveBalance * (riskPct / 100);
+  const slDistance = Math.abs(liveEntryPrice - signalStopLoss);
+  const positionSizeUsdt = (riskAmount / slDistance) * liveEntryPrice;
 
   const toolResult = await executeTradeTool.execute!(
     {

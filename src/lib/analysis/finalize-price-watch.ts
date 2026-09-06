@@ -93,11 +93,13 @@ export async function finalizePriceWatchTrade(
     console.warn('finalizePriceWatchTrade: could not load risk profile, using defaults', err);
   }
 
+  // accountBalance is null only when live mode couldn't determine a real
+  // balance — skip sizing entirely rather than computing against a guess.
   const accountBalance = await resolveAccountBalance(watch.userId, executionMode, paperBalanceUsd);
 
   let riskCalculation: Record<string, unknown> | null = null;
   const riskTool = mastra?.getTool('riskTool');
-  if (riskTool) {
+  if (riskTool && accountBalance !== null) {
     try {
       riskCalculation = (await riskTool.execute!(
         {
@@ -115,6 +117,12 @@ export async function finalizePriceWatchTrade(
     } catch (err) {
       console.warn('finalizePriceWatchTrade: riskTool failed', err);
     }
+  } else if (!riskTool) {
+    console.warn('finalizePriceWatchTrade: riskTool not found in Mastra instance');
+  } else {
+    console.warn(
+      `finalizePriceWatchTrade: live account balance unavailable for userId=${watch.userId} — creating signal without a computed position size.`,
+    );
   }
 
   const created = (await createSignalTool.execute!(
@@ -153,7 +161,16 @@ export async function finalizePriceWatchTrade(
     };
   }
 
-  const positionSizeUsdt = (riskCalculation?.positionSizeUsdt as number | undefined) ?? 100;
+  const positionSizeUsdt = riskCalculation?.positionSizeUsdt as number | undefined;
+  if (typeof positionSizeUsdt !== 'number' || positionSizeUsdt <= 0) {
+    return {
+      signalId,
+      executed: false,
+      summary:
+        'Signal created but auto-execution was skipped — could not compute a valid position size (unknown balance or invalid risk sizing). Check the Signals queue.',
+    };
+  }
+
   const toolMode = executionMode === 'live' ? 'live' : 'paper';
 
   try {

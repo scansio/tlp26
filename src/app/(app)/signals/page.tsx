@@ -2,13 +2,14 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { Eye, X, Loader2 } from 'lucide-react';
-import { SignalCard, type TradeSignal } from '@/components/trade/SignalCard';
+import { SignalApprovalCard, type QueueSignal } from '@/components/trade/SignalApprovalCard';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 
 interface SignalsResponse {
-  signals: TradeSignal[];
+  signals: QueueSignal[];
+  connectedExchange: string | null;
 }
 
 interface PriceWatch {
@@ -43,7 +44,8 @@ function WatchStatusBadge({ status }: { status: PriceWatch['status'] }) {
 }
 
 export default function SignalsPage() {
-  const [signals, setSignals] = useState<TradeSignal[]>([]);
+  const [signals, setSignals] = useState<QueueSignal[]>([]);
+  const [connectedExchange, setConnectedExchange] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,17 +57,33 @@ export default function SignalsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/trade-signals');
+      const res = await fetch('/api/trade-signals/queue');
       if (!res.ok) {
         throw new Error(`Request failed: ${res.status}`);
       }
       const data: SignalsResponse = await res.json();
       setSignals(data.signals);
+      setConnectedExchange(data.connectedExchange ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load signals');
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const handleAction = useCallback(async (id: string, action: 'approve' | 'reject') => {
+    const res = await fetch(`/api/trade-signals/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error((body as { error?: string }).error ?? `Action failed: ${res.status}`);
+    }
+
+    setSignals((prev) => prev.filter((s) => s.id !== id));
   }, []);
 
   const fetchWatches = useCallback(async () => {
@@ -211,7 +229,13 @@ export default function SignalsPage() {
       {signals.length > 0 && (
         <div className="space-y-4">
           {signals.map((signal) => (
-            <SignalCard key={signal.id} signal={signal} />
+            <SignalApprovalCard
+              key={signal.id}
+              signal={signal}
+              showActions
+              onAction={handleAction}
+              connectedExchange={connectedExchange}
+            />
           ))}
         </div>
       )}
