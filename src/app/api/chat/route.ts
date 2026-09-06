@@ -34,60 +34,63 @@ async function buildRiskContext(userId: string): Promise<string> {
   let balance: number | null = isPaper ? paperBalance : null;
   let balanceNote = isPaper ? '(paper mode — virtual balance)' : '';
 
-  if (!isPaper) {
+  // Look up the user's connected exchange regardless of paper/live mode — the
+  // agent needs this for every market-data/order-book/signal/watch tool call,
+  // not just live-balance display.
+  const [exchangeRow] = await db
+    .select({
+      exchangeName: userExchanges.exchangeName,
+      encryptedApiKey: userExchanges.encryptedApiKey,
+      encryptedApiSecret: userExchanges.encryptedApiSecret,
+      encryptedPassphrase: userExchanges.encryptedPassphrase,
+    })
+    .from(userExchanges)
+    .where(
+      and(
+        eq(userExchanges.userId, userId),
+        eq(userExchanges.status, 'active'),
+      ),
+    )
+    .limit(1);
+
+  const connectedExchange = exchangeRow?.exchangeName ?? null;
+
+  if (!isPaper && exchangeRow) {
     // Try fetching live balance with a 2s timeout
     try {
-      const [exchangeRow] = await db
-        .select({
-          exchangeName: userExchanges.exchangeName,
-          encryptedApiKey: userExchanges.encryptedApiKey,
-          encryptedApiSecret: userExchanges.encryptedApiSecret,
-          encryptedPassphrase: userExchanges.encryptedPassphrase,
-        })
-        .from(userExchanges)
-        .where(
-          and(
-            eq(userExchanges.userId, userId),
-            eq(userExchanges.status, 'active'),
+      const apiKey = decrypt(exchangeRow.encryptedApiKey);
+      const secret = decrypt(exchangeRow.encryptedApiSecret);
+      const password = exchangeRow.encryptedPassphrase
+        ? decrypt(exchangeRow.encryptedPassphrase)
+        : undefined;
+
+      const ExchangeClass = (ccxt as unknown as Record<string, new (c: object) => Exchange>)[
+        exchangeRow.exchangeName
+      ];
+
+      if (ExchangeClass) {
+        const client = new ExchangeClass({
+          apiKey,
+          secret,
+          ...(password ? { password } : {}),
+        });
+        configureMarketType(client, exchangeRow.exchangeName, (profile.marketType as MarketType) ?? 'spot');
+
+        const fetchWithTimeout = Promise.race([
+          client.fetchBalance(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), 2000),
           ),
-        )
-        .limit(1);
+        ]);
 
-      if (exchangeRow) {
-        const apiKey = decrypt(exchangeRow.encryptedApiKey);
-        const secret = decrypt(exchangeRow.encryptedApiSecret);
-        const password = exchangeRow.encryptedPassphrase
-          ? decrypt(exchangeRow.encryptedPassphrase)
-          : undefined;
-
-        const ExchangeClass = (ccxt as unknown as Record<string, new (c: object) => Exchange>)[
-          exchangeRow.exchangeName
-        ];
-
-        if (ExchangeClass) {
-          const client = new ExchangeClass({
-            apiKey,
-            secret,
-            ...(password ? { password } : {}),
-          });
-          configureMarketType(client, exchangeRow.exchangeName, (profile.marketType as MarketType) ?? 'spot');
-
-          const fetchWithTimeout = Promise.race([
-            client.fetchBalance(),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('timeout')), 2000),
-            ),
-          ]);
-
-          const bal = await fetchWithTimeout;
-          const total =
-            (bal['USDT']?.total ?? 0) +
-            (bal['USDC']?.total ?? 0) +
-            (bal['USD']?.total ?? 0);
-          if (total > 0) {
-            balance = total;
-            balanceNote = `(live — ${exchangeRow.exchangeName})`;
-          }
+        const bal = await fetchWithTimeout;
+        const total =
+          (bal['USDT']?.total ?? 0) +
+          (bal['USDC']?.total ?? 0) +
+          (bal['USD']?.total ?? 0);
+        if (total > 0) {
+          balance = total;
+          balanceNote = `(live — ${exchangeRow.exchangeName})`;
         }
       }
     } catch {
@@ -107,6 +110,7 @@ async function buildRiskContext(userId: string): Promise<string> {
     : 'all symbols';
 
   return `=== USER RISK PROFILE ===
+Connected Exchange: ${connectedExchange ?? 'none connected — default to binance for market data'}
 Account Balance: ${balanceLine}
 Risk per Trade: ${profile.riskPerTradePct}%
 Min Risk:Reward Ratio: ${profile.minRiskRewardRatio ?? '1.50'}:1

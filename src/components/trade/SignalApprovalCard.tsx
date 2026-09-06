@@ -43,6 +43,7 @@ export interface QueueSignal {
   source: string | null; // ai | tradingview | manual | copy
   status: string | null;
   exitMode: string | null;
+  marketType?: string | null;
   rawPayload: Record<string, unknown> | null;
   createdAt: string | Date | null;
   updatedAt: string | Date | null;
@@ -586,6 +587,7 @@ export function SignalApprovalCard({
               stopLoss={signal.stopLoss != null ? Number(signal.stopLoss) : null}
               takeProfit={signal.takeProfit != null ? Number(signal.takeProfit) : null}
               direction={signal.direction}
+              marketType={signal.marketType}
               smcLevels={
                 Array.isArray(signal.rawPayload?.smcLevels)
                   ? (signal.rawPayload!.smcLevels as Array<{ type: string; priceLevel: number; direction: 'BULLISH' | 'BEARISH' }>)

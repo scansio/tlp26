@@ -34,6 +34,7 @@ export type OpenPosition = {
   symbol: string
   direction: 'LONG' | 'SHORT'
   exchangeName: string
+  marketType?: string | null
   mode: string
   entryPrice: number | null
   currentPrice: number | null
@@ -627,6 +628,8 @@ export function PositionDrawer({
               stopLoss={position.stopLoss}
               takeProfit={position.takeProfit}
               direction={position.direction}
+              exchange={position.exchangeName}
+              marketType={position.marketType}
             />
           </div>
         </DialogPrimitive.Content>

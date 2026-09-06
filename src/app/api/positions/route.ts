@@ -16,6 +16,7 @@ import { db } from '@/db';
 import { userExchanges, tradeExecutions, tradeSignals } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
 import { computePnlUsd, computePnlPct } from '@/lib/pnl';
+import { toExchangeSymbol, type MarketType } from '@/mastra/tools/market-symbol';
 
 async function getExchangeClient(userId: string): Promise<Exchange | null> {
   const rows = await db
@@ -56,6 +57,7 @@ export async function GET() {
       positionSize: tradeExecutions.positionSize,
       mode: tradeExecutions.mode,
       exchangeName: tradeExecutions.exchangeName,
+      marketType: tradeExecutions.marketType,
       entryAt: tradeExecutions.entryAt,
       direction: tradeSignals.direction,
       stopLoss: tradeSignals.stopLoss,
@@ -66,11 +68,18 @@ export async function GET() {
     .leftJoin(tradeSignals, eq(tradeExecutions.signalId, tradeSignals.id))
     .where(and(eq(tradeExecutions.userId, userId), eq(tradeExecutions.status, 'open')));
 
-  // Fetch live prices
-  const uniqueSymbols = [...new Set(rows.map((r) => r.symbol).filter(Boolean))];
+  // Fetch live prices — dedupe by the CCXT exchange symbol (spot vs swap resolve
+  // to different markets, e.g. BTC/USDT vs BTC/USDT:USDT, so plain symbol isn't a safe key).
+  const uniqueExchangeSymbols = [
+    ...new Set(
+      rows
+        .filter((r) => r.symbol)
+        .map((r) => toExchangeSymbol(r.symbol, (r.marketType as MarketType) ?? 'spot')),
+    ),
+  ];
   const tickerMap = new Map<string, number>();
 
-  if (uniqueSymbols.length > 0) {
+  if (uniqueExchangeSymbols.length > 0) {
     const isPaper = rows.every((r) => r.mode === 'paper');
     let client: Exchange | null = null;
 
@@ -88,10 +97,10 @@ export async function GET() {
 
     if (client) {
       await Promise.allSettled(
-        uniqueSymbols.map(async (symbol) => {
+        uniqueExchangeSymbols.map(async (exchangeSymbol) => {
           try {
-            const ticker = await (client as Exchange).fetchTicker(symbol);
-            if (ticker.last) tickerMap.set(symbol, ticker.last);
+            const ticker = await (client as Exchange).fetchTicker(exchangeSymbol);
+            if (ticker.last) tickerMap.set(exchangeSymbol, ticker.last);
           } catch { /* skip */ }
         }),
       );
@@ -101,7 +110,8 @@ export async function GET() {
   const positions = rows.map((pos) => {
     const entryPrice = pos.entryPrice ? parseFloat(pos.entryPrice) : null;
     const positionSize = pos.positionSize ? parseFloat(pos.positionSize) : null;
-    const currentPrice = pos.symbol ? (tickerMap.get(pos.symbol) ?? null) : null;
+    const marketType = (pos.marketType as MarketType) ?? 'spot';
+    const currentPrice = pos.symbol ? (tickerMap.get(toExchangeSymbol(pos.symbol, marketType)) ?? null) : null;
     const direction = (pos.direction ?? 'LONG') as 'LONG' | 'SHORT';
 
     let unrealizedPnlUsd: number | null = null;
@@ -117,6 +127,7 @@ export async function GET() {
       symbol: pos.symbol,
       direction,
       exchangeName: pos.exchangeName,
+      marketType,
       mode: pos.mode ?? 'paper',
       entryPrice,
       currentPrice,
