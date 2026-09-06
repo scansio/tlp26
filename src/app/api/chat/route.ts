@@ -76,10 +76,12 @@ async function buildRiskContext(userId: string): Promise<string> {
         });
         configureMarketType(client, exchangeRow.exchangeName, (profile.marketType as MarketType) ?? 'spot');
 
+        // fetchBalance() on a cold client is loadMarkets() + the balance call — two
+        // network round-trips, easily over 2s. Give it near ccxt's own 10s default.
         const fetchWithTimeout = Promise.race([
           client.fetchBalance(),
           new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('timeout')), 2000),
+            setTimeout(() => reject(new Error('timeout')), 9000),
           ),
         ]);
 
@@ -93,7 +95,8 @@ async function buildRiskContext(userId: string): Promise<string> {
           balanceNote = `(live — ${exchangeRow.exchangeName})`;
         }
       }
-    } catch {
+    } catch (err) {
+      console.error('[chat/buildRiskContext] live balance fetch failed:', err);
       balanceNote = '(unavailable — exchange fetch failed; ask user to reconnect exchange)';
     }
   }
