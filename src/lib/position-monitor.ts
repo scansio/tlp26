@@ -65,7 +65,7 @@ import { decrypt } from '@/lib/crypto';
 import { sendNotification } from '@/lib/notifications';
 import { accruePublisherFee } from '@/lib/publisher-fee';
 import { fetchUserExitConfig } from '@/lib/exit-config';
-import { cancelProtectiveOrders } from '@/lib/protective-orders';
+import { placeProtectiveOrders, cancelProtectiveOrders } from '@/lib/protective-orders';
 import { computePnlUsd, type PositionDirection } from '@/lib/pnl';
 import { toExchangeSymbol, type MarketType } from '@/mastra/tools/market-symbol';
 
@@ -102,6 +102,9 @@ interface OpenPosition {
   trailSlPrice: string | null;
   trailTpActive: boolean;
   trailTpPrice: string | null;
+  // Profit lock (user-level toggle; see exit-config.ts)
+  profitLockEnabled: boolean;
+  profitLockSyncedPrice: string | null;
 }
 
 interface MonitorState {
@@ -112,6 +115,7 @@ interface MonitorState {
   retryCount: number;
   retryTimeoutId: ReturnType<typeof setTimeout> | null;
   paperIntervalId: ReturnType<typeof setInterval> | null;
+  profitLockIntervalId: ReturnType<typeof setInterval> | null;
   stopped: boolean;
 }
 
@@ -123,6 +127,12 @@ const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000, 60000, 6
 const MAX_RETRIES = 10;
 const PAPER_POLL_INTERVAL_MS = 10_000;
 const PRICE_TOLERANCE_PCT = 0.005;
+// Profit lock: how often the periodic sync checks live trailing positions and
+// materializes their software-computed trailSlPrice as a real resting order.
+// Coarser than per-tick on purpose — this is a crash backstop, not the primary
+// enforcement (that stays the continuous software ratchet), so it trades a few
+// minutes of lag for far fewer exchange API calls.
+const PROFIT_LOCK_INTERVAL_MS = 5 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Global singleton
@@ -235,6 +245,21 @@ function isTrailActivated(
 }
 
 // ---------------------------------------------------------------------------
+// Profit-lock decision helpers (pure — exported for unit testing)
+// ---------------------------------------------------------------------------
+
+/** True when `level` (e.g. the current trailSlPrice) is favorable vs entry — i.e. a real profit, not just a trailing stop still underwater. */
+export function isLevelInProfit(level: number, entryPrice: number, direction: string): boolean {
+  return direction === 'LONG' ? level > entryPrice : level < entryPrice;
+}
+
+/** True when `level` is more favorable than `priorLevel` (or there was no prior sync yet). */
+export function hasLevelImproved(level: number, priorLevel: number | null, direction: string): boolean {
+  if (priorLevel === null) return true;
+  return direction === 'LONG' ? level > priorLevel : level < priorLevel;
+}
+
+// ---------------------------------------------------------------------------
 // DB helpers
 // ---------------------------------------------------------------------------
 
@@ -272,6 +297,7 @@ async function fetchOpenPositions(
       trailSlPrice: tradeExecutions.trailSlPrice,
       trailTpActive: tradeExecutions.trailTpActive,
       trailTpPrice: tradeExecutions.trailTpPrice,
+      profitLockSyncedPrice: tradeExecutions.profitLockSyncedPrice,
     })
     .from(tradeExecutions)
     .leftJoin(tradeSignals, eq(tradeExecutions.signalId, tradeSignals.id))
@@ -321,21 +347,31 @@ async function fetchOpenPositions(
       trailSlPrice: r.trailSlPrice ?? null,
       trailTpActive: r.trailTpActive ?? false,
       trailTpPrice: r.trailTpPrice ?? null,
+      profitLockEnabled: userConfig.profitLockEnabled,
+      profitLockSyncedPrice: r.profitLockSyncedPrice ?? null,
     };
   });
 }
 
+/**
+ * Marks a position closed — conditioned on it still being 'open' in the same
+ * atomic UPDATE, so two independent detection paths racing on the same fill
+ * (e.g. runOrdersLoop's watchOrders event vs. the periodic swap-reconciliation
+ * cycle both noticing the same close within moments of each other) can't both
+ * "win": whichever commits first closes it for real, and the loser's UPDATE
+ * simply affects zero rows. Returns false in that loser case so the caller
+ * skips its notification and fee accrual instead of duplicating them.
+ */
 async function closePosition(
   executionId: string,
   exitPrice: number,
   fillType: FillType,
   realizedPnl: number = 0,
   exitOrderId: string | null = null,
-): Promise<void> {
-  // Any close path retires a pending retry-cooldown/notify-once streak for this position.
+): Promise<boolean> {
   exitFailureState.delete(executionId);
 
-  await db
+  const updated = await db
     .update(tradeExecutions)
     .set({
       exitPrice: String(exitPrice),
@@ -345,10 +381,14 @@ async function closePosition(
       realizedPnl: String(realizedPnl),
       ...(exitOrderId ? { exitOrderId } : {}),
     })
-    .where(eq(tradeExecutions.id, executionId));
+    .where(and(eq(tradeExecutions.id, executionId), eq(tradeExecutions.status, 'open')))
+    .returning({ id: tradeExecutions.id });
+
+  if (updated.length === 0) return false;
 
   // Accrue performance fee for copy trades with positive P&L (fire-and-forget)
   void accruePublisherFee(executionId, realizedPnl);
+  return true;
 }
 
 async function updateTrailState(
@@ -472,19 +512,225 @@ async function reconcileRestingOrderFill(client: Exchange, position: OpenPositio
     const direction = position.direction ?? 'LONG';
     const pnl = computePnl(entryPrice, fillPrice, positionSize, direction);
 
-    await closePosition(position.id, fillPrice, check.fillType, pnl, check.orderId);
+    const closed = await closePosition(position.id, fillPrice, check.fillType, pnl, check.orderId);
     await cancelProtectiveOrders(client, position.symbol, marketType, [check.sibling]);
-    void sendNotification(position.userId, {
-      event: check.fillType,
-      symbol: position.symbol,
-      exitPrice: String(fillPrice),
-      pnl: pnl.toFixed(4),
-    });
+    if (closed) {
+      void sendNotification(position.userId, {
+        event: check.fillType,
+        symbol: position.symbol,
+        exitPrice: String(fillPrice),
+        pnl: pnl.toFixed(4),
+      });
+    }
 
     return true;
   }
 
   return false;
+}
+
+/**
+ * Profit-lock sync for one live trailing position: if the software-ratcheted
+ * trailSlPrice represents a genuine profit (vs entry) and has improved since
+ * the last sync, cancel the existing resting slOrderId (if any) and place a
+ * new one at the current trailSlPrice.
+ *
+ * Deliberately restricted to `exitMode === 'trailing'` — fixed-mode positions
+ * already have their own resting orders managed at entry/breakeven/adjust,
+ * and breakeven writes trailSlPrice = entryPrice on FIXED positions too,
+ * which would otherwise look like a "profit lock" candidate here and stomp
+ * the entry-time SL order for no reason.
+ */
+async function syncProfitLockPosition(client: Exchange, position: OpenPosition): Promise<void> {
+  if (position.exitMode !== 'trailing' || !position.profitLockEnabled) return;
+  if (!position.trailSlPrice) return;
+
+  const entryPrice = position.entryPrice ? parseFloat(position.entryPrice) : null;
+  if (!entryPrice) return;
+
+  const direction = position.direction ?? 'LONG';
+  const trailSlPrice = parseFloat(position.trailSlPrice);
+  const syncedPrice = position.profitLockSyncedPrice ? parseFloat(position.profitLockSyncedPrice) : null;
+
+  if (!isLevelInProfit(trailSlPrice, entryPrice, direction)) return;
+  if (!hasLevelImproved(trailSlPrice, syncedPrice, direction)) return;
+
+  const marketType = (position.marketType as MarketType) ?? 'spot';
+  const positionSize = position.positionSize ? parseFloat(position.positionSize) : 0;
+  const contractSize = position.contractSize ? parseFloat(position.contractSize) : 1;
+  const orderContracts = position.orderContracts ? parseFloat(position.orderContracts) : null;
+  const amount = resolveOrderAmount(marketType, positionSize, contractSize, orderContracts);
+  if (!amount || amount <= 0) return;
+
+  if (position.slOrderId) {
+    await cancelProtectiveOrders(client, position.symbol, marketType, [position.slOrderId]);
+  }
+
+  const result = await placeProtectiveOrders({
+    client,
+    symbol: position.symbol,
+    marketType,
+    direction,
+    amount,
+    stopLossPrice: trailSlPrice,
+    takeProfitPrice: null,
+  });
+
+  if (result.slOrderId) {
+    await db
+      .update(tradeExecutions)
+      .set({ slOrderId: result.slOrderId, profitLockSyncedPrice: String(trailSlPrice) })
+      .where(eq(tradeExecutions.id, position.id));
+  } else {
+    // Cancel succeeded but the replace failed — don't leave a stale slOrderId
+    // pointing at a cancelled order. Null out the sync marker too so the next
+    // cycle retries cleanly instead of comparing against a level that was
+    // never actually placed. Software trailing still protects the position
+    // in the meantime — this is backstop maintenance, not a live failure, so
+    // no user notification (consistent with the fixed-mode cooldown design).
+    console.error(
+      `[position-monitor] Profit-lock sync failed for execution ${position.id}: ${result.errors.join('; ')}`,
+    );
+    await db
+      .update(tradeExecutions)
+      .set({ slOrderId: null, profitLockSyncedPrice: null })
+      .where(eq(tradeExecutions.id, position.id));
+  }
+}
+
+/**
+ * Close a DB record whose position turns out to already be flat on the
+ * exchange — closed by some means outside this app (manual close in the
+ * exchange's own UI, liquidation without a matching resting-order id, etc.).
+ * Best-effort exit price: last own trade, falling back to the current ticker,
+ * falling back to entry price (P&L then reads ~0, but the record still closes
+ * — an unknown exit price must never block clearing a position that no
+ * longer exists on the exchange).
+ */
+async function closeExternallyClosedPosition(client: Exchange, position: OpenPosition): Promise<void> {
+  const marketType = (position.marketType as MarketType) ?? 'swap';
+  const exchangeSymbol = toExchangeSymbol(position.symbol, marketType);
+
+  let exitPrice: number | null = null;
+  try {
+    const trades = await client.fetchMyTrades(exchangeSymbol, undefined, 5);
+    exitPrice = trades[trades.length - 1]?.price ?? null;
+  } catch {
+    // best-effort only
+  }
+  if (!exitPrice) {
+    try {
+      const ticker = await client.fetchTicker(exchangeSymbol);
+      exitPrice = ticker.last ?? null;
+    } catch {
+      // still nothing — fall through to entry-price fallback below
+    }
+  }
+
+  const entryPrice = position.entryPrice ? parseFloat(position.entryPrice) : 0;
+  const positionSize = position.positionSize ? parseFloat(position.positionSize) : 0;
+  const direction = position.direction ?? 'LONG';
+  const finalExitPrice = exitPrice ?? entryPrice;
+  const pnl = computePnl(entryPrice, finalExitPrice, positionSize, direction);
+
+  console.warn(
+    `[position-monitor] Execution ${position.id} is flat on the exchange but was still open in the DB — closing as an external/manual close.`,
+  );
+
+  const closed = await closePosition(position.id, finalExitPrice, 'manual', pnl);
+  if (position.slOrderId || position.tpOrderId) {
+    await cancelProtectiveOrders(client, position.symbol, marketType, [position.slOrderId, position.tpOrderId]);
+  }
+  if (closed) {
+    void sendNotification(position.userId, {
+      event: 'manual_close',
+      symbol: position.symbol,
+      exitPrice: String(finalExitPrice),
+      pnl: pnl.toFixed(4),
+    });
+  }
+}
+
+/**
+ * Reconcile live SWAP positions against the exchange's own reported position
+ * size — catches a position closed directly on the exchange's app/UI, which
+ * nothing else here would ever notice (there's no order-fill event to watch
+ * for a close that didn't happen through an order this app placed or knows
+ * about).
+ *
+ * Deliberately swap-only: a spot "position" is just a wallet balance shared
+ * with any other holdings and other open positions in the same asset —
+ * inferring "closed" from a balance drop would false-positive constantly.
+ * Spot keeps relying on the existing resting-order-fill reconciliation only.
+ *
+ * Safety-critical constraint: only acts on an AFFIRMATIVE flat response from
+ * fetchPositions. A thrown error, timeout, or anything short of "the exchange
+ * successfully told us this symbol has zero contracts" must never be treated
+ * as closed — a false "flat" verdict here strands a real live position with
+ * no further monitoring, which is exactly the failure mode this whole effort
+ * exists to prevent.
+ *
+ * Also deliberately conservative about partial mismatches: if the exchange
+ * shows a nonzero (but different-than-expected) size for a symbol, that's
+ * logged and skipped rather than guessed at — there is no way to know from
+ * here which of possibly several open executions for that symbol shrank.
+ */
+async function reconcileSwapExchangePositions(client: Exchange, positions: OpenPosition[]): Promise<void> {
+  const bySymbol = new Map<string, OpenPosition[]>();
+  for (const p of positions) {
+    const list = bySymbol.get(p.symbol) ?? [];
+    list.push(p);
+    bySymbol.set(p.symbol, list);
+  }
+
+  for (const [symbol, rows] of bySymbol) {
+    const exchangeSymbol = toExchangeSymbol(symbol, 'swap');
+
+    let exchangePositions;
+    try {
+      exchangePositions = await client.fetchPositions([exchangeSymbol]);
+    } catch (err) {
+      console.error(`[position-monitor] fetchPositions failed for ${exchangeSymbol} — skipping reconcile this cycle:`, err);
+      continue;
+    }
+
+    const matches = exchangePositions.filter((p) => p.symbol === exchangeSymbol);
+
+    if (matches.length === 0) {
+      // No entry at all for this symbol. Most exchanges only return entries for
+      // nonzero positions, so this usually just means flat — but it's also
+      // exactly what a symbol-format mismatch (a ccxt mapping quirk, a hedge-mode
+      // variant this app doesn't handle, etc.) would silently produce: a
+      // "successful" call that matched nothing because it asked about the wrong
+      // string. Confirm the exchange actually recognizes this market before
+      // trusting an empty result as "flat" — trusting it wrongly here deletes a
+      // still-live position's own backstop.
+      try {
+        await client.loadMarkets();
+      } catch (err) {
+        console.error(`[position-monitor] loadMarkets failed — skipping swap reconcile for ${exchangeSymbol} this cycle:`, err);
+        continue;
+      }
+      if (!client.markets[exchangeSymbol]) {
+        console.error(
+          `[position-monitor] fetchPositions returned no entry for ${exchangeSymbol}, and it isn't a market this exchange recognizes — skipping reconcile (possible symbol-format mismatch).`,
+        );
+        continue;
+      }
+      // Confirmed a real, known market with no reported position — genuinely flat.
+    } else {
+      const totalContracts = matches.reduce((sum, p) => sum + Math.abs(p.contracts ?? 0), 0);
+      if (totalContracts > 0) continue; // exchange shows something open — not our case to handle here
+    }
+
+    for (const row of rows) {
+      try {
+        await closeExternallyClosedPosition(client, row);
+      } catch (err) {
+        console.error(`[position-monitor] External-close reconcile failed for execution ${row.id}:`, err);
+      }
+    }
+  }
 }
 
 // Skip re-attempting a live close order for this many ms after a failed
@@ -499,15 +745,38 @@ type CloseOrderResult =
   | { ok: false; error: string };
 
 /**
+ * Resolve the amount (in contracts for swap, base units for spot) an order
+ * against this position should use. Full-size swap orders use `orderContracts`
+ * (the exact contract count booked at entry) rather than re-deriving from
+ * positionSize/contractSize, which drifts from the true filled size by the
+ * entry-price/fill-price slippage delta — used by both the market-close path
+ * and the profit-lock resting-order sync so neither leaves exchange-side dust
+ * after a real partial close shrinks positionSize.
+ */
+export function resolveOrderAmount(
+  marketType: MarketType,
+  positionSize: number,
+  contractSize: number,
+  orderContracts: number | null,
+): number {
+  if (marketType !== 'swap') return positionSize;
+
+  const effContractSize = contractSize || 1;
+  if (!orderContracts || orderContracts <= 0) return positionSize / effContractSize;
+
+  const originalBaseSize = orderContracts * effContractSize;
+  const ratio = originalBaseSize > 0 ? positionSize / originalBaseSize : 1;
+  // Entry-price → fill-price slippage (~0.05%) also shrinks this ratio below 1,
+  // but a genuine partial close changes size by at least 1% (the manual-close
+  // route clamps pct to [1,100]). Only scale down for the latter — scaling for
+  // slippage dust would leave exchange-side dust open while the DB reports closed.
+  return ratio >= 0.995 ? orderContracts : orderContracts * Math.min(ratio, 1);
+}
+
+/**
  * Place a real reduceOnly market order that flattens a live position.
  * Mirrors the manual-close logic in /api/positions/[id] — same contract-size
  * handling for swap markets, same reduceOnly flag.
- *
- * Full closes always use `orderContracts` (the exact contract count booked
- * at entry) rather than re-deriving amount from positionSize/contractSize,
- * which drifts from the true filled size by the entry-price/fill-price
- * slippage delta. If a manual partial close has since shrunk positionSize,
- * the close amount is scaled down proportionally.
  */
 async function placeMarketClose(
   userId: string,
@@ -524,24 +793,7 @@ async function placeMarketClose(
 
   const exchangeSymbol = toExchangeSymbol(symbol, marketType);
   const closeSide = direction === 'LONG' ? 'sell' : 'buy';
-
-  let closeAmount: number;
-  if (marketType === 'swap') {
-    const effContractSize = contractSize || 1;
-    if (orderContracts && orderContracts > 0) {
-      const originalBaseSize = orderContracts * effContractSize;
-      const ratio = originalBaseSize > 0 ? positionSize / originalBaseSize : 1;
-      // Entry-price → fill-price slippage (~0.05%) also shrinks this ratio below 1,
-      // but a genuine partial close changes size by at least 1% (the manual-close
-      // route clamps pct to [1,100]). Only scale down for the latter — scaling for
-      // slippage dust would leave exchange-side dust open while the DB reports closed.
-      closeAmount = ratio >= 0.995 ? orderContracts : orderContracts * Math.min(ratio, 1);
-    } else {
-      closeAmount = positionSize / effContractSize;
-    }
-  } else {
-    closeAmount = positionSize;
-  }
+  let closeAmount = resolveOrderAmount(marketType, positionSize, contractSize, orderContracts);
 
   if (!closeAmount || closeAmount <= 0) {
     return { ok: false, error: 'Invalid position size for close order' };
@@ -695,14 +947,16 @@ async function executeExit(
   }
 
   const pnl = computePnl(entry, exitPrice, positionSize, direction);
-  await closePosition(position.id, exitPrice, fillType, pnl, exitOrderId);
-  void sendNotification(position.userId, {
-    event: fillType === 'sl_hit' ? 'sl_hit' as const : 'tp_hit' as const,
-    symbol: position.symbol,
-    exitPrice: String(exitPrice),
-    pnl: pnl.toFixed(4),
-  });
-  return true;
+  const closed = await closePosition(position.id, exitPrice, fillType, pnl, exitOrderId);
+  if (closed) {
+    void sendNotification(position.userId, {
+      event: fillType === 'sl_hit' ? 'sl_hit' as const : 'tp_hit' as const,
+      symbol: position.symbol,
+      exitPrice: String(exitPrice),
+      pnl: pnl.toFixed(4),
+    });
+  }
+  return closed;
 }
 
 /**
@@ -920,6 +1174,7 @@ class PositionMonitorManager {
       retryCount: 0,
       retryTimeoutId: null,
       paperIntervalId: null,
+      profitLockIntervalId: null,
       stopped: false,
     };
     this.monitors.set(key, state);
@@ -932,26 +1187,33 @@ class PositionMonitorManager {
   }
 
   /**
-   * Catch up on resting SL/TP orders that may have filled while this process
-   * was not running. REST-only (fetchOrder), runs once per (userId,
-   * exchangeName) right before its WS loops start — those loops only report
-   * events from connection time onward and would otherwise never notice a
-   * fill that already happened.
+   * Catch up on state changes that may have happened while this process was
+   * not running. REST-only, runs once per (userId, exchangeName) right before
+   * its WS loops start — those loops only report events from connection time
+   * onward and would otherwise never notice something that already happened:
+   *  1. A resting SL/TP order filled (fetchOrder on slOrderId/tpOrderId).
+   *  2. A swap position was closed some other way entirely — e.g. directly on
+   *     the exchange's own app — leaving no order-fill trail here at all
+   *     (fetchPositions, swap-only; see reconcileSwapExchangePositions).
+   * Positions closed by (1) are excluded from (2) so a stale in-memory
+   * `positions` snapshot doesn't attempt to re-close an already-closed row.
    */
   private async reconcileLivePositions(userId: string, exchangeName: string): Promise<void> {
     const positions = await fetchOpenPositions(userId, exchangeName);
-    const candidates = positions.filter(
-      (p) => p.mode === 'live' && (p.slOrderId || p.tpOrderId),
-    );
-    if (candidates.length === 0) return;
+    const livePositions = positions.filter((p) => p.mode === 'live');
+    if (livePositions.length === 0) return;
 
     const client = await buildExchangeClient(userId, exchangeName);
     if (!client) return; // runOrdersLoop will surface the missing-credentials case
 
-    for (const position of candidates) {
+    const closedIds = new Set<string>();
+
+    for (const position of livePositions) {
+      if (!position.slOrderId && !position.tpOrderId) continue;
       try {
         const wasClosed = await reconcileRestingOrderFill(client, position);
         if (wasClosed) {
+          closedIds.add(position.id);
           console.warn(
             `[position-monitor] Reconcile: execution ${position.id} was already closed by a resting order while this process was offline.`,
           );
@@ -962,6 +1224,13 @@ class PositionMonitorManager {
           err,
         );
       }
+    }
+
+    const swapPositions = livePositions.filter(
+      (p) => !closedIds.has(p.id) && ((p.marketType as MarketType) ?? 'spot') === 'swap',
+    );
+    if (swapPositions.length > 0) {
+      await reconcileSwapExchangePositions(client, swapPositions);
     }
   }
 
@@ -980,6 +1249,10 @@ class PositionMonitorManager {
     if (state.paperIntervalId) {
       clearInterval(state.paperIntervalId);
       state.paperIntervalId = null;
+    }
+    if (state.profitLockIntervalId) {
+      clearInterval(state.profitLockIntervalId);
+      state.profitLockIntervalId = null;
     }
 
     this.monitors.delete(key);
@@ -1004,16 +1277,69 @@ class PositionMonitorManager {
   // -------------------------------------------------------------------------
   // Live WebSocket loop (ccxt.pro)
   //
-  // Two concurrent loops run per {userId, exchangeName}:
-  //   1. runTickerLoop  — drives trailing ratchet updates for trailing-mode positions
-  //   2. runOrdersLoop  — detects exchange-side fills for fixed-mode exits
+  // Two concurrent WS loops run per {userId, exchangeName}, plus one REST
+  // interval:
+  //   1. runTickerLoop            — drives trailing ratchet updates for trailing-mode positions
+  //   2. runOrdersLoop            — detects exchange-side fills for fixed-mode exits
+  //   3. periodicMaintenanceInterval — profit-lock sync + swap external-close reconciliation
   //
-  // Both share the same MonitorState; either loop can stop the monitor.
+  // All three share the same MonitorState; any of the WS loops can stop the monitor.
   // -------------------------------------------------------------------------
 
   private startWebSocketLoop(state: MonitorState): void {
     void this.runOrdersLoop(state);
     void this.runTickerLoop(state);
+
+    const run = () => void this.runPeriodicMaintenanceCycle(state);
+    run();
+    state.profitLockIntervalId = setInterval(run, PROFIT_LOCK_INTERVAL_MS);
+  }
+
+  /**
+   * Runs every PROFIT_LOCK_INTERVAL_MS, REST-only, alongside the WS loops.
+   * Two unrelated maintenance jobs share this cadence rather than each
+   * getting their own timer:
+   *  1. Profit-lock sync (`syncProfitLockPosition`) — trailing positions only.
+   *  2. Swap external-close reconciliation (`reconcileSwapExchangePositions`)
+   *     — catches a position closed outside this app entirely, for ANY
+   *     exitMode, not just trailing. Startup already runs this once (see
+   *     reconcileLivePositions); this is the ongoing version so a manual
+   *     close that happens while the monitor is already up and running
+   *     doesn't wait for the next process restart to be noticed.
+   */
+  private async runPeriodicMaintenanceCycle(state: MonitorState): Promise<void> {
+    if (state.stopped) return;
+    const { userId, exchangeName } = state;
+
+    try {
+      const positions = await fetchOpenPositions(userId, exchangeName);
+      const livePositions = positions.filter((p) => p.mode === 'live');
+      if (livePositions.length === 0) return;
+
+      const client = await buildExchangeClient(userId, exchangeName);
+      if (!client) return;
+
+      const profitLockCandidates = livePositions.filter(
+        (p) => p.exitMode === 'trailing' && p.profitLockEnabled,
+      );
+      for (const position of profitLockCandidates) {
+        try {
+          await syncProfitLockPosition(client, position);
+        } catch (err) {
+          console.error(
+            `[position-monitor] Profit-lock cycle failed for execution ${position.id}:`,
+            err,
+          );
+        }
+      }
+
+      const swapPositions = livePositions.filter((p) => ((p.marketType as MarketType) ?? 'spot') === 'swap');
+      if (swapPositions.length > 0) {
+        await reconcileSwapExchangePositions(client, swapPositions);
+      }
+    } catch (err) {
+      console.error(`[position-monitor] Periodic maintenance cycle error for ${userId}/${exchangeName}:`, err);
+    }
   }
 
   /**
@@ -1106,7 +1432,7 @@ class PositionMonitorManager {
               const fillDirection = position.direction ?? 'LONG';
               const pnl = computePnl(entryPrice, fillPrice, positionSize, fillDirection);
 
-              await closePosition(position.id, fillPrice, fillType, pnl, orderId);
+              const closed = await closePosition(position.id, fillPrice, fillType, pnl, orderId);
               await cancelProtectiveOrders(
                 exchange,
                 position.symbol,
@@ -1114,12 +1440,14 @@ class PositionMonitorManager {
                 [siblingOrderId],
               );
 
-              void sendNotification(userId, {
-                event: fillType,
-                symbol: position.symbol,
-                exitPrice: String(fillPrice),
-                pnl: pnl.toFixed(4),
-              });
+              if (closed) {
+                void sendNotification(userId, {
+                  event: fillType,
+                  symbol: position.symbol,
+                  exitPrice: String(fillPrice),
+                  pnl: pnl.toFixed(4),
+                });
+              }
               continue;
             }
 
@@ -1149,7 +1477,7 @@ class PositionMonitorManager {
             const fillDirection = position.direction ?? 'LONG';
             const pnl = computePnl(entryPrice, fillPrice, positionSize, fillDirection);
 
-            await closePosition(position.id, fillPrice, fillType, pnl);
+            const closed = await closePosition(position.id, fillPrice, fillType, pnl);
             await cancelProtectiveOrders(
               exchange,
               position.symbol,
@@ -1157,18 +1485,20 @@ class PositionMonitorManager {
               [position.slOrderId, position.tpOrderId],
             );
 
-            const notifEvent =
-              fillType === 'sl_hit'      ? 'sl_hit' as const :
-              fillType === 'tp_hit'      ? 'tp_hit' as const :
-              fillType === 'liquidation' ? 'liquidation' as const :
-              'manual_close' as const;
+            if (closed) {
+              const notifEvent =
+                fillType === 'sl_hit'      ? 'sl_hit' as const :
+                fillType === 'tp_hit'      ? 'tp_hit' as const :
+                fillType === 'liquidation' ? 'liquidation' as const :
+                'manual_close' as const;
 
-            void sendNotification(userId, {
-              event: notifEvent,
-              symbol: position.symbol,
-              exitPrice: String(fillPrice),
-              pnl: pnl.toFixed(4),
-            });
+              void sendNotification(userId, {
+                event: notifEvent,
+                symbol: position.symbol,
+                exitPrice: String(fillPrice),
+                pnl: pnl.toFixed(4),
+              });
+            }
           }
         }
       } catch (err) {

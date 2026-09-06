@@ -291,6 +291,19 @@ export async function PATCH(
           } else {
             restingOrderWarning = ' WARNING: no exchange credentials available to resize the resting order(s).';
           }
+        } else if (exec.slOrderId) {
+          // Trailing position with a profit-lock resting order (see position-monitor.ts):
+          // it was sized for the pre-partial-close position. Rather than resize it here,
+          // cancel it and clear the sync marker — the next profit-lock cycle re-establishes
+          // it at the correct (new) size once trailSlPrice next improves.
+          const client = await getExchangeClient(userId, exec.exchangeName);
+          if (client) {
+            await cancelProtectiveOrders(client, exec.symbol, marketType, [exec.slOrderId]);
+          }
+          await db
+            .update(tradeExecutions)
+            .set({ slOrderId: null, profitLockSyncedPrice: null })
+            .where(eq(tradeExecutions.id, id));
         }
       }
     }
@@ -348,6 +361,19 @@ export async function PATCH(
         } else {
           restingOrderWarning = ' WARNING: no exchange credentials available to move the resting SL order.';
         }
+      } else if (exec.slOrderId) {
+        // Trailing position with a profit-lock resting order: breakeven just reset
+        // trailSlPrice back to entry in the DB, which no longer matches the level
+        // that resting order sits at. Cancel it — the profit-lock cycle re-places
+        // one once trailSlPrice next ratchets past entry again.
+        const client = await getExchangeClient(userId, exec.exchangeName);
+        if (client) {
+          await cancelProtectiveOrders(client, exec.symbol, marketType, [exec.slOrderId]);
+        }
+        await db
+          .update(tradeExecutions)
+          .set({ slOrderId: null, profitLockSyncedPrice: null })
+          .where(eq(tradeExecutions.id, id));
       }
     }
 
@@ -414,6 +440,19 @@ export async function PATCH(
         } else {
           restingOrderWarning = ' WARNING: no exchange credentials available to move the resting order(s).';
         }
+      } else if (exec.slOrderId) {
+        // Trailing position with a profit-lock resting order: the manual SL/TP
+        // override on trade_signals no longer corresponds to what that resting
+        // order reflects. Cancel it — the profit-lock cycle re-places one from
+        // trailSlPrice on its own next cycle if/when appropriate.
+        const client = await getExchangeClient(userId, exec.exchangeName);
+        if (client) {
+          await cancelProtectiveOrders(client, exec.symbol, marketType, [exec.slOrderId]);
+        }
+        await db
+          .update(tradeExecutions)
+          .set({ slOrderId: null, profitLockSyncedPrice: null })
+          .where(eq(tradeExecutions.id, id));
       }
     }
 

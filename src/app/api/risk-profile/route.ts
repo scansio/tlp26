@@ -52,6 +52,33 @@ const riskProfileSchema = z.object({
   marketType: z.enum(['spot', 'swap']).optional().default('spot'),
   defaultLeverage: z.number().int().min(1).max(125).optional().default(1),
   marginMode: z.enum(['cross', 'isolated']).optional().default('cross'),
+  // Trailing-position profit lock: periodically materialize the software-ratcheted
+  // trailing SL as a real resting exchange order once a trailing live position is
+  // in profit — see src/lib/position-monitor.ts. No effect on fixed-mode positions.
+  profitLockEnabled: z.boolean().optional().default(false),
+  // Exit mode default for new signals: 'fixed' = SL/TP stay at their opening
+  // levels; 'trailing' = SL (and, after the initial TP is hit, TP too) trails
+  // price by the percentages below. A signal can still override this per-trade
+  // (see src/lib/exit-config.ts) — this is only the account-level default.
+  exitMode: z.enum(['fixed', 'trailing']).optional().default('fixed'),
+  trailSlPct: z
+    .number()
+    .positive()
+    .max(20, 'trailSlPct cannot exceed 20%')
+    .optional()
+    .default(1.0),
+  trailTpPct: z
+    .number()
+    .positive()
+    .max(50, 'trailTpPct cannot exceed 50%')
+    .optional()
+    .default(2.0),
+  trailActivationPct: z
+    .number()
+    .min(0)
+    .max(50, 'trailActivationPct cannot exceed 50%')
+    .optional()
+    .default(0.0),
 });
 
 type RiskProfileInput = z.infer<typeof riskProfileSchema>;
@@ -109,6 +136,19 @@ export async function POST(req: Request) {
 
   const data: RiskProfileInput = parsed.data;
 
+  // Several fields below default when omitted (see schema) — fine for a fresh
+  // insert, but this route is a full upsert and at least one caller (the
+  // onboarding SetupChat fallback, which POSTs a parsed profile JSON straight
+  // from a chat message) only ever sends the 8 fields that flow collect —
+  // never these settings-page-only ones. On conflict, only overwrite a field
+  // when the caller actually sent it — otherwise a value set from the
+  // risk-profile page gets silently reset to its default the next time
+  // onboarding chat re-saves the profile.
+  const bodyKeys = new Set(
+    typeof body === 'object' && body !== null ? Object.keys(body) : [],
+  );
+  const provided = (key: string) => bodyKeys.has(key);
+
   const [upserted] = await db
     .insert(userRiskProfiles)
     .values({
@@ -127,6 +167,11 @@ export async function POST(req: Request) {
       marketType: data.marketType,
       defaultLeverage: data.defaultLeverage,
       marginMode: data.marginMode,
+      profitLockEnabled: data.profitLockEnabled,
+      exitMode: data.exitMode,
+      trailSlPct: String(data.trailSlPct),
+      trailTpPct: String(data.trailTpPct),
+      trailActivationPct: String(data.trailActivationPct),
       isActive: true,
       updatedAt: new Date(),
     })
@@ -143,9 +188,14 @@ export async function POST(req: Request) {
         slippagePct: String(data.slippagePct),
         paperBalanceUsd: String(data.paperBalanceUsd),
         minRiskRewardRatio: String(data.minRiskRewardRatio),
-        marketType: data.marketType,
-        defaultLeverage: data.defaultLeverage,
-        marginMode: data.marginMode,
+        ...(provided('marketType') ? { marketType: data.marketType } : {}),
+        ...(provided('defaultLeverage') ? { defaultLeverage: data.defaultLeverage } : {}),
+        ...(provided('marginMode') ? { marginMode: data.marginMode } : {}),
+        ...(provided('profitLockEnabled') ? { profitLockEnabled: data.profitLockEnabled } : {}),
+        ...(provided('exitMode') ? { exitMode: data.exitMode } : {}),
+        ...(provided('trailSlPct') ? { trailSlPct: String(data.trailSlPct) } : {}),
+        ...(provided('trailTpPct') ? { trailTpPct: String(data.trailTpPct) } : {}),
+        ...(provided('trailActivationPct') ? { trailActivationPct: String(data.trailActivationPct) } : {}),
         isActive: true,
         updatedAt: new Date(),
       },
@@ -211,6 +261,11 @@ function toResponse(profile: ProfileRow) {
     marketType: profile.marketType ?? 'spot',
     defaultLeverage: profile.defaultLeverage ?? 1,
     marginMode: profile.marginMode ?? 'cross',
+    profitLockEnabled: profile.profitLockEnabled ?? false,
+    exitMode: profile.exitMode ?? 'fixed',
+    trailSlPct: Number(profile.trailSlPct ?? '1.000'),
+    trailTpPct: Number(profile.trailTpPct ?? '2.000'),
+    trailActivationPct: Number(profile.trailActivationPct ?? '0.000'),
     // Paper trading mode fields
     paperMode: (profile.executionMode ?? 'paper') === 'paper', // true = paper, false = live
     paperBalanceUsd: Number(profile.paperBalanceUsd ?? '10000.00'),

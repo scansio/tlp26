@@ -42,6 +42,11 @@ interface RiskProfile {
   marketType: 'spot' | 'swap';
   defaultLeverage: number;
   marginMode: 'cross' | 'isolated';
+  profitLockEnabled: boolean;
+  exitMode: 'fixed' | 'trailing';
+  trailSlPct: number;
+  trailTpPct: number;
+  trailActivationPct: number;
   isActive: boolean;
   updatedAt: string | null;
 }
@@ -59,6 +64,11 @@ interface FormState {
   marketType: 'spot' | 'swap';
   defaultLeverage: number;
   marginMode: 'cross' | 'isolated';
+  profitLockEnabled: boolean;
+  exitMode: 'fixed' | 'trailing';
+  trailSlPct: number;
+  trailTpPct: number;
+  trailActivationPct: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +97,11 @@ const DEFAULT_FORM: FormState = {
   marketType: 'spot',
   defaultLeverage: 1,
   marginMode: 'cross',
+  profitLockEnabled: false,
+  exitMode: 'fixed',
+  trailSlPct: 1.0,
+  trailTpPct: 2.0,
+  trailActivationPct: 0.0,
 };
 
 // ---------------------------------------------------------------------------
@@ -211,6 +226,11 @@ function FallbackForm({
         marketType: profile.marketType ?? 'spot',
         defaultLeverage: profile.defaultLeverage ?? 1,
         marginMode: profile.marginMode ?? 'cross',
+        profitLockEnabled: profile.profitLockEnabled ?? false,
+        exitMode: profile.exitMode ?? 'fixed',
+        trailSlPct: profile.trailSlPct ?? 1.0,
+        trailTpPct: profile.trailTpPct ?? 2.0,
+        trailActivationPct: profile.trailActivationPct ?? 0.0,
       });
     }
   }, [profile]);
@@ -253,6 +273,11 @@ function FallbackForm({
       marketType: form.marketType,
       defaultLeverage: form.defaultLeverage,
       marginMode: form.marginMode,
+      profitLockEnabled: form.profitLockEnabled,
+      exitMode: form.exitMode,
+      trailSlPct: form.trailSlPct,
+      trailTpPct: form.trailTpPct,
+      trailActivationPct: form.trailActivationPct,
     };
 
     try {
@@ -548,6 +573,143 @@ function FallbackForm({
           </div>
         </>
       )}
+
+      <Separator />
+
+      {/* Exit strategy */}
+      <div className="space-y-2">
+        <label className="text-sm font-medium">Exit Strategy</label>
+        <div className="flex gap-3">
+          {(['fixed', 'trailing'] as const).map((mode) => (
+            <label
+              key={mode}
+              className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2 cursor-pointer ${
+                form.exitMode === mode
+                  ? 'border-primary bg-primary/10 font-medium'
+                  : 'border-input hover:bg-accent'
+              }`}
+            >
+              <input
+                type="radio"
+                name="exitMode"
+                value={mode}
+                checked={form.exitMode === mode}
+                onChange={() => {
+                  setForm((f) => ({ ...f, exitMode: mode }));
+                  setSaveMessage('');
+                }}
+                className="accent-primary"
+              />
+              <span className="text-sm">{mode === 'trailing' ? 'Trailing Stop' : 'Fixed SL/TP'}</span>
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {form.exitMode === 'trailing'
+            ? 'The stop-loss follows price as a trade moves into profit, locking in more as it runs, instead of staying at one fixed level.'
+            : 'Stop-loss and take-profit stay at the levels set when a trade opens.'}
+          {' '}A trading signal can still override this on a per-trade basis.
+          {' '}Changing this applies to any position that&apos;s already open, not just new trades — avoid switching it while you have a live position running.
+        </p>
+      </div>
+
+      {form.exitMode === 'trailing' && (
+        <>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">Trailing Stop-Loss Distance</label>
+              <span className="text-sm font-semibold tabular-nums">{form.trailSlPct}%</span>
+            </div>
+            <input
+              type="range"
+              min={0.1}
+              max={10}
+              step={0.1}
+              value={form.trailSlPct}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, trailSlPct: Number(e.target.value) }));
+                setSaveMessage('');
+              }}
+              className="w-full accent-primary"
+            />
+            <p className="text-xs text-muted-foreground">
+              How far behind the current price the stop-loss trails once trailing is active.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">Trailing Take-Profit Distance</label>
+              <span className="text-sm font-semibold tabular-nums">{form.trailTpPct}%</span>
+            </div>
+            <input
+              type="range"
+              min={0.1}
+              max={20}
+              step={0.1}
+              value={form.trailTpPct}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, trailTpPct: Number(e.target.value) }));
+                setSaveMessage('');
+              }}
+              className="w-full accent-primary"
+            />
+            <p className="text-xs text-muted-foreground">
+              Once price first reaches the take-profit target, it keeps trailing by this much instead of
+              closing immediately — lets a strong move keep running.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">Trailing Activation Threshold</label>
+              <span className="text-sm font-semibold tabular-nums">{form.trailActivationPct}%</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={10}
+              step={0.1}
+              value={form.trailActivationPct}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, trailActivationPct: Number(e.target.value) }));
+                setSaveMessage('');
+              }}
+              className="w-full accent-primary"
+            />
+            <p className="text-xs text-muted-foreground">
+              {form.trailActivationPct === 0
+                ? 'Trailing starts immediately from entry.'
+                : `Trailing only starts once the trade is ${form.trailActivationPct}% in profit.`}
+            </p>
+          </div>
+        </>
+      )}
+
+      <Separator />
+
+      {/* Trailing profit lock */}
+      <div className="space-y-2">
+        <label className="flex items-center gap-2 rounded-md border border-input px-3 py-2 cursor-pointer hover:bg-accent">
+          <input
+            type="checkbox"
+            checked={form.profitLockEnabled}
+            onChange={(e) => {
+              setForm((f) => ({ ...f, profitLockEnabled: e.target.checked }));
+              setSaveMessage('');
+            }}
+            className="accent-primary"
+          />
+          <span className="text-sm font-medium">Trailing Position Profit Lock</span>
+        </label>
+        <p className="text-xs text-muted-foreground">
+          Live trailing-stop positions are otherwise protected only by this app watching the price —
+          if it goes down, so does that protection. When enabled, every few minutes we place a real
+          stop-loss order on the exchange itself once a trailing position is confirmed in profit, so
+          it stays protected even if the app is offline. Has no effect on fixed SL/TP positions, which
+          already get a resting order at entry.
+        </p>
+      </div>
 
       <Separator />
 
