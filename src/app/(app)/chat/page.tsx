@@ -245,13 +245,13 @@ function ChatInterface({
                         (toolPart.type === 'tool-marketDataTool' || toolPart.type === 'tool-market-data-tool') &&
                         toolPart.state === 'output-available') {
                       autoChartRendered = true
-                      const inp = toolPart.input as { symbol?: string; exchange?: string; timeframe?: string } | undefined
+                      const inp = toolPart.input as { symbol?: string; exchange?: string; timeframe?: string; marketType?: string } | undefined
                       if (inp?.symbol) {
                         return (
                           <Fragment key={partKey}>
                             {renderToolPart(toolPart, `${partKey}-t`)}
                             <TradingViewWidget
-                              tvSymbol={inp.symbol.replace('/', '').toUpperCase()}
+                              tvSymbol={inp.symbol.replace('/', '').toUpperCase() + (inp.marketType === 'swap' ? '.P' : '')}
                               tvExchange={(inp.exchange ?? 'binance').toUpperCase()}
                               tvInterval={TV_INTERVAL_MAP[inp.timeframe ?? '1h'] ?? '60'}
                             />

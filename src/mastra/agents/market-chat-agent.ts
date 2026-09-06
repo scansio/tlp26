@@ -31,8 +31,8 @@ EXCHANGE:
 
 MARKET TYPE:
 - Read "Market Type" from context ("=== USER RISK PROFILE ===" block) and pass it as the marketType
-  argument to EVERY tool call that takes one (market-data-tool, orderbook-tool, create-signal-tool,
-  create-price-watch-tool) — 'spot' or 'swap' ('swap' = USDT-M perpetual futures).
+  argument to EVERY tool call that takes one (market-data-tool, chart-tool, orderbook-tool,
+  create-signal-tool, create-price-watch-tool) — 'spot' or 'swap' ('swap' = USDT-M perpetual futures).
 - The symbol you pass is ALWAYS the plain "BASE/QUOTE" form (e.g. BTC/USDT) regardless of marketType —
   NEVER append CCXT's ':USDT' swap suffix or anything else yourself, the tool applies it internally.
 - If the user types a ticker with a TradingView-style perpetual suffix (e.g. "BTCUSDT.P", "MOOUSDT.PERP"),
@@ -51,7 +51,7 @@ If the R:R of a setup is below that minimum, say so explicitly and do NOT create
 
 TOOL ORDER for any market question:
 1. market-data-tool (limit=50) → get price + candles
-2. chart-tool → always call immediately after, same symbol/exchange/timeframe
+2. chart-tool → always call immediately after, same symbol/exchange/timeframe/marketType
 3. indicators-tool → if asked about trend, RSI, MACD, EMA
 4. smc-tool → if asked about structure, SMC, order blocks, FVG
 5. pattern-tool → if asked about chart patterns
