@@ -24,6 +24,8 @@ import { tradeSignals, tradeExecutions, userExchanges } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
 import { and, eq } from 'drizzle-orm';
 import { toExchangeSymbol, type MarketType } from './market-symbol';
+import { resolveSignalExitMode } from '@/lib/exit-config';
+import { placeProtectiveOrders } from '@/lib/protective-orders';
 
 // Idempotency: setting margin mode to what it already is throws on most
 // exchanges (e.g. binance -4046 "No need to change margin type") — swallow
@@ -145,6 +147,8 @@ export const executeTradeTool = createTool({
       direction,
       entryPrice,
       positionSizeUsdt,
+      sl,
+      tp,
       mode,
       slippagePct: inputSlippage,
       marketType,
@@ -360,6 +364,41 @@ export const executeTradeTool = createTool({
       };
     }
 
+    // -------------------------------------------------------------------------
+    // Resting protective orders (fixed-mode only) — a real exchange-side SL/TP
+    // that fires even if this application's monitor process is down. Trailing
+    // positions skip this: the ratchet needs constant cancel/replace, which is
+    // position-monitor's software-driven job (see its header doc).
+    //
+    // Best-effort: the entry order above already happened and cannot be
+    // undone, so a failure here does not fail the trade — it's recorded with
+    // whatever protective orders did place, and the software poller in
+    // position-monitor.ts remains the fallback protection either way.
+    // -------------------------------------------------------------------------
+    let slOrderId: string | null = null;
+    let tpOrderId: string | null = null;
+    const exitMode = await resolveSignalExitMode(userId, signalId);
+
+    if (exitMode !== 'trailing') {
+      const protective = await placeProtectiveOrders({
+        client,
+        symbol,
+        marketType: effMarketType,
+        direction,
+        amount: orderAmount,
+        stopLossPrice: sl ?? null,
+        takeProfitPrice: tp ?? null,
+      });
+      slOrderId = protective.slOrderId;
+      tpOrderId = protective.tpOrderId;
+      if (protective.errors.length > 0) {
+        console.error(
+          `[execute-trade-tool] Protective order placement issues for ${exchange}/${exchangeSymbol}:`,
+          protective.errors.join('; '),
+        );
+      }
+    }
+
     // Record execution in trade_executions
     const positionSizeUnits = positionSizeUsdt / (fillPrice ?? entryPrice);
     const [execution] = await db
@@ -379,6 +418,8 @@ export const executeTradeTool = createTool({
         marginMode: effMarginMode,
         contractSize: contractSize != null ? String(contractSize) : null,
         orderContracts: orderContracts != null ? String(orderContracts) : null,
+        slOrderId: slOrderId ?? undefined,
+        tpOrderId: tpOrderId ?? undefined,
         entryAt: new Date(),
       })
       .returning({ id: tradeExecutions.id });
@@ -389,6 +430,11 @@ export const executeTradeTool = createTool({
       .set({ status: 'executed', updatedAt: new Date() })
       .where(eq(tradeSignals.id, signalId));
 
+    const protectiveWarning =
+      exitMode !== 'trailing' && (!slOrderId || !tpOrderId)
+        ? ' WARNING: one or more protective SL/TP orders failed to place — the software monitor is the only protection on this position until corrected.'
+        : '';
+
     return {
       success: true,
       executionId: execution.id,
@@ -396,7 +442,7 @@ export const executeTradeTool = createTool({
       fillPrice: fillPrice ?? entryPrice,
       mode: 'live' as const,
       signalStatus: 'executed',
-      message: `Live order placed on ${exchange}: orderId=${exchangeOrderId}, fill=$${(fillPrice ?? entryPrice).toFixed(4)}.`,
+      message: `Live order placed on ${exchange}: orderId=${exchangeOrderId}, fill=$${(fillPrice ?? entryPrice).toFixed(4)}.${protectiveWarning}`,
     };
   },
 });

@@ -21,6 +21,8 @@ import { tradeExecutions, tradeSignals, userExchanges } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
 import { computePnlUsd } from '@/lib/pnl';
 import { toExchangeSymbol, type MarketType } from '@/mastra/tools/market-symbol';
+import { resolveSignalExitMode } from '@/lib/exit-config';
+import { placeProtectiveOrders, cancelProtectiveOrders } from '@/lib/protective-orders';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -76,6 +78,41 @@ async function getExchangeClient(
   }
 }
 
+/**
+ * Cancel the old resting order (if any) and place a new one at `newPrice`,
+ * sized for the position's current remaining amount. Used whenever a live,
+ * fixed-mode position's SL or TP level changes so the exchange-side backstop
+ * stays in sync with what the DB says the level is — otherwise it goes stale
+ * and could fire at the wrong price or not at all.
+ */
+async function replaceRestingOrder(
+  client: Exchange,
+  symbol: string,
+  marketType: MarketType,
+  direction: 'LONG' | 'SHORT',
+  amount: number,
+  kind: 'sl' | 'tp',
+  oldOrderId: string | null,
+  newPrice: number,
+): Promise<string | null> {
+  if (oldOrderId) {
+    await cancelProtectiveOrders(client, symbol, marketType, [oldOrderId]);
+  }
+  const result = await placeProtectiveOrders({
+    client,
+    symbol,
+    marketType,
+    direction,
+    amount,
+    stopLossPrice: kind === 'sl' ? newPrice : null,
+    takeProfitPrice: kind === 'tp' ? newPrice : null,
+  });
+  if (result.errors.length > 0) {
+    console.error(`[positions/[id]] Failed to replace resting ${kind} order:`, result.errors.join('; '));
+  }
+  return kind === 'sl' ? result.slOrderId : result.tpOrderId;
+}
+
 // ---------------------------------------------------------------------------
 // Route handler
 // ---------------------------------------------------------------------------
@@ -108,8 +145,12 @@ export async function PATCH(
       status: tradeExecutions.status,
       signalId: tradeExecutions.signalId,
       direction: tradeSignals.direction,
+      stopLoss: tradeSignals.stopLoss,
+      takeProfit: tradeSignals.takeProfit,
       marketType: tradeExecutions.marketType,
       contractSize: tradeExecutions.contractSize,
+      slOrderId: tradeExecutions.slOrderId,
+      tpOrderId: tradeExecutions.tpOrderId,
     })
     .from(tradeExecutions)
     .leftJoin(tradeSignals, eq(tradeExecutions.signalId, tradeSignals.id))
@@ -179,6 +220,8 @@ export async function PATCH(
       realizedPnl = computePnlUsd(entryPrice, exitPrice, closedSize, direction);
     }
 
+    let restingOrderWarning = '';
+
     if (isFull) {
       await db
         .update(tradeExecutions)
@@ -190,6 +233,14 @@ export async function PATCH(
           realizedPnl: realizedPnl !== null ? String(realizedPnl) : undefined,
         })
         .where(eq(tradeExecutions.id, id));
+
+      // Position is flat — any resting protective orders are now stale.
+      if (isLive && (exec.slOrderId || exec.tpOrderId)) {
+        const client = await getExchangeClient(userId, exec.exchangeName);
+        if (client) {
+          await cancelProtectiveOrders(client, exec.symbol, marketType, [exec.slOrderId, exec.tpOrderId]);
+        }
+      }
     } else {
       // Partial: reduce position size, keep status open
       const newSize = positionSize ? positionSize * (1 - clampedPct / 100) : null;
@@ -197,6 +248,51 @@ export async function PATCH(
         .update(tradeExecutions)
         .set({ positionSize: newSize !== null ? String(newSize) : undefined })
         .where(eq(tradeExecutions.id, id));
+
+      // Resting protective orders were sized for the original (larger) position —
+      // resize them to match what remains, otherwise they overhang the new size.
+      if (isLive && newSize !== null && (exec.slOrderId || exec.tpOrderId)) {
+        const exitMode = await resolveSignalExitMode(userId, exec.signalId);
+        if (exitMode !== 'trailing') {
+          const client = await getExchangeClient(userId, exec.exchangeName);
+          if (client) {
+            const newAmount = marketType === 'swap' ? newSize / contractSize : newSize;
+            const [signal] = exec.signalId
+              ? await db
+                  .select({ stopLoss: tradeSignals.stopLoss, takeProfit: tradeSignals.takeProfit })
+                  .from(tradeSignals)
+                  .where(eq(tradeSignals.id, exec.signalId))
+                  .limit(1)
+              : [undefined];
+
+            const updates: { slOrderId?: string | null; tpOrderId?: string | null } = {};
+            const failures: string[] = [];
+            if (exec.slOrderId && signal?.stopLoss) {
+              updates.slOrderId = await replaceRestingOrder(
+                client, exec.symbol, marketType, direction, newAmount, 'sl', exec.slOrderId, parseFloat(signal.stopLoss),
+              );
+              if (!updates.slOrderId) failures.push('SL');
+            }
+            if (exec.tpOrderId && signal?.takeProfit) {
+              updates.tpOrderId = await replaceRestingOrder(
+                client, exec.symbol, marketType, direction, newAmount, 'tp', exec.tpOrderId, parseFloat(signal.takeProfit),
+              );
+              if (!updates.tpOrderId) failures.push('TP');
+            }
+            if (Object.keys(updates).length > 0) {
+              await db.update(tradeExecutions).set(updates).where(eq(tradeExecutions.id, id));
+            }
+            if (failures.length > 0) {
+              // The old resting order(s) were already cancelled before this replace
+              // attempt — a failure here leaves the position with NO exchange-side
+              // backstop for those levels, not just a stale one. Must not be silent.
+              restingOrderWarning = ` WARNING: failed to resize the resting exchange-side ${failures.join('/')} order — the position has no exchange-side backstop for ${failures.length > 1 ? 'these levels' : 'this level'} until corrected.`;
+            }
+          } else {
+            restingOrderWarning = ' WARNING: no exchange credentials available to resize the resting order(s).';
+          }
+        }
+      }
     }
 
     return NextResponse.json({
@@ -205,9 +301,9 @@ export async function PATCH(
       exitPrice,
       realizedPnl,
       closed: isFull,
-      message: isFull
+      message: (isFull
         ? `Position closed at $${exitPrice.toFixed(4)}`
-        : `Closed ${clampedPct}% at $${exitPrice.toFixed(4)}`,
+        : `Closed ${clampedPct}% at $${exitPrice.toFixed(4)}`) + restingOrderWarning,
     });
   }
 
@@ -233,11 +329,33 @@ export async function PATCH(
       .set({ trailSlPrice: String(entryPrice) })
       .where(eq(tradeExecutions.id, id));
 
+    // Fixed-mode live positions have a resting SL order — it must move too,
+    // otherwise the exchange keeps enforcing the old (pre-breakeven) level.
+    let restingOrderWarning = '';
+    if (isLive && positionSize) {
+      const exitMode = await resolveSignalExitMode(userId, exec.signalId);
+      if (exitMode !== 'trailing') {
+        const client = await getExchangeClient(userId, exec.exchangeName);
+        if (client) {
+          const amount = marketType === 'swap' ? positionSize / contractSize : positionSize;
+          const newSlOrderId = await replaceRestingOrder(
+            client, exec.symbol, marketType, direction, amount, 'sl', exec.slOrderId, entryPrice,
+          );
+          await db.update(tradeExecutions).set({ slOrderId: newSlOrderId }).where(eq(tradeExecutions.id, id));
+          if (!newSlOrderId) {
+            restingOrderWarning = ' WARNING: failed to move the resting exchange-side SL order — only the software monitor enforces breakeven until this is corrected.';
+          }
+        } else {
+          restingOrderWarning = ' WARNING: no exchange credentials available to move the resting SL order.';
+        }
+      }
+    }
+
     return NextResponse.json({
       success: true,
       action: 'breakeven',
       newSl: entryPrice,
-      message: `Stop-loss moved to breakeven ($${entryPrice.toFixed(4)})`,
+      message: `Stop-loss moved to breakeven ($${entryPrice.toFixed(4)})${restingOrderWarning}`,
     });
   }
 
@@ -261,12 +379,50 @@ export async function PATCH(
       })
       .where(eq(tradeSignals.id, exec.signalId));
 
+    // Fixed-mode live positions have resting SL/TP orders on the exchange —
+    // whichever level changed must move there too, or the exchange keeps
+    // enforcing the old price while the DB reports the new one.
+    let restingOrderWarning = '';
+    if (isLive && positionSize) {
+      const exitMode = await resolveSignalExitMode(userId, exec.signalId);
+      if (exitMode !== 'trailing') {
+        const client = await getExchangeClient(userId, exec.exchangeName);
+        if (client) {
+          const amount = marketType === 'swap' ? positionSize / contractSize : positionSize;
+          const updates: { slOrderId?: string | null; tpOrderId?: string | null } = {};
+          const failures: string[] = [];
+
+          if (body.sl !== undefined) {
+            const newSlOrderId = await replaceRestingOrder(
+              client, exec.symbol, marketType, direction, amount, 'sl', exec.slOrderId, body.sl,
+            );
+            updates.slOrderId = newSlOrderId;
+            if (!newSlOrderId) failures.push('SL');
+          }
+          if (body.tp !== undefined) {
+            const newTpOrderId = await replaceRestingOrder(
+              client, exec.symbol, marketType, direction, amount, 'tp', exec.tpOrderId, body.tp,
+            );
+            updates.tpOrderId = newTpOrderId;
+            if (!newTpOrderId) failures.push('TP');
+          }
+
+          await db.update(tradeExecutions).set(updates).where(eq(tradeExecutions.id, id));
+          if (failures.length > 0) {
+            restingOrderWarning = ` WARNING: failed to move the resting exchange-side ${failures.join('/')} order — only the software monitor enforces the new level(s) until this is corrected.`;
+          }
+        } else {
+          restingOrderWarning = ' WARNING: no exchange credentials available to move the resting order(s).';
+        }
+      }
+    }
+
     return NextResponse.json({
       success: true,
       action: 'adjust',
       newSl: body.sl ?? null,
       newTp: body.tp ?? null,
-      message: 'Levels updated',
+      message: `Levels updated${restingOrderWarning}`,
     });
   }
 

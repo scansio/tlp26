@@ -155,6 +155,20 @@
       "when": 1788631692222,
       "tag": "0021_clumsy_vindicator",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1788643536873,
+      "tag": "0022_amazing_golden_guardian",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788693887383,
+      "tag": "0023_bright_morgan_stark",
+      "breakpoints": true
     }
   ]
 }

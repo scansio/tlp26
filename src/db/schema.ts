@@ -53,6 +53,11 @@ export const userRiskProfiles = pgTable('user_risk_profiles', {
   trailTpPct: numeric('trail_tp_pct', { precision: 5, scale: 3 }).default('2.000'),
   // Trail activates immediately (0) or only after price moves X% in profit direction
   trailActivationPct: numeric('trail_activation_pct', { precision: 5, scale: 3 }).default('0.000'),
+  // Profit lock: for live trailing-mode positions, periodically (every few minutes)
+  // materialize the already-continuously-ratcheted software trailSlPrice as a real
+  // resting exchange order once it represents a genuine profit — trailing itself
+  // stays software-only/continuous either way (see position-monitor.ts).
+  profitLockEnabled: boolean('profit_lock_enabled').default(false),
   // Minimum Risk:Reward ratio required to take a trade (e.g. 1.5 means TP must be ≥1.5× the SL distance)
   minRiskRewardRatio: numeric('min_risk_reward_ratio', { precision: 5, scale: 2 }).default('1.50'),
   // Market type: 'spot' or 'swap' (USDT-M perpetual futures). Captured onto each
@@ -192,8 +197,19 @@ export const tradeExecutions = pgTable('trade_executions', {
   // (signalId can be null for manual/copy trades)
   symbol: varchar('symbol', { length: 30 }).notNull().default(''),
   exchangeOrderId: varchar('exchange_order_id', { length: 128 }),
-  // exitOrderId: the SL/TP/close order placed after entry (may differ from entry order)
+  // exitOrderId: the order that actually closed this position — either a resting
+  // slOrderId/tpOrderId that filled on the exchange, or a market order placed by
+  // position-monitor's software-driven close.
   exitOrderId: varchar('exit_order_id', { length: 128 }),
+  // Resting protective orders on the exchange. Fixed-mode: both placed right after
+  // entry. Trailing-mode: normally null (trailing relies on software-driven closes)
+  // — but the periodic profit-lock sync (position-monitor.ts) can populate slOrderId
+  // once a trailing position is confirmed in profit, using profitLockSyncedPrice
+  // below to track what level it reflects. Cancelled/replaced together whenever
+  // SL/TP changes (breakeven, adjust) and whichever didn't fill is cancelled once
+  // the other does.
+  slOrderId: varchar('sl_order_id', { length: 128 }),
+  tpOrderId: varchar('tp_order_id', { length: 128 }),
   entryPrice: numeric('entry_price', { precision: 20, scale: 8 }),
   exitPrice: numeric('exit_price', { precision: 20, scale: 8 }),
   positionSize: numeric('position_size', { precision: 20, scale: 8 }),
@@ -220,6 +236,11 @@ export const tradeExecutions = pgTable('trade_executions', {
   orderContracts: numeric('order_contracts', { precision: 20, scale: 8 }),
   // trailTpPrice: current trailing TP level (set when trailTpActive = true)
   trailTpPrice: numeric('trail_tp_price', { precision: 20, scale: 8 }),
+  // profitLockSyncedPrice: the trailSlPrice level the current slOrderId resting
+  // order (if any) was placed at by the periodic profit-lock sync — lets that
+  // sync skip re-placing an order every cycle when nothing has improved, without
+  // re-fetching order status from the exchange just to check.
+  profitLockSyncedPrice: numeric('profit_lock_synced_price', { precision: 20, scale: 8 }),
   entryAt: timestamp('entry_at', { withTimezone: true }).defaultNow(),
   exitAt: timestamp('exit_at', { withTimezone: true }),
 }, (table) => [

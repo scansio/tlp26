@@ -28,7 +28,8 @@ export type NotificationEvent =
   | 'monitor_disconnected' // WebSocket disconnected after max retries — alert
   | 'daily_limit'         // Daily trade limit reached
   | 'daily_loss_limit'    // Daily loss limit — kill switch activated
-  | 'price_watch_triggered'; // A user-created price watch hit its target
+  | 'price_watch_triggered' // A user-created price watch hit its target
+  | 'exit_order_failed';  // SL/TP/trailing exit triggered but the live close order failed — position still open
 
 export interface NotificationPayload {
   event: NotificationEvent;
@@ -63,6 +64,7 @@ const CRITICAL_EVENTS: Set<NotificationEvent> = new Set([
   // User explicitly asked to be told the moment this level hits — quiet hours
   // are for routine chatter, not a request the user set up themselves.
   'price_watch_triggered',
+  'exit_order_failed',
 ]);
 
 function isCritical(event: NotificationEvent): boolean {
@@ -124,6 +126,10 @@ function formatMessage(payload: NotificationPayload): string {
     case 'price_watch_triggered':
       return truncate(
         `👁️ Price Watch Hit: ${payload.symbol ?? '?'} reached ${payload.triggeredPrice ?? '?'} (target ${payload.targetPrice ?? '?'}). ${payload.actionSummary ?? ''}`.trim()
+      );
+    case 'exit_order_failed':
+      return truncate(
+        `⚠️ EXIT FAILED: ${payload.symbol ?? '?'} hit its exit level at ${payload.exitPrice ?? '?'} but the live close order failed (${payload.reason ?? 'unknown error'}). Position is still OPEN — check it manually.`
       );
     default:
       return truncate(`📢 Trade notification event: ${event}`);
