@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SignalChart } from '@/components/trade/SignalChart'
+import { buildTradingViewUrl } from '@/lib/tradingview-url'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 import { Dialog, DialogOverlay, DialogPortal } from '@/components/ui/dialog'
 import {
@@ -598,7 +599,7 @@ export function PositionDrawer({
             </div>
             <div className="flex items-center gap-2">
               <a
-                href={`https://www.tradingview.com/chart/?symbol=BINANCE:${position.symbol.replace('/', '')}`}
+                href={buildTradingViewUrl(position.symbol, position.exchangeName, position.marketType)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"

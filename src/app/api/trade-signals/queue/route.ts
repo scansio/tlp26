@@ -13,7 +13,7 @@ import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { eq, desc, and, or } from 'drizzle-orm';
 import { db } from '@/db';
-import { tradeSignals, userRiskProfiles } from '@/db/schema';
+import { tradeSignals, userRiskProfiles, userExchanges } from '@/db/schema';
 
 // Per-exchange taker fee rates — mirrors risk-tool.ts and main trade-signals route
 const DEFAULT_TAKER_FEE = 0.0004;
@@ -107,6 +107,15 @@ export async function GET() {
   const riskPerTradePct = profile?.riskPerTradePct ? Number(profile.riskPerTradePct) : 1;
   const accountBalance = profile?.paperBalanceUsd ? Number(profile.paperBalanceUsd) : 10_000;
 
+  // Signals themselves carry no exchange (only marketType) — resolve the user's
+  // connected exchange once so the UI can build correct chart/TradingView links.
+  const [exchangeRow] = await db
+    .select({ exchangeName: userExchanges.exchangeName })
+    .from(userExchanges)
+    .where(and(eq(userExchanges.userId, userId), eq(userExchanges.status, 'active')))
+    .limit(1);
+  const connectedExchange = exchangeRow?.exchangeName ?? null;
+
   // For auto-execution users: return history (last 50 signals, any status)
   // For manual users: return only pending signals
   const rows = await db
@@ -176,5 +185,6 @@ export async function GET() {
     signals,
     tradingMode,
     executionMode: profile?.executionMode ?? 'paper',
+    connectedExchange,
   });
 }

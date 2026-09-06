@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SignalChart } from '@/components/trade/SignalChart';
+import { buildTradingViewUrl } from '@/lib/tradingview-url';
 import { Dialog as DialogPrimitive } from 'radix-ui';
 import {
   Dialog,
@@ -213,12 +214,14 @@ interface SignalApprovalCardProps {
   signal: QueueSignal;
   showActions: boolean; // false for auto-execution users (history-only view)
   onAction: (id: string, action: 'approve' | 'reject') => Promise<void>;
+  connectedExchange?: string | null;
 }
 
 export function SignalApprovalCard({
   signal,
   showActions,
   onAction,
+  connectedExchange,
 }: SignalApprovalCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [showChart, setShowChart] = useState(false);
@@ -555,7 +558,7 @@ export function SignalApprovalCard({
             </div>
             <div className="flex items-center gap-2">
               <a
-                href={`https://www.tradingview.com/chart/?symbol=BINANCE:${signal.symbol.replace('/', '')}`}
+                href={buildTradingViewUrl(signal.symbol, connectedExchange, signal.marketType)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
@@ -588,6 +591,7 @@ export function SignalApprovalCard({
               takeProfit={signal.takeProfit != null ? Number(signal.takeProfit) : null}
               direction={signal.direction}
               marketType={signal.marketType}
+              exchange={connectedExchange}
               smcLevels={
                 Array.isArray(signal.rawPayload?.smcLevels)
                   ? (signal.rawPayload!.smcLevels as Array<{ type: string; priceLevel: number; direction: 'BULLISH' | 'BEARISH' }>)

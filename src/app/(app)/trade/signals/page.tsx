@@ -25,6 +25,7 @@ interface QueueResponse {
   signals: QueueSignal[];
   tradingMode: string; // 'auto' | 'manual'
   executionMode: string; // 'paper' | 'live'
+  connectedExchange: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -35,6 +36,7 @@ export default function SignalQueuePage() {
   const [signals, setSignals] = useState<QueueSignal[]>([]);
   const [tradingMode, setTradingMode] = useState<string>('manual');
   const [executionMode, setExecutionMode] = useState<string>('paper');
+  const [connectedExchange, setConnectedExchange] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
@@ -52,6 +54,7 @@ export default function SignalQueuePage() {
       setSignals(data.signals);
       setTradingMode(data.tradingMode ?? 'manual');
       setExecutionMode(data.executionMode ?? 'paper');
+      setConnectedExchange(data.connectedExchange ?? null);
       setLastRefreshed(new Date());
     } catch (err) {
       setError(
@@ -237,6 +240,7 @@ export default function SignalQueuePage() {
                 signal={signal}
                 showActions={isManualMode}
                 onAction={handleAction}
+                connectedExchange={connectedExchange}
               />
             ))}
           </div>
