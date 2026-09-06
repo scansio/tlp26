@@ -94,6 +94,22 @@ test('placeProtectiveOrders passes reduceOnly for swap but an empty params objec
   assert.deepEqual(calls[0][6], {});
 });
 
+test('placeProtectiveOrders adds hedged when the account is in dual-side position mode', async () => {
+  const calls: unknown[][] = [];
+  const client = fakeClient({
+    createStopLossOrder: async (...args: unknown[]) => {
+      calls.push(args);
+      return makeOrder('sl-1');
+    },
+  });
+
+  await placeProtectiveOrders({
+    client, symbol: 'BTC/USDT', marketType: 'swap', direction: 'LONG', amount: 1,
+    stopLossPrice: 90, takeProfitPrice: null, hedged: true,
+  });
+  assert.deepEqual(calls[0][6], { reduceOnly: true, hedged: true });
+});
+
 test('placeProtectiveOrders flips side for SHORT vs LONG', async () => {
   const calls: unknown[][] = [];
   const client = fakeClient({

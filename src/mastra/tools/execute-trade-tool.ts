@@ -23,7 +23,7 @@ import { db } from '@/db';
 import { tradeSignals, tradeExecutions, userExchanges } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
 import { and, eq } from 'drizzle-orm';
-import { toExchangeSymbol, type MarketType } from './market-symbol';
+import { toExchangeSymbol, resolveHedgeMode, type MarketType } from './market-symbol';
 import { resolveSignalExitMode } from '@/lib/exit-config';
 import { placeProtectiveOrders } from '@/lib/protective-orders';
 
@@ -267,6 +267,7 @@ export const executeTradeTool = createTool({
     let fillPrice: number | null = null;
     let contractSize: number | null = null;
     let orderContracts: number | null = null;
+    let hedged = false;
 
     if (effMarketType === 'swap') {
       // setLeverage/setMarginMode are real account mutations — only ever
@@ -305,6 +306,7 @@ export const executeTradeTool = createTool({
         typeof market.contractSize === 'number' && market.contractSize > 0 ? market.contractSize : 1;
       contractSize = resolvedContractSize;
       orderContracts = amountUnits / resolvedContractSize;
+      hedged = await resolveHedgeMode(client, exchangeSymbol);
 
       try {
         await client.setMarginMode(effMarginMode, exchangeSymbol);
@@ -345,8 +347,10 @@ export const executeTradeTool = createTool({
 
     const orderAmount = orderContracts ?? amountUnits;
 
+    const orderParams = effMarketType === 'swap' && hedged ? { hedged: true } : undefined;
+
     try {
-      const order = await client.createOrder(exchangeSymbol, 'market', side, orderAmount);
+      const order = await client.createOrder(exchangeSymbol, 'market', side, orderAmount, undefined, orderParams);
       exchangeOrderId = order.id ?? null;
       // Use actual fill price if returned, otherwise fall back to entry price
       fillPrice = order.average ?? order.price ?? entryPrice;
@@ -388,6 +392,7 @@ export const executeTradeTool = createTool({
         amount: orderAmount,
         stopLossPrice: sl ?? null,
         takeProfitPrice: tp ?? null,
+        hedged,
       });
       slOrderId = protective.slOrderId;
       tpOrderId = protective.tpOrderId;

@@ -20,7 +20,7 @@ import { db } from '@/db';
 import { tradeExecutions, tradeSignals, userExchanges } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
 import { computePnlUsd } from '@/lib/pnl';
-import { toExchangeSymbol, type MarketType } from '@/mastra/tools/market-symbol';
+import { toExchangeSymbol, resolveHedgeMode, type MarketType } from '@/mastra/tools/market-symbol';
 import { resolveSignalExitMode } from '@/lib/exit-config';
 import { placeProtectiveOrders, cancelProtectiveOrders } from '@/lib/protective-orders';
 
@@ -98,6 +98,7 @@ async function replaceRestingOrder(
   if (oldOrderId) {
     await cancelProtectiveOrders(client, symbol, marketType, [oldOrderId]);
   }
+  const hedged = marketType === 'swap' ? await resolveHedgeMode(client, toExchangeSymbol(symbol, marketType)) : false;
   const result = await placeProtectiveOrders({
     client,
     symbol,
@@ -106,6 +107,7 @@ async function replaceRestingOrder(
     amount,
     stopLossPrice: kind === 'sl' ? newPrice : null,
     takeProfitPrice: kind === 'tp' ? newPrice : null,
+    hedged,
   });
   if (result.errors.length > 0) {
     console.error(`[positions/[id]] Failed to replace resting ${kind} order:`, result.errors.join('; '));
@@ -192,6 +194,7 @@ export async function PATCH(
 
       const closeSide = direction === 'LONG' ? 'sell' : 'buy';
       const closeAmount = marketType === 'swap' ? closeSize / contractSize : closeSize;
+      const hedged = marketType === 'swap' ? await resolveHedgeMode(client, exchangeSymbol) : false;
       try {
         const order = await client.createOrder(
           exchangeSymbol,
@@ -199,7 +202,7 @@ export async function PATCH(
           closeSide,
           closeAmount,
           undefined,
-          marketType === 'swap' ? { reduceOnly: true } : undefined,
+          marketType === 'swap' ? { reduceOnly: true, ...(hedged ? { hedged: true } : {}) } : undefined,
         );
         exitPrice = order.average ?? order.price ?? null;
       } catch (err) {

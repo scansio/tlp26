@@ -212,7 +212,7 @@ function ReasoningSection({ signal }: { signal: QueueSignal }) {
 
 interface SignalApprovalCardProps {
   signal: QueueSignal;
-  showActions: boolean; // false for auto-execution users (history-only view)
+  showActions: boolean;
   onAction: (id: string, action: 'approve' | 'reject') => Promise<void>;
   connectedExchange?: string | null;
 }
@@ -474,7 +474,7 @@ export function SignalApprovalCard({
           </div>
         )}
 
-        {/* Approve / Reject buttons — only shown for pending signals in manual mode */}
+        {/* Approve / Reject buttons — shown for any pending signal, regardless of trading mode */}
         {showActions && isPending && !actionResult && (
           <div className="flex items-center gap-3 pt-1">
             <Button

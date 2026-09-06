@@ -67,7 +67,7 @@ import { accruePublisherFee } from '@/lib/publisher-fee';
 import { fetchUserExitConfig } from '@/lib/exit-config';
 import { placeProtectiveOrders, cancelProtectiveOrders } from '@/lib/protective-orders';
 import { computePnlUsd, type PositionDirection } from '@/lib/pnl';
-import { toExchangeSymbol, type MarketType } from '@/mastra/tools/market-symbol';
+import { toExchangeSymbol, resolveHedgeMode, type MarketType } from '@/mastra/tools/market-symbol';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -566,6 +566,8 @@ async function syncProfitLockPosition(client: Exchange, position: OpenPosition):
     await cancelProtectiveOrders(client, position.symbol, marketType, [position.slOrderId]);
   }
 
+  const hedged = marketType === 'swap' ? await resolveHedgeMode(client, toExchangeSymbol(position.symbol, marketType)) : false;
+
   const result = await placeProtectiveOrders({
     client,
     symbol: position.symbol,
@@ -574,6 +576,7 @@ async function syncProfitLockPosition(client: Exchange, position: OpenPosition):
     amount,
     stopLossPrice: trailSlPrice,
     takeProfitPrice: null,
+    hedged,
   });
 
   if (result.slOrderId) {
@@ -819,6 +822,8 @@ async function placeMarketClose(
     }
   }
 
+  const hedged = marketType === 'swap' ? await resolveHedgeMode(client, exchangeSymbol) : false;
+
   try {
     const order = await client.createOrder(
       exchangeSymbol,
@@ -826,7 +831,7 @@ async function placeMarketClose(
       closeSide,
       closeAmount,
       undefined,
-      marketType === 'swap' ? { reduceOnly: true } : undefined,
+      marketType === 'swap' ? { reduceOnly: true, ...(hedged ? { hedged: true } : {}) } : undefined,
     );
 
     let exitPrice = order.average ?? order.price ?? null;

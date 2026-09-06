@@ -3,8 +3,9 @@
 /**
  * /trade/signals — Signal Approval Queue
  *
- * Manual execution users: see pending signals with Approve / Reject buttons.
- * Auto execution users: see history-only view — signals execute automatically.
+ * Pending signals always show Approve / Reject buttons, in both manual and
+ * auto-execution mode — auto mode just means signals also execute on their
+ * own if left untouched; approving/rejecting here still overrides that.
  *
  * Queue auto-refreshes every 15 seconds.
  * Signals expire after 1 hour (enforced by /api/cron/expire-signals).
@@ -103,7 +104,6 @@ export default function SignalQueuePage() {
   );
 
   const isAutoMode = tradingMode === 'auto';
-  const isManualMode = !isAutoMode;
   const pendingCount = signals.filter((s) => s.status === 'pending').length;
 
   return (
@@ -112,12 +112,10 @@ export default function SignalQueuePage() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold">
-              {isAutoMode ? 'Signal History' : 'Signal Approval Queue'}
-            </h1>
+            <h1 className="text-2xl font-bold">Signal Approval Queue</h1>
 
-            {/* Pending count badge (manual only) */}
-            {isManualMode && pendingCount > 0 && (
+            {/* Pending count badge */}
+            {pendingCount > 0 && (
               <Badge className="text-sm">
                 {pendingCount} pending
               </Badge>
@@ -141,7 +139,7 @@ export default function SignalQueuePage() {
 
           <p className="text-muted-foreground mt-1 text-sm">
             {isAutoMode
-              ? 'You are on auto-execution mode. Signals execute automatically — this is a read-only history view.'
+              ? 'You are on auto-execution mode — pending signals below will execute automatically if left untouched. Approve to execute now, or Reject to cancel before that happens.'
               : 'Review AI-generated and webhook trade signals before they are executed. Signals expire after 1 hour.'}
           </p>
 
@@ -220,15 +218,15 @@ export default function SignalQueuePage() {
             <Card className="p-4 bg-muted/50 border-dashed">
               <p className="text-sm text-muted-foreground">
                 <span className="font-medium text-foreground">Auto-execution is active.</span>{' '}
-                Signals listed below were or will be executed automatically.
-                Switch to manual mode in your{' '}
+                Pending signals below will execute automatically if left untouched — use Approve
+                or Reject to override before that happens. Switch to manual mode in your{' '}
                 <a
                   href="/risk-profile"
                   className="text-primary underline underline-offset-2"
                 >
                   risk profile
                 </a>{' '}
-                to review signals before execution.
+                to always review signals before execution.
               </p>
             </Card>
           )}
@@ -238,7 +236,7 @@ export default function SignalQueuePage() {
               <SignalApprovalCard
                 key={signal.id}
                 signal={signal}
-                showActions={isManualMode}
+                showActions
                 onAction={handleAction}
                 connectedExchange={connectedExchange}
               />

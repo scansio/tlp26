@@ -47,3 +47,23 @@ export function configureMarketType(client: Exchange, exchangeId: string, market
   }
   typed.options = options;
 }
+
+/**
+ * Resolve whether the account is in dual-side/hedge position mode, so swap
+ * order calls can pass the unified ccxt `hedged` param and get the correct
+ * `positionSide` computed for them. Needed because BingX (and binance) reject
+ * swap orders that omit `positionSide` while the account is in hedge mode
+ * (BingX error 109400: "In the Hedge mode, the 'PositionSide' field can only
+ * be set to LONG or SHORT."). Exchanges without `fetchPositionMode` (e.g.
+ * bybit in this ccxt version) fall back to one-way (false) — same as the
+ * unaware behavior before this existed.
+ */
+export async function resolveHedgeMode(client: Exchange, symbol: string): Promise<boolean> {
+  if (!client.has['fetchPositionMode']) return false;
+  try {
+    const mode = (await client.fetchPositionMode(symbol)) as { hedged?: boolean };
+    return Boolean(mode?.hedged);
+  } catch {
+    return false;
+  }
+}

@@ -20,6 +20,7 @@ export interface ProtectiveOrderParams {
   amount: number; // base units (spot) or contracts (swap) — already resolved by caller
   stopLossPrice: number | null;
   takeProfitPrice: number | null;
+  hedged?: boolean; // account is in dual-side/hedge position mode — see resolveHedgeMode()
 }
 
 export interface ProtectiveOrderResult {
@@ -37,10 +38,11 @@ export interface ProtectiveOrderResult {
 export async function placeProtectiveOrders(
   params: ProtectiveOrderParams,
 ): Promise<ProtectiveOrderResult> {
-  const { client, symbol, marketType, direction, amount, stopLossPrice, takeProfitPrice } = params;
+  const { client, symbol, marketType, direction, amount, stopLossPrice, takeProfitPrice, hedged } = params;
   const exchangeSymbol = toExchangeSymbol(symbol, marketType);
   const closeSide = direction === 'LONG' ? 'sell' : 'buy';
-  const reduceOnlyParams = marketType === 'swap' ? { reduceOnly: true } : {};
+  const reduceOnlyParams =
+    marketType === 'swap' ? { reduceOnly: true, ...(hedged ? { hedged: true } : {}) } : {};
 
   const errors: string[] = [];
   let slOrderId: string | null = null;
