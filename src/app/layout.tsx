@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Inter } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { shadcn } from "@clerk/ui/themes";
@@ -24,6 +24,12 @@ export const metadata: Metadata = {
   title: "TLP26 — AI Trading Platform",
   description: "AI-powered multi-user crypto trading platform with real-time signals and automated execution.",
   icons: { icon: '/icon.svg' },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

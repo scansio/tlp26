@@ -210,120 +210,127 @@ function StatCard({
   className?: string;
 }) {
   return (
-    <Card className="p-4 space-y-1">
-      <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className={`text-xl font-semibold tabular-nums ${className}`}>{value}</p>
+    <Card className="p-3 md:p-4 space-y-1 min-w-0">
+      <p className="text-xs uppercase tracking-wide text-muted-foreground truncate">{label}</p>
+      <p className={`text-lg md:text-xl font-semibold tabular-nums ${className}`}>{value}</p>
     </Card>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Component: Expandable trade detail
+// Component: Expandable trade detail (shared content, wrapped differently
+// for the desktop table row vs. the mobile stacked card)
 // ---------------------------------------------------------------------------
 
-function TradeDetail({ trade }: { trade: Trade }) {
+function TradeDetailContent({ trade }: { trade: Trade }) {
   const ind = trade.indicators;
 
   return (
-    <tr>
-      <td colSpan={9} className="px-4 pb-4 pt-0 bg-muted/30">
-        <div className="rounded-md border bg-background p-4 space-y-4 text-sm">
+    <div className="rounded-md border bg-background p-4 space-y-4 text-sm min-w-0">
 
-          {/* AI Reasoning */}
-          {trade.reasoning ? (
-            <div>
-              <p className="font-medium mb-1">AI Reasoning</p>
-              <p className="text-muted-foreground leading-relaxed whitespace-pre-wrap text-xs">
-                {trade.reasoning}
-              </p>
+      {/* AI Reasoning */}
+      {trade.reasoning ? (
+        <div>
+          <p className="font-medium mb-1">AI Reasoning</p>
+          <p className="text-muted-foreground leading-relaxed whitespace-pre-wrap text-xs">
+            {trade.reasoning}
+          </p>
+        </div>
+      ) : (
+        <p className="text-muted-foreground italic text-xs">No reasoning available.</p>
+      )}
+
+      {/* Indicators */}
+      {ind && (
+        <>
+          <Separator />
+          <div>
+            <p className="font-medium mb-2">Indicator Values at Signal Time</p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 text-xs text-muted-foreground">
+              <div><span className="font-medium text-foreground">RSI:</span> {ind.rsi?.toFixed(2) ?? '—'}</div>
+              <div><span className="font-medium text-foreground">EMA 20:</span> {ind.ema20 !== null ? formatPrice(ind.ema20) : '—'}</div>
+              <div><span className="font-medium text-foreground">EMA 50:</span> {ind.ema50 !== null ? formatPrice(ind.ema50) : '—'}</div>
+              <div><span className="font-medium text-foreground">EMA 200:</span> {ind.ema200 !== null ? formatPrice(ind.ema200) : '—'}</div>
+              <div><span className="font-medium text-foreground">EMA Alignment:</span> {ind.emaAlignment ?? '—'}</div>
+              <div><span className="font-medium text-foreground">MACD Line:</span> {ind.macdLine?.toFixed(4) ?? '—'}</div>
+              <div><span className="font-medium text-foreground">MACD Signal:</span> {ind.macdSignal?.toFixed(4) ?? '—'}</div>
+              <div><span className="font-medium text-foreground">MACD Histogram:</span> {ind.macdHistogram?.toFixed(4) ?? '—'}</div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* News sentiment & On-chain bias captured at signal time */}
+      <Separator />
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <p className="font-medium mb-1">News Sentiment</p>
+          {trade.newsSentiment != null ? (
+            <div className="text-xs text-muted-foreground space-y-0.5">
+              <div>
+                <span className="font-medium text-foreground">Bias:</span>{' '}
+                {trade.newsSentiment}
+              </div>
+              {trade.newsSentimentScore != null && (
+                <div>
+                  <span className="font-medium text-foreground">Score:</span>{' '}
+                  {trade.newsSentimentScore.toFixed(4)}
+                </div>
+              )}
             </div>
           ) : (
-            <p className="text-muted-foreground italic text-xs">No reasoning available.</p>
+            <p className="text-xs text-muted-foreground italic">Not available for this signal.</p>
           )}
-
-          {/* Indicators */}
-          {ind && (
-            <>
-              <Separator />
-              <div>
-                <p className="font-medium mb-2">Indicator Values at Signal Time</p>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1 text-xs text-muted-foreground">
-                  <div><span className="font-medium text-foreground">RSI:</span> {ind.rsi?.toFixed(2) ?? '—'}</div>
-                  <div><span className="font-medium text-foreground">EMA 20:</span> {ind.ema20 !== null ? formatPrice(ind.ema20) : '—'}</div>
-                  <div><span className="font-medium text-foreground">EMA 50:</span> {ind.ema50 !== null ? formatPrice(ind.ema50) : '—'}</div>
-                  <div><span className="font-medium text-foreground">EMA 200:</span> {ind.ema200 !== null ? formatPrice(ind.ema200) : '—'}</div>
-                  <div><span className="font-medium text-foreground">EMA Alignment:</span> {ind.emaAlignment ?? '—'}</div>
-                  <div><span className="font-medium text-foreground">MACD Line:</span> {ind.macdLine?.toFixed(4) ?? '—'}</div>
-                  <div><span className="font-medium text-foreground">MACD Signal:</span> {ind.macdSignal?.toFixed(4) ?? '—'}</div>
-                  <div><span className="font-medium text-foreground">MACD Histogram:</span> {ind.macdHistogram?.toFixed(4) ?? '—'}</div>
-                </div>
-              </div>
-            </>
-          )}
-
-          {/* News sentiment & On-chain bias captured at signal time */}
-          <Separator />
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <p className="font-medium mb-1">News Sentiment</p>
-              {trade.newsSentiment != null ? (
-                <div className="text-xs text-muted-foreground space-y-0.5">
-                  <div>
-                    <span className="font-medium text-foreground">Bias:</span>{' '}
-                    {trade.newsSentiment}
-                  </div>
-                  {trade.newsSentimentScore != null && (
-                    <div>
-                      <span className="font-medium text-foreground">Score:</span>{' '}
-                      {trade.newsSentimentScore.toFixed(4)}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground italic">Not available for this signal.</p>
-              )}
-            </div>
-            <div>
-              <p className="font-medium mb-1">On-Chain Bias</p>
-              {trade.onChainFundingBias != null ? (
-                <div className="text-xs text-muted-foreground space-y-0.5">
-                  <div>
-                    <span className="font-medium text-foreground">Funding Bias:</span>{' '}
-                    {trade.onChainFundingBias}
-                  </div>
-                  {trade.onChainFundingRate != null && (
-                    <div>
-                      <span className="font-medium text-foreground">Funding Rate:</span>{' '}
-                      {trade.onChainFundingRate.toFixed(4)}%
-                    </div>
-                  )}
-                  {trade.onChainNetflow != null && (
-                    <div>
-                      <span className="font-medium text-foreground">Exchange Netflow:</span>{' '}
-                      {trade.onChainNetflow.toFixed(2)}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground italic">Not available for this signal.</p>
-              )}
-            </div>
-          </div>
-
-          {/* Confidence + source */}
-          <Separator />
-          <div className="flex flex-wrap gap-4 text-xs">
-            <div>
-              <span className="font-medium text-foreground">Confidence:</span>{' '}
-              {trade.confidence ?? '—'}
-            </div>
-            <div>
-              <span className="font-medium text-foreground">Primary Signal Source:</span>{' '}
-              {trade.source}
-            </div>
-          </div>
-
         </div>
+        <div>
+          <p className="font-medium mb-1">On-Chain Bias</p>
+          {trade.onChainFundingBias != null ? (
+            <div className="text-xs text-muted-foreground space-y-0.5">
+              <div>
+                <span className="font-medium text-foreground">Funding Bias:</span>{' '}
+                {trade.onChainFundingBias}
+              </div>
+              {trade.onChainFundingRate != null && (
+                <div>
+                  <span className="font-medium text-foreground">Funding Rate:</span>{' '}
+                  {trade.onChainFundingRate.toFixed(4)}%
+                </div>
+              )}
+              {trade.onChainNetflow != null && (
+                <div>
+                  <span className="font-medium text-foreground">Exchange Netflow:</span>{' '}
+                  {trade.onChainNetflow.toFixed(2)}
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground italic">Not available for this signal.</p>
+          )}
+        </div>
+      </div>
+
+      {/* Confidence + source */}
+      <Separator />
+      <div className="flex flex-wrap gap-4 text-xs">
+        <div>
+          <span className="font-medium text-foreground">Confidence:</span>{' '}
+          {trade.confidence ?? '—'}
+        </div>
+        <div>
+          <span className="font-medium text-foreground">Primary Signal Source:</span>{' '}
+          {trade.source}
+        </div>
+      </div>
+
+    </div>
+  );
+}
+
+function TradeDetail({ trade }: { trade: Trade }) {
+  return (
+    <tr>
+      <td colSpan={9} className="px-4 pb-4 pt-0 bg-muted/30">
+        <TradeDetailContent trade={trade} />
       </td>
     </tr>
   );
@@ -400,6 +407,97 @@ function TradeRow({ trade }: { trade: Trade }) {
 }
 
 // ---------------------------------------------------------------------------
+// Component: Trade card (mobile, < md)
+// ---------------------------------------------------------------------------
+
+function TradeCard({ trade }: { trade: Trade }) {
+  const [expanded, setExpanded] = useState(false);
+  const pnlVal = trade.realizedPnl;
+  const pnlPctVal = trade.realizedPnlPct;
+
+  return (
+    <Card className="p-4 min-w-0">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full text-left min-h-11"
+        aria-expanded={expanded}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="font-medium text-sm truncate">{trade.symbol}</p>
+            <p className="text-xs text-muted-foreground">{formatDateTime(trade.entryAt)}</p>
+          </div>
+          <div className="flex items-center gap-1 flex-wrap justify-end shrink-0">
+            {trade.direction ? (
+              <Badge
+                variant={trade.direction === 'LONG' ? 'default' : 'destructive'}
+                className="text-xs"
+              >
+                {trade.direction}
+              </Badge>
+            ) : null}
+            {trade.mode === 'paper' && (
+              <Badge variant="outline" className="text-xs border-blue-400 text-blue-600 dark:text-blue-400">
+                PAPER
+              </Badge>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">Strategy</p>
+            <p className="truncate">{trade.strategy ?? '—'}</p>
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">Status</p>
+            <Badge
+              variant={
+                trade.status === 'closed'
+                  ? 'secondary'
+                  : trade.status === 'cancelled'
+                    ? 'outline'
+                    : 'default'
+              }
+              className="text-xs"
+            >
+              {trade.status ?? 'unknown'}
+            </Badge>
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">Entry</p>
+            <p className="tabular-nums">{formatPrice(trade.entryPrice)}</p>
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">Exit</p>
+            <p className="tabular-nums">{formatPrice(trade.exitPrice)}</p>
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">P&amp;L ($)</p>
+            <p className={`tabular-nums font-medium ${pnlClass(pnlVal)}`}>{formatPnl(pnlVal)}</p>
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">P&amp;L (%)</p>
+            <p className={`tabular-nums ${pnlClass(pnlPctVal)}`}>{formatPct(pnlPctVal)}</p>
+          </div>
+        </div>
+
+        <p className="mt-3 text-xs text-primary underline underline-offset-2">
+          {expanded ? 'Hide details' : 'Show details'}
+        </p>
+      </button>
+
+      {expanded && (
+        <div className="mt-3">
+          <TradeDetailContent trade={trade} />
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component: Multi-select toggle buttons
 // ---------------------------------------------------------------------------
 
@@ -425,13 +523,13 @@ function MultiSelect({
   return (
     <div className="space-y-1">
       <label className="text-xs text-muted-foreground uppercase tracking-wide">{label}</label>
-      <div className="flex flex-wrap gap-1">
+      <div className="flex flex-wrap gap-2">
         {options.map((opt) => (
           <button
             key={opt}
             type="button"
             onClick={() => toggle(opt)}
-            className={`px-2 py-0.5 text-xs rounded border transition-colors ${
+            className={`px-3 py-1.5 min-h-9 text-xs rounded border transition-colors ${
               selected.includes(opt)
                 ? 'bg-primary text-primary-foreground border-primary'
                 : 'border-border text-muted-foreground hover:border-foreground hover:text-foreground'
@@ -522,20 +620,21 @@ export default function TradeHistoryPage() {
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="max-w-7xl mx-auto p-4 sm:p-6 space-y-6">
+    <div className="max-w-7xl mx-auto p-4 sm:p-6 space-y-6 w-full min-w-0">
 
       {/* Page header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Trade History</h1>
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-bold">Trade History</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             Complete log of all closed trades with AI reasoning and performance stats.
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="grid grid-cols-3 gap-2 sm:flex sm:items-center sm:w-auto">
           <Button
             variant="outline"
             size="sm"
+            className="h-11 sm:h-8"
             onClick={() => setShowFilters((v) => !v)}
           >
             {showFilters ? 'Hide Filters' : 'Filters'}
@@ -543,6 +642,7 @@ export default function TradeHistoryPage() {
           <Button
             variant="outline"
             size="sm"
+            className="h-11 sm:h-8"
             onClick={() => exportToCsv(trades)}
             disabled={trades.length === 0}
           >
@@ -551,6 +651,7 @@ export default function TradeHistoryPage() {
           <Button
             variant="ghost"
             size="sm"
+            className="h-11 sm:h-8"
             onClick={() => void fetchHistory(page, filters)}
             disabled={loading}
           >
@@ -560,7 +661,7 @@ export default function TradeHistoryPage() {
       </div>
 
       {/* Paper trade toggle */}
-      <div className="flex items-center gap-2">
+      <label className="flex items-center gap-2 min-h-11 py-1 -my-1 cursor-pointer w-fit">
         <button
           type="button"
           onClick={() => {
@@ -569,7 +670,7 @@ export default function TradeHistoryPage() {
             setDraftFilters(next);
             setPage(1);
           }}
-          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+          className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
             filters.includePaper ? 'bg-primary' : 'bg-muted'
           }`}
         >
@@ -580,7 +681,7 @@ export default function TradeHistoryPage() {
           />
         </button>
         <span className="text-sm text-muted-foreground">Show paper trades</span>
-      </div>
+      </label>
 
       {/* Filter panel */}
       {showFilters && (
@@ -594,7 +695,7 @@ export default function TradeHistoryPage() {
                 type="date"
                 value={draftFilters.dateFrom}
                 onChange={(e) => setDraftFilters((f) => ({ ...f, dateFrom: e.target.value }))}
-                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                className="w-full h-11 sm:h-9 rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
               />
             </div>
             <div className="space-y-1">
@@ -603,7 +704,7 @@ export default function TradeHistoryPage() {
                 type="date"
                 value={draftFilters.dateTo}
                 onChange={(e) => setDraftFilters((f) => ({ ...f, dateTo: e.target.value }))}
-                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                className="w-full h-11 sm:h-9 rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
               />
             </div>
 
@@ -618,7 +719,7 @@ export default function TradeHistoryPage() {
                     outcome: e.target.value as Filters['outcome'],
                   }))
                 }
-                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                className="w-full h-11 sm:h-9 rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
               >
                 <option value="all">All</option>
                 <option value="profit">Profit</option>
@@ -637,7 +738,7 @@ export default function TradeHistoryPage() {
                     source: e.target.value as Filters['source'],
                   }))
                 }
-                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                className="w-full h-11 sm:h-9 rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
               >
                 <option value="all">All Sources</option>
                 <option value="ai">AI</option>
@@ -664,11 +765,11 @@ export default function TradeHistoryPage() {
             onChange={(vals) => setDraftFilters((f) => ({ ...f, strategies: vals }))}
           />
 
-          <div className="flex items-center gap-2 pt-1">
-            <Button size="sm" onClick={applyFilters}>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-1">
+            <Button size="sm" className="h-11 sm:h-8 w-full sm:w-auto" onClick={applyFilters}>
               Apply Filters
             </Button>
-            <Button variant="ghost" size="sm" onClick={clearFilters}>
+            <Button variant="ghost" size="sm" className="h-11 sm:h-8 w-full sm:w-auto" onClick={clearFilters}>
               Clear All
             </Button>
           </div>
@@ -682,7 +783,7 @@ export default function TradeHistoryPage() {
           <Button
             variant="outline"
             size="sm"
-            className="mt-2"
+            className="mt-2 h-11 sm:h-8 w-full sm:w-auto"
             onClick={() => void fetchHistory(page, filters)}
           >
             Retry
@@ -737,10 +838,18 @@ export default function TradeHistoryPage() {
         </Card>
       )}
 
-      {/* Trade table */}
+      {/* Trade table (md+) / trade cards (mobile) */}
       {!loading && trades.length > 0 && (
         <>
-          <Card className="overflow-hidden">
+          {/* Mobile: stacked cards */}
+          <div className="space-y-3 md:hidden">
+            {trades.map((trade) => (
+              <TradeCard key={trade.id} trade={trade} />
+            ))}
+          </div>
+
+          {/* Desktop: data table */}
+          <Card className="hidden md:block overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -767,14 +876,15 @@ export default function TradeHistoryPage() {
 
           {/* Pagination */}
           {pagination && (
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">
+            <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 text-sm">
+              <span className="text-muted-foreground text-center sm:text-left">
                 {pagination.total.toLocaleString()} trade{pagination.total !== 1 ? 's' : ''} &middot; Page {pagination.page} of {pagination.totalPages}
               </span>
               <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
                   size="sm"
+                  className="h-11 sm:h-8 flex-1 sm:flex-none"
                   disabled={page <= 1 || loading}
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                 >
@@ -783,6 +893,7 @@ export default function TradeHistoryPage() {
                 <Button
                   variant="outline"
                   size="sm"
+                  className="h-11 sm:h-8 flex-1 sm:flex-none"
                   disabled={!pagination.hasMore || loading}
                   onClick={() => setPage((p) => p + 1)}
                 >

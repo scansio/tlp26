@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardFooter } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import {
   TrendingUp,
@@ -137,16 +137,16 @@ export function SignalCard({ output }: Props) {
         onClick={() => setCollapsed(c => !c)}
         className="flex w-full items-center justify-between gap-2 px-4 py-3 text-sm hover:bg-muted/40 transition-colors"
       >
-        <div className="flex items-center gap-2 font-semibold">
+        <div className="flex items-center gap-2 font-semibold min-w-0">
           {collapsed
             ? <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
             : <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />}
           {isLong
-            ? <TrendingUp className="size-4 text-green-500" />
-            : <TrendingDown className="size-4 text-red-500" />}
-          {output.direction} {output.symbol}
+            ? <TrendingUp className="size-4 text-green-500 shrink-0" />
+            : <TrendingDown className="size-4 text-red-500 shrink-0" />}
+          <span className="truncate">{output.direction} {output.symbol}</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <Badge variant={confidenceBadgeVariant(output.confidence)}>
             {output.confidence}
           </Badge>
@@ -162,26 +162,26 @@ export function SignalCard({ output }: Props) {
         <>
           <Separator />
 
-          <CardContent className="pt-3 pb-2 grid grid-cols-3 gap-3 text-sm">
-            <div className="flex flex-col gap-0.5">
+          <CardContent className="pt-3 pb-2 grid grid-cols-3 gap-2 md:gap-3 text-sm">
+            <div className="flex flex-col gap-0.5 min-w-0">
               <span className="text-muted-foreground text-xs">Entry</span>
-              <span className="font-mono font-medium">
+              <span className="font-mono font-medium truncate">
                 {output.entryPrice != null ? `$${output.entryPrice.toLocaleString()}` : '—'}
               </span>
             </div>
-            <div className="flex flex-col gap-0.5">
+            <div className="flex flex-col gap-0.5 min-w-0">
               <span className="text-muted-foreground text-xs flex items-center gap-1">
-                <ShieldAlert className="size-3" /> Stop Loss
+                <ShieldAlert className="size-3 shrink-0" /> Stop Loss
               </span>
-              <span className="font-mono font-medium text-red-400">
+              <span className="font-mono font-medium text-red-400 truncate">
                 {output.sl != null ? `$${output.sl.toLocaleString()}` : '—'}
               </span>
             </div>
-            <div className="flex flex-col gap-0.5">
+            <div className="flex flex-col gap-0.5 min-w-0">
               <span className="text-muted-foreground text-xs flex items-center gap-1">
-                <Target className="size-3" /> Take Profit
+                <Target className="size-3 shrink-0" /> Take Profit
               </span>
-              <span className="font-mono font-medium text-green-400">
+              <span className="font-mono font-medium text-green-400 truncate">
                 {output.tp != null ? `$${output.tp.toLocaleString()}` : '—'}
               </span>
             </div>
@@ -201,14 +201,14 @@ export function SignalCard({ output }: Props) {
             {!isTerminal && localStatus === 'idle' && (
               <div className="flex gap-2 w-full">
                 <Button
-                  className="flex-1"
+                  className="flex-1 h-11 md:h-8"
                   size="sm"
                   variant={isLong ? 'default' : 'destructive'}
                   onClick={execute}
                 >
                   {isLong ? 'Execute Long' : 'Execute Short'}
                 </Button>
-                <Button className="flex-1" size="sm" variant="outline" onClick={dismiss}>
+                <Button className="flex-1 h-11 md:h-8" size="sm" variant="outline" onClick={dismiss}>
                   Dismiss
                 </Button>
               </div>
@@ -241,7 +241,7 @@ export function SignalCard({ output }: Props) {
                   <XCircle className="size-4" />
                   {resultMsg}
                 </div>
-                <Button size="sm" variant="outline" onClick={() => setLocalStatus('idle')}>
+                <Button size="sm" className="h-11 md:h-8" variant="outline" onClick={() => setLocalStatus('idle')}>
                   Try again
                 </Button>
               </div>
@@ -250,14 +250,14 @@ export function SignalCard({ output }: Props) {
             {localStatus !== 'dismissed' && !isTerminal && (
               <div className="flex gap-2 w-full pt-1">
                 <Link href="/signals" className="flex-1">
-                  <Button variant="ghost" size="sm" className="w-full text-xs gap-1.5">
+                  <Button variant="ghost" size="sm" className="w-full h-11 md:h-8 text-xs gap-1.5">
                     Go to Signal
                     <ArrowRight className="size-3" />
                   </Button>
                 </Link>
                 {localStatus === 'done' && (
                   <Link href="/trade/history" className="flex-1">
-                    <Button variant="outline" size="sm" className="w-full text-xs gap-1.5">
+                    <Button variant="outline" size="sm" className="w-full h-11 md:h-8 text-xs gap-1.5">
                       Go to Trade
                       <ArrowRight className="size-3" />
                     </Button>

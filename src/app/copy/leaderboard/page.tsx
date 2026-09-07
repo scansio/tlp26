@@ -118,11 +118,11 @@ export default function LeaderboardPage() {
   }, [fetchLeaderboard]);
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-black py-10 px-4">
+    <div className="min-h-screen bg-zinc-50 dark:bg-black py-6 px-4 md:py-10">
       <div className="mx-auto max-w-7xl">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+        <div className="mb-6 md:mb-8">
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50 md:text-3xl">
             Signal Publisher Leaderboard
           </h1>
           <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
@@ -139,13 +139,13 @@ export default function LeaderboardPage() {
 
         {/* Filters */}
         <Card className="mb-6 p-4">
-          <div className="flex flex-wrap gap-3 items-center">
-            <div className="flex flex-col gap-1 min-w-[160px]">
+          <div className="grid grid-cols-1 gap-3 md:flex md:flex-wrap md:items-center">
+            <div className="flex flex-col gap-1 md:min-w-[160px]">
               <label className="text-xs font-medium text-zinc-500">Timeframe Focus</label>
               <select
                 value={timeframeFocus}
                 onChange={(e) => setTimeframeFocus(e.target.value)}
-                className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                className="min-h-11 w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
               >
                 {TIMEFRAME_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
@@ -153,12 +153,12 @@ export default function LeaderboardPage() {
               </select>
             </div>
 
-            <div className="flex flex-col gap-1 min-w-[160px]">
+            <div className="flex flex-col gap-1 md:min-w-[160px]">
               <label className="text-xs font-medium text-zinc-500">Strategy Type</label>
               <select
                 value={strategyType}
                 onChange={(e) => setStrategyType(e.target.value)}
-                className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                className="min-h-11 w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
               >
                 {STRATEGY_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
@@ -166,12 +166,12 @@ export default function LeaderboardPage() {
               </select>
             </div>
 
-            <div className="flex flex-col gap-1 min-w-[160px]">
+            <div className="flex flex-col gap-1 md:min-w-[160px]">
               <label className="text-xs font-medium text-zinc-500">Max Drawdown</label>
               <select
                 value={maxDrawdownMax}
                 onChange={(e) => setMaxDrawdownMax(e.target.value)}
-                className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                className="min-h-11 w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
               >
                 {MAX_DRAWDOWN_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
@@ -179,12 +179,12 @@ export default function LeaderboardPage() {
               </select>
             </div>
 
-            <div className="flex flex-col gap-1 min-w-[160px]">
+            <div className="flex flex-col gap-1 md:min-w-[160px]">
               <label className="text-xs font-medium text-zinc-500">Sort By</label>
               <select
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value)}
-                className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                className="min-h-11 w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
               >
                 {SORT_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
@@ -208,38 +208,23 @@ export default function LeaderboardPage() {
             No publishers meet the eligibility criteria yet (≥ 20 closed trades, ≥ 30 days history).
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
-            <table className="w-full text-sm text-left">
-              <thead>
-                <tr className="border-b border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800">
-                  <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 w-12">Rank</th>
-                  <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300">Publisher</th>
-                  <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300">Strategy</th>
-                  <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 text-right">Win Rate</th>
-                  <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 text-right">Sharpe</th>
-                  <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 text-right">Max DD</th>
-                  <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 text-right">Avg R:R</th>
-                  <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 text-right">Signals (90d)</th>
-                  <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 text-right">Subscribers</th>
-                </tr>
-              </thead>
-              <tbody>
-                {publishers.map((pub) => (
-                  <tr
-                    key={pub.id}
-                    className="border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors"
-                  >
-                    <td className="px-4 py-3 font-bold text-zinc-700 dark:text-zinc-300">
-                      #{pub.rank}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Link
-                        href={`/copy/${pub.id}`}
-                        className="font-medium text-zinc-900 dark:text-zinc-100 hover:underline"
-                      >
-                        {pub.displayName ?? 'Anonymous'}
-                      </Link>
-                      <div className="flex gap-1 mt-1 flex-wrap">
+          <>
+            {/* Card list — mobile only */}
+            <div className="flex flex-col gap-3 md:hidden">
+              {publishers.map((pub) => (
+                <Card key={pub.id} className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-zinc-700 dark:text-zinc-300">#{pub.rank}</span>
+                        <Link
+                          href={`/copy/${pub.id}`}
+                          className="min-w-0 truncate font-medium text-zinc-900 dark:text-zinc-100 hover:underline"
+                        >
+                          {pub.displayName ?? 'Anonymous'}
+                        </Link>
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
                         {pub.timeframeFocus && (
                           <Badge variant="secondary" className="text-xs capitalize">
                             {pub.timeframeFocus}
@@ -251,39 +236,136 @@ export default function LeaderboardPage() {
                           </Badge>
                         )}
                       </div>
-                    </td>
-                    <td className="px-4 py-3 max-w-[200px]">
-                      <p className="text-zinc-600 dark:text-zinc-400 text-xs line-clamp-2">
-                        {pub.strategyDescription ?? '—'}
-                      </p>
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono">
-                      {fmt(pub.winRate, 1, '%')}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono">
-                      {fmt(pub.sharpeRatio, 2)}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono">
-                      {pub.maxDrawdown != null ? (
-                        <span className={pub.maxDrawdown > 30 ? 'text-red-500' : pub.maxDrawdown > 15 ? 'text-yellow-500' : 'text-green-600'}>
-                          {fmt(pub.maxDrawdown, 1, '%')}
-                        </span>
-                      ) : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono">
-                      {fmt(pub.avgRR, 2)}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono">
-                      {pub.totalSignals90d}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono">
-                      {pub.subscriberCount}
-                    </td>
+                    </div>
+                  </div>
+
+                  {pub.strategyDescription && (
+                    <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400 line-clamp-2">
+                      {pub.strategyDescription}
+                    </p>
+                  )}
+
+                  <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-zinc-100 dark:border-zinc-800 pt-3 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-zinc-500">Win Rate</span>
+                      <span className="font-mono">{fmt(pub.winRate, 1, '%')}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-zinc-500">Sharpe</span>
+                      <span className="font-mono">{fmt(pub.sharpeRatio, 2)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-zinc-500">Max DD</span>
+                      <span className="font-mono">
+                        {pub.maxDrawdown != null ? (
+                          <span className={pub.maxDrawdown > 30 ? 'text-red-500' : pub.maxDrawdown > 15 ? 'text-yellow-500' : 'text-green-600'}>
+                            {fmt(pub.maxDrawdown, 1, '%')}
+                          </span>
+                        ) : '—'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-zinc-500">Avg R:R</span>
+                      <span className="font-mono">{fmt(pub.avgRR, 2)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-zinc-500">Signals (90d)</span>
+                      <span className="font-mono">{pub.totalSignals90d}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-zinc-500">Subscribers</span>
+                      <span className="font-mono">{pub.subscriberCount}</span>
+                    </div>
+                  </div>
+
+                  <Link
+                    href={`/copy/${pub.id}`}
+                    className="mt-3 flex min-h-11 w-full items-center justify-center rounded-md border border-zinc-200 dark:border-zinc-700 text-sm font-medium text-zinc-900 dark:text-zinc-100"
+                  >
+                    View Publisher
+                  </Link>
+                </Card>
+              ))}
+            </div>
+
+            {/* Table — md and up */}
+            <div className="hidden overflow-x-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900 md:block">
+              <table className="w-full text-sm text-left">
+                <thead>
+                  <tr className="border-b border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800">
+                    <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 w-12">Rank</th>
+                    <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300">Publisher</th>
+                    <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300">Strategy</th>
+                    <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 text-right">Win Rate</th>
+                    <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 text-right">Sharpe</th>
+                    <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 text-right">Max DD</th>
+                    <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 text-right">Avg R:R</th>
+                    <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 text-right">Signals (90d)</th>
+                    <th className="px-4 py-3 font-semibold text-zinc-600 dark:text-zinc-300 text-right">Subscribers</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {publishers.map((pub) => (
+                    <tr
+                      key={pub.id}
+                      className="border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors"
+                    >
+                      <td className="px-4 py-3 font-bold text-zinc-700 dark:text-zinc-300">
+                        #{pub.rank}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Link
+                          href={`/copy/${pub.id}`}
+                          className="font-medium text-zinc-900 dark:text-zinc-100 hover:underline"
+                        >
+                          {pub.displayName ?? 'Anonymous'}
+                        </Link>
+                        <div className="flex gap-1 mt-1 flex-wrap">
+                          {pub.timeframeFocus && (
+                            <Badge variant="secondary" className="text-xs capitalize">
+                              {pub.timeframeFocus}
+                            </Badge>
+                          )}
+                          {pub.strategyType && (
+                            <Badge variant="outline" className="text-xs">
+                              {pub.strategyType}
+                            </Badge>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 max-w-[200px]">
+                        <p className="text-zinc-600 dark:text-zinc-400 text-xs line-clamp-2">
+                          {pub.strategyDescription ?? '—'}
+                        </p>
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        {fmt(pub.winRate, 1, '%')}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        {fmt(pub.sharpeRatio, 2)}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        {pub.maxDrawdown != null ? (
+                          <span className={pub.maxDrawdown > 30 ? 'text-red-500' : pub.maxDrawdown > 15 ? 'text-yellow-500' : 'text-green-600'}>
+                            {fmt(pub.maxDrawdown, 1, '%')}
+                          </span>
+                        ) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        {fmt(pub.avgRR, 2)}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        {pub.totalSignals90d}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        {pub.subscriberCount}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
 
         {/* Disclaimer */}

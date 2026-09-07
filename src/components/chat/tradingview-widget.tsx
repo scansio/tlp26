@@ -74,7 +74,7 @@ export function TradingViewWidget({ tvSymbol, tvExchange, tvInterval, height = 4
     <div className="w-full rounded-lg border border-border overflow-hidden my-2">
       <button
         onClick={() => setCollapsed(c => !c)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:bg-muted/50 transition-colors"
+        className="flex w-full items-center gap-2 px-3 py-2 min-h-11 md:min-h-0 text-xs text-muted-foreground hover:bg-muted/50 transition-colors"
       >
         {collapsed
           ? <ChevronRight className="size-3.5 shrink-0" />

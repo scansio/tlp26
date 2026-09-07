@@ -60,11 +60,11 @@ function SubscriptionCard({
   const [confirmUnsubscribe, setConfirmUnsubscribe] = useState(false);
 
   return (
-    <Card className="p-5 space-y-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <h3 className="font-semibold">
+    <Card className="p-4 space-y-4 md:p-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-semibold break-words">
               {sub.publisherName ?? 'Unknown Publisher'}
             </h3>
             {sub.isActive ? (
@@ -82,11 +82,12 @@ function SubscriptionCard({
           </p>
         </div>
 
-        <div className="flex gap-2 shrink-0">
+        <div className="flex gap-2 sm:shrink-0">
           <Button
             variant="outline"
             size="sm"
             disabled={toggling}
+            className="h-11 flex-1 sm:h-8 sm:flex-none"
             onClick={() => onToggle(sub.id, !sub.isActive)}
           >
             {toggling ? (
@@ -96,11 +97,12 @@ function SubscriptionCard({
           </Button>
 
           {confirmUnsubscribe ? (
-            <div className="flex gap-1">
+            <div className="flex gap-2 sm:gap-1">
               <Button
                 variant="destructive"
                 size="sm"
                 disabled={unsubscribing}
+                className="h-11 flex-1 sm:h-8 sm:flex-none"
                 onClick={() => onUnsubscribe(sub.id)}
               >
                 {unsubscribing ? <Spinner className="h-3 w-3 mr-1" /> : null}
@@ -109,6 +111,7 @@ function SubscriptionCard({
               <Button
                 variant="ghost"
                 size="sm"
+                className="h-11 flex-1 sm:h-8 sm:flex-none"
                 onClick={() => setConfirmUnsubscribe(false)}
               >
                 Cancel
@@ -118,7 +121,7 @@ function SubscriptionCard({
             <Button
               variant="ghost"
               size="sm"
-              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+              className="h-11 flex-1 sm:h-8 sm:flex-none text-red-600 hover:text-red-700 hover:bg-red-50"
               onClick={() => setConfirmUnsubscribe(true)}
             >
               Unsubscribe
@@ -128,27 +131,27 @@ function SubscriptionCard({
       </div>
 
       {/* Settings row */}
-      <div className="grid grid-cols-3 gap-4 text-sm border-t border-border pt-3">
-        <div>
+      <div className="grid grid-cols-3 gap-3 text-sm border-t border-border pt-3 md:gap-4">
+        <div className="min-w-0">
           <p className="text-xs text-muted-foreground">Copy Ratio</p>
           <p className="font-medium">{sub.copyRatioPct}%</p>
         </div>
-        <div>
+        <div className="min-w-0">
           <p className="text-xs text-muted-foreground">Mode</p>
-          <p className="font-medium capitalize">
+          <p className="font-medium capitalize truncate">
             {sub.executionMode.replace('-', ' ')}
           </p>
         </div>
-        <div>
+        <div className="min-w-0">
           <p className="text-xs text-muted-foreground">Max Cap</p>
-          <p className="font-medium">
+          <p className="font-medium truncate">
             {sub.maxPositionSizeCap ? `$${Number(sub.maxPositionSizeCap).toFixed(0)}` : 'None'}
           </p>
         </div>
       </div>
 
       {/* Publisher stats since subscribed */}
-      <div className="grid grid-cols-4 gap-2 text-sm border-t border-border pt-3">
+      <div className="grid grid-cols-2 gap-3 text-sm border-t border-border pt-3 sm:grid-cols-4 sm:gap-2">
         <div className="text-center">
           <p className="font-semibold">
             {sub.stats.winRate != null
@@ -181,7 +184,7 @@ function SubscriptionCard({
       <div className="pt-1">
         <Link
           href={`/copy/${sub.publisherId}`}
-          className="text-xs text-primary underline underline-offset-2"
+          className="-mx-1 inline-block px-1 py-2 text-xs text-primary underline underline-offset-2"
         >
           View publisher profile
         </Link>
@@ -287,16 +290,16 @@ export default function SubscriptionsPage() {
   const subscriptions = data?.subscriptions ?? [];
 
   return (
-    <div className="max-w-2xl mx-auto py-10 px-4 space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
+    <div className="max-w-2xl mx-auto py-6 px-4 space-y-6 md:py-10">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold">My Copy Subscriptions</h1>
           <p className="text-muted-foreground text-sm mt-1">
             {data?.activeCount ?? 0} of {data?.maxSubscriptions ?? 10} active subscriptions.
           </p>
         </div>
-        <Link href="/copy">
-          <Button variant="outline" size="sm">
+        <Link href="/copy" className="w-full sm:w-auto">
+          <Button variant="outline" size="sm" className="h-11 w-full sm:h-8 sm:w-auto">
             Browse Publishers
           </Button>
         </Link>
@@ -324,10 +327,10 @@ export default function SubscriptionsPage() {
       )}
 
       {subscriptions.length === 0 ? (
-        <Card className="p-8 text-center space-y-3">
+        <Card className="p-6 text-center space-y-3 md:p-8">
           <p className="text-muted-foreground">You have no copy subscriptions yet.</p>
-          <Link href="/copy">
-            <Button>Find Publishers to Follow</Button>
+          <Link href="/copy" className="block sm:inline-block">
+            <Button className="h-11 w-full sm:w-auto">Find Publishers to Follow</Button>
           </Link>
         </Card>
       ) : (

@@ -245,14 +245,14 @@ export function NotificationsSection() {
 
   if (loading) {
     return (
-      <Card className="p-6">
+      <Card className="p-4 md:p-6">
         <p className="text-sm text-muted-foreground">Loading notification settings...</p>
       </Card>
     );
   }
 
   return (
-    <Card className="p-6 space-y-6">
+    <Card className="p-4 md:p-6 space-y-6">
       <div>
         <h2 className="text-lg font-semibold">Notifications</h2>
         <p className="text-sm text-muted-foreground mt-0.5">
@@ -267,16 +267,17 @@ export function NotificationsSection() {
         {config?.hasTelegramChatId ? (
           <div className="space-y-3">
             <p className="text-sm text-green-600">✅ Telegram is connected.</p>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <Button
                 variant="outline"
                 size="sm"
                 disabled={testState.telegram === 'loading'}
                 onClick={() => handleTest('telegram')}
+                className="h-11 sm:h-8"
               >
                 {testState.telegram === 'loading' ? 'Sending...' : 'Send Test Message'}
               </Button>
-              <Button variant="ghost" size="sm" onClick={handleDisconnectTelegram}>
+              <Button variant="ghost" size="sm" onClick={handleDisconnectTelegram} className="h-11 sm:h-8">
                 Disconnect
               </Button>
               {testState.telegram === 'ok' && (
@@ -292,10 +293,11 @@ export function NotificationsSection() {
             <p className="text-sm text-muted-foreground">
               Connect your Telegram account to get instant trade alerts — no bot setup required.
             </p>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <Button
                 onClick={handleConnectTelegram}
                 disabled={telegramState === 'connecting'}
+                className="w-full sm:w-auto h-11 sm:h-9"
               >
                 {telegramState === 'connecting' ? 'Waiting for confirmation…' : 'Connect Telegram'}
               </Button>
@@ -308,6 +310,7 @@ export function NotificationsSection() {
                     setTelegramState('idle');
                     setTelegramConnectUrl('');
                   }}
+                  className="h-11 sm:h-8"
                 >
                   Cancel
                 </Button>
@@ -360,14 +363,16 @@ export function NotificationsSection() {
             }
             value={form.discordWebhookUrl}
             onChange={(e) => setField('discordWebhookUrl', e.target.value)}
+            className="h-11 sm:h-9"
           />
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Button
             variant="outline"
             size="sm"
             disabled={testState.discord === 'loading'}
             onClick={() => handleTest('discord')}
+            className="h-11 sm:h-8"
           >
             {testState.discord === 'loading' ? 'Sending...' : 'Send Test Message'}
           </Button>
@@ -391,11 +396,11 @@ export function NotificationsSection() {
           </p>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <label className="text-sm font-medium">Quiet from</label>
             <select
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="flex h-11 sm:h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               value={form.quietHoursStart}
               onChange={(e) => setField('quietHoursStart', e.target.value)}
             >
@@ -410,7 +415,7 @@ export function NotificationsSection() {
           <div className="space-y-2">
             <label className="text-sm font-medium">Quiet until</label>
             <select
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="flex h-11 sm:h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               value={form.quietHoursEnd}
               onChange={(e) => setField('quietHoursEnd', e.target.value)}
             >
@@ -427,7 +432,7 @@ export function NotificationsSection() {
         <div className="space-y-2">
           <label className="text-sm font-medium">Your timezone</label>
           <select
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="flex h-11 sm:h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             value={form.timezone}
             onChange={(e) => setField('timezone', e.target.value)}
           >
@@ -441,8 +446,8 @@ export function NotificationsSection() {
       </div>
 
       {/* Save */}
-      <div className="flex items-center gap-4 pt-2">
-        <Button onClick={handleSave} disabled={saving}>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 pt-2">
+        <Button onClick={handleSave} disabled={saving} className="w-full sm:w-auto h-11 sm:h-9">
           {saving ? 'Saving...' : 'Save Notification Settings'}
         </Button>
         {saveMessage && (

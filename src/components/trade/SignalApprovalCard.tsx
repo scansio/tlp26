@@ -148,9 +148,9 @@ function ReasoningSection({ signal }: { signal: QueueSignal }) {
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">
                 Indicators at Signal Time
               </p>
-              <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-muted-foreground">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 text-xs text-muted-foreground">
                 {Object.entries(indicators).map(([k, v]) => (
-                  <div key={k}>
+                  <div key={k} className="min-w-0 break-words">
                     <span className="font-medium text-foreground capitalize">{k}:</span>{' '}
                     {typeof v === 'object' ? JSON.stringify(v) : String(v)}
                   </div>
@@ -261,11 +261,11 @@ export function SignalApprovalCard({
   return (
     <>
     <Card className="w-full">
-      <CardHeader className="pb-2">
+      <CardHeader className="px-4 md:px-6 pb-2">
         {/* Top row */}
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-bold text-lg">{signal.symbol}</span>
+            <span className="font-bold text-base md:text-lg">{signal.symbol}</span>
             <span className="text-muted-foreground text-sm">{signal.timeframe}</span>
 
             {/* Direction badge */}
@@ -327,7 +327,7 @@ export function SignalApprovalCard({
             <button
               type="button"
               onClick={() => setShowChart((v) => !v)}
-              className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              className="inline-flex items-center justify-center gap-1 rounded-md border px-3 py-2.5 md:px-2 md:py-1 min-h-11 md:min-h-0 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               title="Show signal on TradingView chart"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -350,19 +350,19 @@ export function SignalApprovalCard({
         )}
       </CardHeader>
 
-      <CardContent className="space-y-4">
+      <CardContent className="px-4 md:px-6 space-y-4">
         {/* Price levels grid */}
-        <div className="grid grid-cols-3 gap-3 text-sm">
+        <div className="grid grid-cols-3 gap-2 md:gap-3 text-sm">
           {/* Entry zone */}
-          <div>
+          <div className="min-w-0">
             <p className="text-muted-foreground text-xs">Entry</p>
-            <p className="font-medium">${fmt(signal.entryPrice)}</p>
+            <p className="font-medium truncate">${fmt(signal.entryPrice)}</p>
           </div>
 
           {/* Stop-loss + distance */}
-          <div>
+          <div className="min-w-0">
             <p className="text-muted-foreground text-xs">Stop Loss</p>
-            <p className="font-medium text-red-600 dark:text-red-400">
+            <p className="font-medium text-red-600 dark:text-red-400 truncate">
               ${fmt(signal.stopLoss)}
             </p>
             {feeData?.slDistancePct != null && (
@@ -373,9 +373,9 @@ export function SignalApprovalCard({
           </div>
 
           {/* Take-profit + R:R */}
-          <div>
+          <div className="min-w-0">
             <p className="text-muted-foreground text-xs">Take Profit</p>
-            <p className="font-medium text-green-600 dark:text-green-400">
+            <p className="font-medium text-green-600 dark:text-green-400 truncate">
               ${fmt(signal.takeProfit)}
             </p>
             {feeData?.riskReward != null && (
@@ -443,7 +443,7 @@ export function SignalApprovalCard({
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 py-3 -my-3"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -479,7 +479,7 @@ export function SignalApprovalCard({
           <div className="flex items-center gap-3 pt-1">
             <Button
               size="sm"
-              className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+              className="flex-1 h-11 md:h-8 bg-green-600 hover:bg-green-700 text-white"
               disabled={actionLoading !== null}
               onClick={() => void handleAction('approve')}
             >
@@ -514,7 +514,7 @@ export function SignalApprovalCard({
             <Button
               variant="outline"
               size="sm"
-              className="flex-1 border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+              className="flex-1 h-11 md:h-8 border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
               disabled={actionLoading !== null}
               onClick={() => void handleAction('reject')}
             >
@@ -541,38 +541,39 @@ export function SignalApprovalCard({
           }}
         >
           {/* Title bar */}
-          <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2 border-b bg-background">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <span>{signal.symbol}</span>
-              <span className="text-muted-foreground font-normal">{signal.timeframe}</span>
+          <div className="shrink-0 flex items-center justify-between gap-2 px-3 md:px-4 py-2 border-b bg-background">
+            <div className="flex items-center gap-2 text-sm font-semibold min-w-0">
+              <span className="truncate">{signal.symbol}</span>
+              <span className="text-muted-foreground font-normal shrink-0">{signal.timeframe}</span>
               <span
-                className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${directionClass(signal.direction)}`}
+                className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold shrink-0 ${directionClass(signal.direction)}`}
               >
                 {signal.direction}
               </span>
               {signal.entryPrice && (
-                <span className="text-muted-foreground font-normal text-xs">
+                <span className="hidden md:inline text-muted-foreground font-normal text-xs truncate">
                   Entry ${fmt(signal.entryPrice)} · SL ${fmt(signal.stopLoss)} · TP ${fmt(signal.takeProfit)}
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 md:gap-2 shrink-0">
               <a
                 href={buildTradingViewUrl(signal.symbol, connectedExchange, signal.marketType)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                title="Open in TradingView"
+                className="inline-flex items-center justify-center gap-1.5 rounded-md border p-2.5 md:px-2.5 md:py-1 min-h-11 min-w-11 md:min-h-0 md:min-w-0 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 md:h-3 md:w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                   <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
                   <polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
                 </svg>
-                TradingView
+                <span className="hidden md:inline">TradingView</span>
               </a>
               <button
                 type="button"
                 onClick={() => setShowChart(false)}
-                className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                className="rounded-md p-2.5 md:p-1.5 min-h-11 min-w-11 md:min-h-0 md:min-w-0 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                 aria-label="Close chart"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
@@ -581,6 +582,12 @@ export function SignalApprovalCard({
               </button>
             </div>
           </div>
+          {/* Mobile-only price line, wraps below the title row */}
+          {signal.entryPrice && (
+            <div className="md:hidden shrink-0 px-3 py-1.5 border-b bg-background text-xs text-muted-foreground truncate">
+              Entry ${fmt(signal.entryPrice)} · SL ${fmt(signal.stopLoss)} · TP ${fmt(signal.takeProfit)}
+            </div>
+          )}
           {/* Chart fills remaining height */}
           <div style={{ flex: 1, minHeight: 0 }}>
             <SignalChart

@@ -62,8 +62,11 @@ export function DocsSidebar() {
       </aside>
 
       {/* Mobile top nav */}
-      <nav className="lg:hidden sticky top-0 z-40 bg-zinc-950 border-b border-zinc-800 px-4 py-3 flex items-center gap-1 overflow-x-auto scrollbar-none">
-        <Link href="/" className="shrink-0 text-xs font-semibold text-zinc-500 mr-3 hover:text-white transition-colors">
+      <nav className="lg:hidden sticky top-0 z-40 bg-zinc-950 border-b border-zinc-800 pl-2 pr-4 pb-1 pt-[calc(env(safe-area-inset-top)+0.25rem)] flex items-center gap-1 overflow-x-auto scrollbar-none">
+        <Link
+          href="/"
+          className="shrink-0 flex items-center min-h-11 px-2 text-xs font-semibold text-zinc-500 mr-1 hover:text-white transition-colors"
+        >
           ← Home
         </Link>
         {NAV_ITEMS.map(({ href, label, icon: Icon }) => (
@@ -71,13 +74,13 @@ export function DocsSidebar() {
             key={href}
             href={href}
             className={cn(
-              'shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors',
+              'shrink-0 flex items-center gap-1.5 min-h-11 px-3 rounded-full text-xs font-medium transition-colors',
               pathname === href || pathname.startsWith(href + '/')
                 ? 'bg-emerald-500/15 text-emerald-400'
                 : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
             )}
           >
-            <Icon className="h-3 w-3" />
+            <Icon className="h-3.5 w-3.5" />
             {label}
           </Link>
         ))}

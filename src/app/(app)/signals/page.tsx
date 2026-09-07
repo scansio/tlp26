@@ -119,15 +119,21 @@ export default function SignalsPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
+    <div className="max-w-3xl mx-auto p-4 md:p-6 space-y-4 md:space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold">Trade Signals</h1>
-          <p className="text-muted-foreground mt-1">
+          <p className="text-muted-foreground mt-1 text-sm md:text-base">
             AI-generated and copy-traded signals. Net P&amp;L figures account for round-trip fees and slippage.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => void fetchSignals()} disabled={loading}>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-11 w-full sm:h-8 sm:w-auto"
+          onClick={() => void fetchSignals()}
+          disabled={loading}
+        >
           {loading ? 'Refreshing…' : 'Refresh'}
         </Button>
       </div>
@@ -135,9 +141,9 @@ export default function SignalsPage() {
       {/* ------------------------------------------------------------------ */}
       {/* Price watches — created via chat ("watch BTC for a retest of X")    */}
       {/* ------------------------------------------------------------------ */}
-      <Card className="p-6 space-y-3">
+      <Card className="p-4 md:p-6 space-y-3">
         <div className="flex items-center gap-2">
-          <Eye className="w-4 h-4 text-muted-foreground" />
+          <Eye className="w-4 h-4 text-muted-foreground shrink-0" />
           <h2 className="text-lg font-semibold">Price Watches</h2>
         </div>
         <p className="text-sm text-muted-foreground">
@@ -180,7 +186,7 @@ export default function SignalsPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="shrink-0"
+                    className="h-11 w-11 p-0 shrink-0 md:h-8 md:w-8"
                     disabled={cancellingId === w.id}
                     onClick={() => void handleCancelWatch(w.id)}
                     aria-label="Cancel watch"
@@ -204,7 +210,7 @@ export default function SignalsPage() {
           <Button
             variant="outline"
             size="sm"
-            className="mt-2"
+            className="mt-2 h-11 w-full sm:h-8 sm:w-auto"
             onClick={() => void fetchSignals()}
           >
             Retry
@@ -217,7 +223,7 @@ export default function SignalsPage() {
       )}
 
       {!loading && !error && signals.length === 0 && (
-        <Card className="p-8 text-center">
+        <Card className="p-6 md:p-8 text-center">
           <p className="text-muted-foreground">No trade signals yet.</p>
           <p className="text-sm text-muted-foreground mt-2">
             Signals appear here after the AI trading agent runs an analysis or a

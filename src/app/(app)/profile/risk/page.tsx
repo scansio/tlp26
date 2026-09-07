@@ -149,7 +149,7 @@ function SymbolTagInput({
           <button
             type="button"
             onClick={() => removeTag(tag)}
-            className="text-muted-foreground hover:text-foreground leading-none"
+            className="text-muted-foreground hover:text-foreground leading-none p-1 -m-1"
             aria-label={`Remove ${tag}`}
           >
             &times;
@@ -312,11 +312,11 @@ function FallbackForm({
       {/* Strategies */}
       <div className="space-y-3">
         <label className="text-sm font-medium">Trading Strategies</label>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {STRATEGIES.map(({ value, label }) => (
             <label
               key={value}
-              className="flex items-center gap-2 rounded-md border border-input px-3 py-2 cursor-pointer hover:bg-accent"
+              className="flex items-center gap-2 rounded-md border border-input px-3 py-2.5 md:py-2 cursor-pointer hover:bg-accent"
             >
               <input
                 type="checkbox"
@@ -442,11 +442,11 @@ function FallbackForm({
       {/* Execution mode */}
       <div className="space-y-2">
         <label className="text-sm font-medium">Execution Mode</label>
-        <div className="flex gap-3">
+        <div className="flex flex-col md:flex-row gap-3">
           {(['manual', 'auto'] as const).map((mode) => (
             <label
               key={mode}
-              className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2 cursor-pointer ${
+              className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2.5 md:py-2 cursor-pointer ${
                 form.executionMode === mode
                   ? 'border-primary bg-primary/10 font-medium'
                   : 'border-input hover:bg-accent'
@@ -479,11 +479,11 @@ function FallbackForm({
       {/* Market type */}
       <div className="space-y-2">
         <label className="text-sm font-medium">Market Type</label>
-        <div className="flex gap-3">
+        <div className="flex flex-col md:flex-row gap-3">
           {(['spot', 'swap'] as const).map((mt) => (
             <label
               key={mt}
-              className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2 cursor-pointer ${
+              className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2.5 md:py-2 cursor-pointer ${
                 form.marketType === mt
                   ? 'border-primary bg-primary/10 font-medium'
                   : 'border-input hover:bg-accent'
@@ -541,11 +541,11 @@ function FallbackForm({
 
           <div className="space-y-2">
             <label className="text-sm font-medium">Margin Mode</label>
-            <div className="flex gap-3">
+            <div className="flex flex-col md:flex-row gap-3">
               {(['cross', 'isolated'] as const).map((mm) => (
                 <label
                   key={mm}
-                  className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2 cursor-pointer ${
+                  className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2.5 md:py-2 cursor-pointer ${
                     form.marginMode === mm
                       ? 'border-primary bg-primary/10 font-medium'
                       : 'border-input hover:bg-accent'
@@ -579,11 +579,11 @@ function FallbackForm({
       {/* Exit strategy */}
       <div className="space-y-2">
         <label className="text-sm font-medium">Exit Strategy</label>
-        <div className="flex gap-3">
+        <div className="flex flex-col md:flex-row gap-3">
           {(['fixed', 'trailing'] as const).map((mode) => (
             <label
               key={mode}
-              className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2 cursor-pointer ${
+              className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2.5 md:py-2 cursor-pointer ${
                 form.exitMode === mode
                   ? 'border-primary bg-primary/10 font-medium'
                   : 'border-input hover:bg-accent'
@@ -690,7 +690,7 @@ function FallbackForm({
 
       {/* Trailing profit lock */}
       <div className="space-y-2">
-        <label className="flex items-center gap-2 rounded-md border border-input px-3 py-2 cursor-pointer hover:bg-accent">
+        <label className="flex items-center gap-2 rounded-md border border-input px-3 py-2.5 md:py-2 cursor-pointer hover:bg-accent">
           <input
             type="checkbox"
             checked={form.profitLockEnabled}
@@ -720,7 +720,7 @@ function FallbackForm({
           {TIMEFRAMES.map((tf) => (
             <label
               key={tf}
-              className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm cursor-pointer ${
+              className={`flex items-center gap-1.5 rounded-md border px-3 py-2.5 md:py-1.5 text-sm cursor-pointer ${
                 form.preferredTimeframes.includes(tf)
                   ? 'border-primary bg-primary/10 font-medium'
                   : 'border-input hover:bg-accent'
@@ -763,7 +763,7 @@ function FallbackForm({
         <p className="text-xs text-muted-foreground">
           Virtual starting balance for simulated paper trades.
         </p>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3">
           <input
             type="number"
             min={100}
@@ -775,7 +775,7 @@ function FallbackForm({
               setForm((f) => ({ ...f, paperBalanceUsd: val }));
               setSaveMessage('');
             }}
-            className="w-40 rounded-md border border-input bg-background px-3 py-1.5 text-sm tabular-nums"
+            className="w-full md:w-40 rounded-md border border-input bg-background px-3 py-2.5 md:py-1.5 text-sm tabular-nums"
           />
           <span className="text-sm text-muted-foreground">
             ${form.paperBalanceUsd.toLocaleString('en-US')}
@@ -786,8 +786,8 @@ function FallbackForm({
       <Separator />
 
       {/* Save */}
-      <div className="flex items-center gap-4 pt-2">
-        <Button onClick={handleSave} disabled={saving}>
+      <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-4 pt-2">
+        <Button onClick={handleSave} disabled={saving} className="w-full md:w-auto min-h-11 md:min-h-0">
           {saving ? 'Saving…' : 'Save Risk Profile'}
         </Button>
         {saveMessage && (
@@ -859,7 +859,7 @@ function SetupChat({ onSaved }: { onSaved: (p: RiskProfile) => void }) {
   };
 
   return (
-    <div className="relative flex h-[600px] flex-col rounded-lg border bg-background">
+    <div className="relative flex h-[70dvh] md:h-[600px] flex-col rounded-lg border bg-background">
       <Conversation className="flex-1 overflow-hidden">
         <ConversationContent>
           {messages.length === 0 && status === 'ready' && (
@@ -967,9 +967,9 @@ function TradingModePanel({
   }
 
   return (
-    <Card className="p-5 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
+    <Card className="p-4 md:p-5 space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
           <p className="text-sm font-semibold">Trading Mode</p>
           <p className="text-xs text-muted-foreground mt-0.5">
             {isPaper
@@ -977,7 +977,7 @@ function TradingModePanel({
               : 'Live mode — trades execute on your connected exchange with real funds.'}
           </p>
         </div>
-        <div className={`px-3 py-1 rounded-full text-xs font-semibold ${
+        <div className={`shrink-0 px-3 py-1 rounded-full text-xs font-semibold ${
           isPaper
             ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200'
             : 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200'
@@ -988,13 +988,14 @@ function TradingModePanel({
 
       {/* Switch buttons */}
       {!showLiveConfirm && (
-        <div className="flex gap-3">
+        <div className="flex flex-col md:flex-row gap-3">
           {isPaper ? (
             <Button
               size="sm"
               variant="outline"
               onClick={() => setShowLiveConfirm(true)}
               disabled={switching}
+              className="w-full md:w-auto min-h-11 md:min-h-0"
             >
               Switch to Live Trading
             </Button>
@@ -1004,6 +1005,7 @@ function TradingModePanel({
               variant="outline"
               onClick={() => void switchMode('paper')}
               disabled={switching}
+              className="w-full md:w-auto min-h-11 md:min-h-0"
             >
               {switching ? 'Switching…' : 'Switch to Paper Mode'}
             </Button>
@@ -1035,12 +1037,13 @@ function TradingModePanel({
           {switchError && (
             <p className="text-sm text-red-700 dark:text-red-300">{switchError}</p>
           )}
-          <div className="flex gap-2">
+          <div className="flex flex-col md:flex-row gap-2">
             <Button
               size="sm"
               variant="destructive"
               disabled={!confirmed || switching}
               onClick={() => void switchMode('live')}
+              className="w-full md:w-auto min-h-11 md:min-h-0"
             >
               {switching ? 'Switching…' : 'Confirm — Switch to Live'}
             </Button>
@@ -1052,6 +1055,7 @@ function TradingModePanel({
                 setConfirmed(false);
                 setSwitchError(null);
               }}
+              className="w-full md:w-auto min-h-11 md:min-h-0"
             >
               Cancel
             </Button>
@@ -1105,7 +1109,7 @@ export default function RiskProfilePage() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto py-10 px-4 space-y-6">
+    <div className="max-w-2xl mx-auto py-6 md:py-10 px-4 space-y-6">
       {/* Page header */}
       <div>
         <h1 className="text-2xl font-bold">Risk Profile Setup</h1>
@@ -1132,9 +1136,9 @@ export default function RiskProfilePage() {
 
       {/* Mode toggle */}
       <div className="flex items-center gap-4">
-        <div className="flex rounded-lg border border-input overflow-hidden text-sm">
+        <div className="flex w-full md:w-auto rounded-lg border border-input overflow-hidden text-sm">
           <button
-            className={`px-4 py-1.5 transition-colors ${
+            className={`flex-1 md:flex-none px-4 py-2.5 md:py-1.5 transition-colors ${
               mode === 'chat' ? 'bg-primary text-primary-foreground font-medium' : 'hover:bg-accent'
             }`}
             onClick={() => setMode('chat')}
@@ -1142,7 +1146,7 @@ export default function RiskProfilePage() {
             Chat Setup
           </button>
           <button
-            className={`px-4 py-1.5 transition-colors ${
+            className={`flex-1 md:flex-none px-4 py-2.5 md:py-1.5 transition-colors ${
               mode === 'form' ? 'bg-primary text-primary-foreground font-medium' : 'hover:bg-accent'
             }`}
             onClick={() => setMode('form')}
@@ -1156,9 +1160,9 @@ export default function RiskProfilePage() {
       {profile && mode === 'chat' && (
         <Card className="p-4 bg-muted/40">
           <p className="text-sm font-medium mb-2">Current profile</p>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm text-muted-foreground">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 sm:gap-y-1 text-sm text-muted-foreground">
             <span>Strategies:</span>
-            <span className="font-medium text-foreground">
+            <span className="font-medium text-foreground break-words">
               {profile.strategies?.join(', ') || '—'}
             </span>
             <span>Max trades/day:</span>
@@ -1172,11 +1176,11 @@ export default function RiskProfilePage() {
             <span>Execution mode:</span>
             <span className="font-medium text-foreground capitalize">{profile.executionMode}</span>
             <span>Timeframes:</span>
-            <span className="font-medium text-foreground">
+            <span className="font-medium text-foreground break-words">
               {profile.preferredTimeframes?.join(', ') || 'All'}
             </span>
             <span>Symbols:</span>
-            <span className="font-medium text-foreground">
+            <span className="font-medium text-foreground break-words">
               {profile.allowedSymbols?.length > 0 ? profile.allowedSymbols.join(', ') : 'All'}
             </span>
             <span>Paper balance:</span>
@@ -1198,7 +1202,7 @@ export default function RiskProfilePage() {
       <CircuitBreakerPanel />
 
       {/* Main content */}
-      <Card className="p-6">
+      <Card className="p-4 md:p-6">
         {mode === 'chat' ? (
           <SetupChat onSaved={handleSaved} />
         ) : (

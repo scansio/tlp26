@@ -34,15 +34,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <SidebarProvider>
       <AppSidebar />
       <SpotlightTour />
-      <SidebarInset>
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
-          <SidebarTrigger className="-ml-1" />
-          <Separator orientation="vertical" className="mr-2 h-4" />
+      <SidebarInset className="min-w-0">
+        <header className="flex min-h-14 md:min-h-0 md:h-12 shrink-0 items-center gap-2 border-b px-3 pt-[env(safe-area-inset-top)] md:px-4 md:pt-0">
+          <SidebarTrigger className="-ml-1 size-11 md:size-8" />
+          <Separator orientation="vertical" className="mr-1 h-4 md:mr-2" />
           <div className="ml-auto">
             <ThemeToggle />
           </div>
         </header>
-        <main className="flex-1 overflow-auto">
+        <main className="flex-1 min-w-0 overflow-auto pb-[env(safe-area-inset-bottom)]">
           {children}
         </main>
       </SidebarInset>

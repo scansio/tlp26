@@ -56,23 +56,23 @@ const STEPS = [
 
 export default function GettingStartedPage() {
   return (
-    <article>
+    <article className="w-full min-w-0">
       <p className="text-xs font-semibold uppercase tracking-widest text-emerald-500 mb-2">Getting Started</p>
-      <h1 className="text-3xl font-bold text-white mb-3">Up and running in minutes</h1>
-      <p className="text-zinc-400 text-lg mb-12">
+      <h1 className="text-2xl md:text-3xl font-bold text-white mb-3">Up and running in minutes</h1>
+      <p className="text-zinc-400 text-base md:text-lg mb-8 md:mb-12">
         Trading Hub is ready to analyze markets and generate signals within minutes of signing up. Follow these three steps.
       </p>
 
-      <div className="space-y-10">
+      <div className="space-y-8 md:space-y-10">
         {STEPS.map(({ n, icon: Icon, title, body }) => (
-          <div key={n} className="flex gap-5">
+          <div key={n} className="flex gap-4 md:gap-5">
             <div className="shrink-0 flex flex-col items-center">
               <div className="w-10 h-10 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center">
                 <Icon className="h-5 w-5 text-emerald-400" />
               </div>
               <div className="flex-1 w-px bg-zinc-800 mt-3" />
             </div>
-            <div className="pb-10">
+            <div className="pb-8 md:pb-10 min-w-0">
               <p className="text-xs text-zinc-500 font-mono mb-1">{n}</p>
               <h2 className="text-lg font-semibold text-white mb-2">{title}</h2>
               <p className="text-zinc-400 leading-relaxed">{body}</p>
@@ -81,19 +81,19 @@ export default function GettingStartedPage() {
         ))}
       </div>
 
-      <div className="mt-8 rounded-xl bg-zinc-900/60 border border-zinc-800 p-6">
+      <div className="mt-8 rounded-xl bg-zinc-900/60 border border-zinc-800 p-4 md:p-6">
         <p className="text-sm text-zinc-400 mb-1">Tip — start with paper mode</p>
         <p className="text-white text-sm leading-relaxed">
           Paper Trading Mode runs the full AI pipeline on live market data without placing real orders. It&apos;s the safest way to validate the agent&apos;s performance before risking capital. You can switch modes at any time in your risk profile.
         </p>
       </div>
 
-      <div className="mt-16 rounded-2xl bg-zinc-900/60 border border-zinc-800 p-8 text-center">
-        <p className="text-2xl font-bold text-white mb-2">Ready to start?</p>
-        <p className="text-zinc-400 mb-6">Paper trading is completely free — no credit card required.</p>
+      <div className="mt-10 md:mt-16 rounded-2xl bg-zinc-900/60 border border-zinc-800 p-6 md:p-8 text-center">
+        <p className="text-xl md:text-2xl font-bold text-white mb-2">Ready to start?</p>
+        <p className="text-zinc-400 mb-4 md:mb-6">Paper trading is completely free — no credit card required.</p>
         <Link
           href="/sign-up"
-          className="inline-flex items-center gap-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-8 py-3 transition-colors"
+          className="inline-flex w-full md:w-auto items-center justify-center gap-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-8 py-3.5 md:py-3 transition-colors min-h-11"
         >
           Create your account <ArrowRight className="h-4 w-4" />
         </Link>

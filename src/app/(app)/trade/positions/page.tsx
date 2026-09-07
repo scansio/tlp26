@@ -65,18 +65,18 @@ export default function OpenPositionsPage() {
   }, [fetchPositions])
 
   return (
-    <div className="p-4 sm:p-6 space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Open Positions</h1>
+    <div className="p-4 md:p-6 space-y-4 md:space-y-5 max-w-full">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-xl md:text-2xl font-bold tracking-tight">Open Positions</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Click a position to manage it
+            Tap a position to manage it
           </p>
         </div>
         <Button
           variant="outline"
           size="sm"
-          className="gap-2"
+          className="gap-2 h-11 px-4 w-full sm:w-auto sm:h-8 sm:px-3"
           onClick={() => void fetchPositions(true)}
           disabled={refreshing}
         >
@@ -86,16 +86,16 @@ export default function OpenPositionsPage() {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-24">
+        <div className="flex items-center justify-center py-16 md:py-24">
           <RefreshCw className="size-5 animate-spin text-muted-foreground" />
         </div>
       ) : error ? (
         <Card className="border-destructive/40 bg-destructive/5">
-          <CardContent className="p-6 text-sm text-destructive">{error}</CardContent>
+          <CardContent className="p-4 md:p-6 text-sm text-destructive">{error}</CardContent>
         </Card>
       ) : positions.length === 0 ? (
         <Card>
-          <CardContent className="p-16 text-center">
+          <CardContent className="p-10 md:p-16 text-center">
             <Activity className="size-8 mx-auto text-muted-foreground/30 mb-3" />
             <p className="text-sm font-medium text-muted-foreground">No open positions</p>
             <p className="text-xs text-muted-foreground/60 mt-1">
@@ -104,7 +104,82 @@ export default function OpenPositionsPage() {
           </CardContent>
         </Card>
       ) : (
-        <Card className="overflow-hidden">
+        <>
+        <div className="space-y-3 md:hidden">
+          {positions.map((pos) => {
+            const isLong = pos.direction === 'LONG'
+            const pnlPos = pos.unrealizedPnlUsd !== null && pos.unrealizedPnlUsd >= 0
+            return (
+              <Card
+                key={pos.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => setSelected(pos)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') setSelected(pos)
+                }}
+                className="cursor-pointer active:bg-accent/50 transition-colors"
+              >
+                <CardContent className="p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-2 min-w-0">
+                    <span className="flex items-center gap-1.5 font-semibold min-w-0">
+                      {isLong
+                        ? <TrendingUp className="size-3.5 text-green-500 shrink-0" />
+                        : <TrendingDown className="size-3.5 text-red-500 shrink-0" />
+                      }
+                      <span className="truncate">{pos.symbol}</span>
+                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Badge variant={isLong ? 'default' : 'destructive'} className="text-xs">
+                        {pos.direction}
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">{pos.mode.toUpperCase()}</Badge>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+                    <div className="min-w-0">
+                      <p className="text-xs text-muted-foreground">Entry</p>
+                      <p className="tabular-nums text-muted-foreground truncate">${fmt(pos.entryPrice)}</p>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-muted-foreground">Current</p>
+                      <p className="tabular-nums truncate">
+                        {pos.currentPrice !== null ? `$${fmt(pos.currentPrice)}` : '—'}
+                      </p>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-muted-foreground">P&L ($)</p>
+                      <p className={cn('tabular-nums font-medium truncate', pos.unrealizedPnlUsd === null ? 'text-muted-foreground' : pnlPos ? 'text-green-500' : 'text-red-500')}>
+                        {fmtPnl(pos.unrealizedPnlUsd)}
+                      </p>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-muted-foreground">P&L (%)</p>
+                      <p className={cn('tabular-nums truncate', pos.unrealizedPnlPct === null ? 'text-muted-foreground' : pnlPos ? 'text-green-500' : 'text-red-500')}>
+                        {fmtPct(pos.unrealizedPnlPct)}
+                      </p>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-muted-foreground">SL</p>
+                      <p className="tabular-nums text-muted-foreground truncate">
+                        {pos.stopLoss ? `$${fmt(pos.stopLoss)}` : '—'}
+                      </p>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs text-muted-foreground">TP</p>
+                      <p className="tabular-nums text-muted-foreground truncate">
+                        {pos.takeProfit ? `$${fmt(pos.takeProfit)}` : '—'}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          })}
+        </div>
+
+        <Card className="overflow-hidden hidden md:block">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -169,6 +244,7 @@ export default function OpenPositionsPage() {
             </table>
           </div>
         </Card>
+        </>
       )}
 
       <PositionDrawer

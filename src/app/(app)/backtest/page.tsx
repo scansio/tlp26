@@ -524,7 +524,7 @@ export default function BacktestPage() {
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col">
       {/* Disclaimer banner */}
-      <div className="bg-amber-950/60 border-b border-amber-800/50 px-4 py-2 flex items-center gap-3">
+      <div className="bg-amber-950/60 border-b border-amber-800/50 px-4 py-3 sm:py-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
         <span className="text-amber-400 font-semibold text-sm">DISCLAIMER</span>
         <p className="text-amber-200/80 text-xs">
           Past performance does not guarantee future results. This simulation does not account for all
@@ -533,11 +533,11 @@ export default function BacktestPage() {
         </p>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-col md:flex-row flex-1 overflow-visible md:overflow-hidden">
         {/* ------------------------------------------------------------------ */}
         {/* Sidebar — past runs                                                 */}
         {/* ------------------------------------------------------------------ */}
-        <aside className="w-64 border-r border-zinc-800 flex flex-col shrink-0 overflow-y-auto">
+        <aside className="order-last md:order-none w-full md:w-64 max-h-64 md:max-h-none border-t md:border-t-0 md:border-r border-zinc-800 flex flex-col shrink-0 overflow-y-auto">
           <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-zinc-300">Past Runs</h2>
             {pastRunsLoading && (
@@ -549,7 +549,7 @@ export default function BacktestPage() {
           <div className="px-4 py-2 border-b border-zinc-800 flex gap-2">
             <button
               onClick={() => setActiveSlot('A')}
-              className={`flex-1 rounded py-1 text-xs font-medium transition-colors ${
+              className={`flex-1 rounded min-h-11 md:min-h-0 py-2.5 md:py-1 text-xs font-medium transition-colors ${
                 activeSlot === 'A'
                   ? 'bg-emerald-600 text-white'
                   : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
@@ -559,7 +559,7 @@ export default function BacktestPage() {
             </button>
             <button
               onClick={() => setActiveSlot('B')}
-              className={`flex-1 rounded py-1 text-xs font-medium transition-colors ${
+              className={`flex-1 rounded min-h-11 md:min-h-0 py-2.5 md:py-1 text-xs font-medium transition-colors ${
                 activeSlot === 'B'
                   ? 'bg-amber-600 text-white'
                   : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
@@ -594,11 +594,11 @@ export default function BacktestPage() {
         {/* ------------------------------------------------------------------ */}
         {/* Main content                                                         */}
         {/* ------------------------------------------------------------------ */}
-        <main className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
-          <div className="flex items-center justify-between">
-            <h1 className="text-xl font-bold text-white">Backtest Strategy</h1>
+        <main className="flex-1 min-w-0 overflow-y-auto px-4 py-4 space-y-4 md:px-6 md:py-6 md:space-y-6">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h1 className="text-lg md:text-xl font-bold text-white">Backtest Strategy</h1>
             {(resultA || resultB) && (
-              <div className="flex items-center gap-2 text-xs text-zinc-500">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
                 {resultA && (
                   <span className="flex items-center gap-1">
                     <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
@@ -628,18 +628,18 @@ export default function BacktestPage() {
                   <button
                     type="button"
                     onClick={() => setShowSymbolPicker((v) => !v)}
-                    className="w-full text-left rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 hover:border-zinc-600 transition-colors"
+                    className="w-full text-left rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 min-h-11 md:min-h-0 flex items-center text-sm text-zinc-100 hover:border-zinc-600 transition-colors"
                   >
                     {symbol}
                   </button>
                   {showSymbolPicker && (
-                    <div className="absolute z-50 mt-1 w-56 rounded-md border border-zinc-700 bg-zinc-900 shadow-xl">
+                    <div className="absolute z-50 mt-1 w-full sm:w-56 rounded-md border border-zinc-700 bg-zinc-900 shadow-xl">
                       <div className="p-2">
                         <Input
                           placeholder="Search symbols…"
                           value={symbolSearch}
                           onChange={(e) => setSymbolSearch(e.target.value)}
-                          className="h-8 text-sm bg-zinc-800 border-zinc-700"
+                          className="h-11 md:h-8 text-sm bg-zinc-800 border-zinc-700"
                           autoFocus
                         />
                       </div>
@@ -653,7 +653,7 @@ export default function BacktestPage() {
                                 setShowSymbolPicker(false);
                                 setSymbolSearch('');
                               }}
-                              className={`w-full text-left px-3 py-1.5 text-sm hover:bg-zinc-800 transition-colors ${
+                              className={`w-full text-left px-3 py-2.5 md:py-1.5 min-h-11 md:min-h-0 flex items-center text-sm hover:bg-zinc-800 transition-colors ${
                                 s === symbol ? 'text-emerald-400 font-medium' : 'text-zinc-200'
                               }`}
                             >
@@ -673,7 +673,7 @@ export default function BacktestPage() {
                 <div>
                   <label className="block text-xs text-zinc-400 mb-1">Timeframe</label>
                   <Select value={timeframe} onValueChange={setTimeframe}>
-                    <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-100">
+                    <SelectTrigger className="w-full min-h-11 md:min-h-0 bg-zinc-800 border-zinc-700 text-zinc-100">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent className="bg-zinc-900 border-zinc-700">
@@ -693,7 +693,7 @@ export default function BacktestPage() {
                     type="date"
                     value={startDate}
                     onChange={(e) => setStartDate(e.target.value)}
-                    className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 min-h-11 md:min-h-0 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
 
@@ -704,7 +704,7 @@ export default function BacktestPage() {
                     type="date"
                     value={endDate}
                     onChange={(e) => setEndDate(e.target.value)}
-                    className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 min-h-11 md:min-h-0 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
               </div>
@@ -714,13 +714,13 @@ export default function BacktestPage() {
                 <label className="block text-xs text-zinc-400 mb-2">
                   Strategies — select which to simulate
                 </label>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-3 md:gap-2">
                   {(userStrategies.length > 0 ? userStrategies : ALL_STRATEGIES).map((s) => (
                     <button
                       key={s}
                       type="button"
                       onClick={() => toggleStrategy(s)}
-                      className={`rounded-full px-3 py-1 text-xs font-medium transition-colors border ${
+                      className={`rounded-full px-3 py-2.5 md:py-1 min-h-11 md:min-h-0 inline-flex items-center text-xs font-medium transition-colors border ${
                         selectedStrategies.includes(s)
                           ? 'bg-emerald-600/30 border-emerald-600 text-emerald-300'
                           : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-zinc-500'
@@ -732,11 +732,11 @@ export default function BacktestPage() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                 <Button
                   onClick={runBacktest}
                   disabled={isRunning || selectedStrategies.length === 0}
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-50"
+                  className="w-full sm:w-auto h-11 md:h-9 bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-50"
                 >
                   {isRunning
                     ? `Running… ${progress}%`
@@ -795,12 +795,12 @@ export default function BacktestPage() {
                 </Card>
 
                 {/* Tabs: Metrics / Per-strategy / Trades */}
-                <div className="flex gap-1 border-b border-zinc-800">
+                <div className="flex gap-1 border-b border-zinc-800 overflow-x-auto">
                   {(['metrics', 'strategies', 'trades'] as const).map((tab) => (
                     <button
                       key={tab}
                       onClick={() => setActiveTab(tab)}
-                      className={`px-4 py-2 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${
+                      className={`px-4 py-3 md:py-2 min-h-11 md:min-h-0 whitespace-nowrap text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${
                         activeTab === tab
                           ? 'border-emerald-500 text-emerald-400'
                           : 'border-transparent text-zinc-400 hover:text-zinc-200'
@@ -850,7 +850,44 @@ export default function BacktestPage() {
                 {activeTab === 'strategies' && (
                   <Card className="bg-zinc-900 border-zinc-800">
                     <CardContent className="p-0">
-                      <div className="overflow-x-auto">
+                      {/* Mobile card list */}
+                      <div className="md:hidden divide-y divide-zinc-800/50">
+                        {metrics.perStrategy.map((s) => (
+                          <div key={s.strategy} className="px-4 py-3 space-y-2">
+                            <p className="text-sm font-semibold text-zinc-100">{s.strategy}</p>
+                            <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+                              <span className="text-zinc-500">Trades</span>
+                              <span className="text-zinc-300 text-right">{s.totalTrades}</span>
+                              <span className="text-zinc-500">Win%</span>
+                              <span className={`text-right ${s.winRate > 50 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                {fmt(s.winRate, 1)}%
+                              </span>
+                              <span className="text-zinc-500">Avg Win</span>
+                              <span className="text-emerald-400 text-right">{fmtCurrency(s.avgWin)}</span>
+                              <span className="text-zinc-500">Avg Loss</span>
+                              <span className="text-red-400 text-right">{fmtCurrency(-s.avgLoss)}</span>
+                              <span className="text-zinc-500">P.Factor</span>
+                              <span className={`text-right ${isFinite(s.profitFactor) && s.profitFactor > 1 ? 'text-emerald-400' : 'text-zinc-300'}`}>
+                                {isFinite(s.profitFactor) ? fmt(s.profitFactor, 2) : '+∞'}
+                              </span>
+                              <span className="text-zinc-500">Drawdown</span>
+                              <span className={`text-right ${s.maxDrawdownPct > 20 ? 'text-red-400' : 'text-zinc-300'}`}>
+                                {fmt(s.maxDrawdownPct, 1)}%
+                              </span>
+                              <span className="text-zinc-500">Sharpe</span>
+                              <span className={`text-right ${s.sharpeRatio > 1 ? 'text-emerald-400' : s.sharpeRatio < 0 ? 'text-red-400' : 'text-zinc-300'}`}>
+                                {fmt(s.sharpeRatio, 2)}
+                              </span>
+                              <span className="text-zinc-500">Return%</span>
+                              <span className={`text-right font-medium ${s.totalReturnPct > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                {fmt(s.totalReturnPct, 2)}%
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Desktop table */}
+                      <div className="hidden md:block overflow-x-auto">
                         <table className="w-full text-sm">
                           <thead>
                             <tr className="border-b border-zinc-800">
@@ -896,7 +933,41 @@ export default function BacktestPage() {
                 {activeTab === 'trades' && (
                   <Card className="bg-zinc-900 border-zinc-800">
                     <CardContent className="p-0">
-                      <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                      {/* Mobile card list */}
+                      <div className="md:hidden max-h-96 overflow-y-auto divide-y divide-zinc-800/50">
+                        {(metrics.trades ?? []).length === 0 && (
+                          <p className="px-4 py-8 text-center text-zinc-500 text-xs">
+                            No trades in this backtest period.
+                          </p>
+                        )}
+                        {(metrics.trades ?? []).map((t, idx) => (
+                          <div key={idx} className="px-4 py-3 space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <Badge className={t.direction === 'LONG' ? 'bg-emerald-900/60 text-emerald-400 border-emerald-800' : 'bg-red-900/60 text-red-400 border-red-800'}>
+                                  {t.direction}
+                                </Badge>
+                                <span className="text-zinc-200 text-sm truncate">{t.symbol}</span>
+                              </div>
+                              <span className={`font-medium text-sm shrink-0 ${t.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                {fmtCurrency(t.pnl)}
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+                              <span className="text-zinc-500">Date</span>
+                              <span className="text-zinc-400 text-right">{fmtDate(t.date)}</span>
+                              <span className="text-zinc-500">Entry</span>
+                              <span className="text-zinc-300 text-right">${t.entry.toLocaleString()}</span>
+                              <span className="text-zinc-500">Exit</span>
+                              <span className="text-zinc-300 text-right">${t.exit.toLocaleString()}</span>
+                              <span className="text-zinc-500">Strategy</span>
+                              <span className="text-zinc-400 text-right">{t.strategy}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Desktop table */}
+                      <div className="hidden md:block overflow-x-auto max-h-96 overflow-y-auto">
                         <table className="w-full text-sm">
                           <thead className="sticky top-0 bg-zinc-900">
                             <tr className="border-b border-zinc-800">

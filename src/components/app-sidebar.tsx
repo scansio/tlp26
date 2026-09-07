@@ -105,7 +105,7 @@ function NavItem({
       <Collapsible defaultOpen={isOpen} className="group/collapsible">
         <SidebarMenuItem data-tour={'tourId' in item ? item.tourId : undefined}>
           <CollapsibleTrigger asChild>
-            <SidebarMenuButton tooltip={item.title}>
+            <SidebarMenuButton tooltip={item.title} className="h-11 md:h-8">
               <item.icon className="size-4" />
               <span>{item.title}</span>
               <ChevronRight className="ml-auto size-3.5 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
@@ -117,7 +117,7 @@ function NavItem({
                 const active = pathname === child.href || pathname.startsWith(child.href + '/');
                 return (
                   <SidebarMenuSubItem key={child.href}>
-                    <SidebarMenuSubButton asChild isActive={active}>
+                    <SidebarMenuSubButton asChild isActive={active} className="h-11 md:h-7">
                       <Link href={child.href}>
                         <child.icon className="size-3.5" />
                         <span>{child.title}</span>
@@ -136,7 +136,7 @@ function NavItem({
   const active = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href + '/'));
   return (
     <SidebarMenuItem data-tour={'tourId' in item ? item.tourId : undefined}>
-      <SidebarMenuButton asChild isActive={active} tooltip={item.title}>
+      <SidebarMenuButton asChild isActive={active} tooltip={item.title} className="h-11 md:h-8">
         <Link href={item.href!}>
           <item.icon className="size-4" />
           <span>{item.title}</span>
@@ -195,7 +195,7 @@ export function AppSidebar() {
                 const active = pathname === item.href || pathname.startsWith(item.href + '/');
                 return (
                   <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton asChild isActive={active} tooltip={item.title}>
+                    <SidebarMenuButton asChild isActive={active} tooltip={item.title} className="h-11 md:h-8">
                       <Link href={item.href}>
                         <item.icon className="size-4" />
                         <span>{item.title}</span>
@@ -217,7 +217,7 @@ export function AppSidebar() {
                 const active = pathname === item.href || pathname.startsWith(item.href + '/');
                 return (
                   <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton asChild isActive={active} tooltip={item.title}>
+                    <SidebarMenuButton asChild isActive={active} tooltip={item.title} className="h-11 md:h-8">
                       <Link href={item.href}>
                         <item.icon className="size-4" />
                         <span>{item.title}</span>
@@ -235,7 +235,7 @@ export function AppSidebar() {
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <div className={cn('flex items-center gap-2 px-2 py-1.5')}>
+            <div className={cn('flex min-h-11 items-center gap-2 px-2 py-1.5')}>
               <UserButton
                 appearance={{
                   elements: {

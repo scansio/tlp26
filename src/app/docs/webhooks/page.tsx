@@ -41,16 +41,16 @@ const FIELDS = [
 
 export default function WebhooksPage() {
   return (
-    <article>
+    <article className="min-w-0 max-w-full">
       <p className="text-xs font-semibold uppercase tracking-widest text-emerald-500 mb-2">TradingView</p>
-      <h1 className="text-3xl font-bold text-white mb-3">Send signals from TradingView</h1>
-      <p className="text-zinc-400 text-lg mb-12">
+      <h1 className="text-2xl md:text-3xl font-bold text-white mb-3">Send signals from TradingView</h1>
+      <p className="text-zinc-400 text-base md:text-lg mb-8 md:mb-12">
         Trading Hub accepts inbound webhooks from TradingView Pine Script alerts. Any strategy or indicator that fires an alert can route a signal directly into your account.
       </p>
 
       {/* Step 1 — Get your URL */}
-      <section className="mb-12">
-        <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+      <section className="mb-8 md:mb-12">
+        <h2 className="text-base md:text-lg font-semibold text-white mb-4 flex items-center gap-2">
           <span className="text-xs font-mono text-zinc-500">01</span>
           Find your webhook URL and token
         </h2>
@@ -61,34 +61,34 @@ export default function WebhooksPage() {
           </Link>{' '}
           and scroll to the <strong className="text-white">TradingView Webhook</strong> section. You&apos;ll see your unique webhook URL and token. Copy both — you&apos;ll need them in TradingView.
         </p>
-        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-5 py-4 flex items-center gap-3 text-sm">
-          <Lock className="h-4 w-4 text-zinc-500 shrink-0" />
-          <p className="text-zinc-400">
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 md:px-5 py-4 flex items-start md:items-center gap-3 text-sm">
+          <Lock className="h-4 w-4 text-zinc-500 shrink-0 mt-0.5 md:mt-0" />
+          <p className="text-zinc-400 min-w-0">
             The <code className="text-emerald-400 text-xs">token</code> in the payload authenticates the request — treat it like a password. It is never sent in headers or query strings.
           </p>
         </div>
       </section>
 
       {/* Step 2 — Regenerate */}
-      <section className="mb-12">
-        <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+      <section className="mb-8 md:mb-12">
+        <h2 className="text-base md:text-lg font-semibold text-white mb-4 flex items-center gap-2">
           <span className="text-xs font-mono text-zinc-500">02</span>
           Regenerating your token
         </h2>
         <p className="text-sm text-zinc-400 leading-relaxed mb-4">
           If you suspect your token has been compromised, click <strong className="text-white">Regenerate</strong> in the Exchanges settings. The old token is immediately invalidated — any existing TradingView alerts using it will start returning 401 errors until you update them with the new token.
         </p>
-        <div className="rounded-xl border border-amber-800/40 bg-amber-950/20 px-5 py-4 flex items-center gap-3 text-sm">
-          <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
-          <p className="text-amber-200/70">
+        <div className="rounded-xl border border-amber-800/40 bg-amber-950/20 px-4 md:px-5 py-4 flex items-start md:items-center gap-3 text-sm">
+          <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5 md:mt-0" />
+          <p className="text-amber-200/70 min-w-0">
             After regenerating, update the <code className="text-xs">token</code> field in every TradingView alert that sends to this endpoint.
           </p>
         </div>
       </section>
 
       {/* Payload schema */}
-      <section className="mb-12">
-        <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+      <section className="mb-8 md:mb-12">
+        <h2 className="text-base md:text-lg font-semibold text-white mb-4 flex items-center gap-2">
           <span className="text-xs font-mono text-zinc-500">03</span>
           Payload format
         </h2>
@@ -96,8 +96,8 @@ export default function WebhooksPage() {
           Send a <code className="text-emerald-400 text-xs">POST</code> request with a JSON body to your webhook URL. The <code className="text-emerald-400 text-xs">Content-Type</code> header must be <code className="text-emerald-400 text-xs">application/json</code>.
         </p>
 
-        {/* Field reference */}
-        <div className="divide-y divide-zinc-800 rounded-xl border border-zinc-800 overflow-hidden mb-6">
+        {/* Field reference — desktop table */}
+        <div className="hidden md:block divide-y divide-zinc-800 rounded-xl border border-zinc-800 overflow-hidden mb-6">
           <div className="grid grid-cols-[120px_140px_70px_1fr] gap-3 px-4 py-2.5 bg-zinc-800/60 text-xs font-medium text-zinc-400">
             <span>Field</span>
             <span>Type</span>
@@ -116,23 +116,42 @@ export default function WebhooksPage() {
           ))}
         </div>
 
+        {/* Field reference — mobile cards */}
+        <div className="md:hidden space-y-3 mb-6">
+          {FIELDS.map(({ field, type, required, desc }) => (
+            <div key={field} className="rounded-xl border border-zinc-800 bg-zinc-900/30 px-4 py-3 text-xs space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <code className="text-emerald-400 text-sm break-all">{field}</code>
+                <span className={required ? 'text-white font-medium shrink-0' : 'text-zinc-500 shrink-0'}>
+                  {required ? 'Required' : 'Optional'}
+                </span>
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-zinc-500 shrink-0">Type</span>
+                <code className="text-zinc-300 break-all">{type}</code>
+              </div>
+              <p className="text-zinc-400 leading-relaxed break-words">{desc}</p>
+            </div>
+          ))}
+        </div>
+
         {/* Example payload */}
         <p className="text-xs text-zinc-500 mb-2 font-mono uppercase tracking-widest">Example payload</p>
-        <pre className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-5 py-4 text-xs text-zinc-300 leading-relaxed overflow-x-auto">
+        <pre className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 md:px-5 py-4 text-xs text-zinc-300 leading-relaxed overflow-x-auto max-w-full">
           <code>{PAYLOAD_EXAMPLE}</code>
         </pre>
       </section>
 
       {/* Pine Script example */}
-      <section className="mb-16">
-        <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+      <section className="mb-12 md:mb-16">
+        <h2 className="text-base md:text-lg font-semibold text-white mb-4 flex items-center gap-2">
           <span className="text-xs font-mono text-zinc-500">04</span>
           TradingView Pine Script example
         </h2>
         <p className="text-sm text-zinc-400 leading-relaxed mb-5">
           Add an alert to your Pine Script strategy using <code className="text-emerald-400 text-xs">alert()</code>. Paste the JSON payload as the alert message and set the webhook URL in TradingView&apos;s alert settings.
         </p>
-        <pre className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-5 py-4 text-xs text-zinc-300 leading-relaxed overflow-x-auto">
+        <pre className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 md:px-5 py-4 text-xs text-zinc-300 leading-relaxed overflow-x-auto max-w-full">
           <code>{PINE_EXAMPLE}</code>
         </pre>
         <p className="text-xs text-zinc-500 mt-3">
@@ -141,19 +160,19 @@ export default function WebhooksPage() {
       </section>
 
       {/* Paper vs live note */}
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-5 py-4 mb-16 text-sm text-zinc-400 leading-relaxed flex gap-3">
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-4 md:px-5 py-4 mb-12 md:mb-16 text-sm text-zinc-400 leading-relaxed flex gap-3">
         <RefreshCw className="h-4 w-4 text-zinc-500 shrink-0 mt-0.5" />
-        <p>
+        <p className="min-w-0">
           Webhook signals respect your current trading mode. In <strong className="text-white">Paper Mode</strong>, the signal is logged and tracked but no real order is placed. Switch to <strong className="text-white">Live Mode</strong> in your risk profile when you&apos;re ready to execute.
         </p>
       </div>
 
-      <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800 p-8 text-center">
-        <p className="text-2xl font-bold text-white mb-2">Connect TradingView in minutes</p>
+      <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800 p-6 md:p-8 text-center">
+        <p className="text-xl md:text-2xl font-bold text-white mb-2">Connect TradingView in minutes</p>
         <p className="text-zinc-400 mb-6">Sign up, grab your webhook URL from the Exchanges page, and wire up your first alert.</p>
         <Link
           href="/sign-up"
-          className="inline-flex items-center gap-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-8 py-3 transition-colors"
+          className="inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-8 py-3 min-h-11 transition-colors"
         >
           Create your account <ArrowRight className="h-4 w-4" />
         </Link>

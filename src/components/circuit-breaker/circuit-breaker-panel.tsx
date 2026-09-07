@@ -184,7 +184,7 @@ export function CircuitBreakerPanel() {
 
   if (loading) {
     return (
-      <Card className="p-6 space-y-4">
+      <Card className="p-4 md:p-6 space-y-4">
         <p className="text-sm text-muted-foreground">Loading circuit breaker state&hellip;</p>
       </Card>
     );
@@ -192,7 +192,7 @@ export function CircuitBreakerPanel() {
 
   if (!data) {
     return (
-      <Card className="p-6 space-y-4">
+      <Card className="p-4 md:p-6 space-y-4">
         <p className="text-sm text-red-600">{error ?? 'Could not load circuit breaker state.'}</p>
       </Card>
     );
@@ -202,7 +202,7 @@ export function CircuitBreakerPanel() {
   const killSwitchOn = diagnostics.killSwitchActive;
 
   return (
-    <Card className="p-6 space-y-5">
+    <Card className="p-4 md:p-6 space-y-5">
       {/* Header */}
       <div>
         <h2 className="text-base font-semibold">Circuit Breaker Status</h2>
@@ -245,7 +245,7 @@ export function CircuitBreakerPanel() {
 
       {/* Kill switch toggle */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col items-stretch gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-sm font-medium">Manual Kill Switch</p>
             <p className="text-xs text-muted-foreground">
@@ -259,7 +259,7 @@ export function CircuitBreakerPanel() {
             size="sm"
             onClick={handleToggleKillSwitch}
             disabled={toggling}
-            className="min-w-[100px]"
+            className="w-full md:w-auto h-11 md:h-8 md:min-w-[100px]"
           >
             {toggling ? 'Updating…' : killSwitchOn ? 'Switch OFF' : 'Engage Kill Switch'}
           </Button>

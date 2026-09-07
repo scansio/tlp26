@@ -107,12 +107,12 @@ export default function SignalQueuePage() {
   const pendingCount = signals.filter((s) => s.status === 'pending').length;
 
   return (
-    <div className="max-w-3xl mx-auto p-6 space-y-6">
+    <div className="max-w-3xl mx-auto p-4 space-y-4 md:p-6 md:space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold">Signal Approval Queue</h1>
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <h1 className="text-xl font-bold md:text-2xl">Signal Approval Queue</h1>
 
             {/* Pending count badge */}
             {pendingCount > 0 && (
@@ -156,7 +156,7 @@ export default function SignalQueuePage() {
           size="sm"
           onClick={() => void fetchQueue()}
           disabled={loading}
-          className="shrink-0"
+          className="h-11 w-full shrink-0 md:h-8 md:w-auto"
         >
           {loading ? 'Refreshing…' : 'Refresh'}
         </Button>
@@ -169,7 +169,7 @@ export default function SignalQueuePage() {
           <Button
             variant="outline"
             size="sm"
-            className="mt-2"
+            className="mt-2 h-11 w-full md:h-8 md:w-auto"
             onClick={() => void fetchQueue()}
           >
             Retry
@@ -179,14 +179,14 @@ export default function SignalQueuePage() {
 
       {/* Loading skeleton (first load only) */}
       {loading && signals.length === 0 && (
-        <div className="text-center py-12 text-muted-foreground">
+        <div className="text-center py-8 text-muted-foreground md:py-12">
           Loading signal queue…
         </div>
       )}
 
       {/* Empty state */}
       {!loading && !error && signals.length === 0 && (
-        <Card className="p-10 text-center">
+        <Card className="p-6 text-center md:p-10">
           <div className="flex flex-col items-center gap-3">
             {/* Brain / monitor icon */}
             <svg

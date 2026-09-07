@@ -40,7 +40,7 @@ import {
   AttachmentRemove,
 } from '@/components/ai-elements/attachments'
 import { Button } from '@/components/ui/button'
-import { AlertCircle, MessageSquarePlus, RefreshCw, Trash2 } from 'lucide-react'
+import { AlertCircle, MessageSquarePlus, Menu, RefreshCw, Trash2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // ---------------------------------------------------------------------------
@@ -93,13 +93,15 @@ function renderToolPart(part: ToolUIPart, key: string) {
   }
   const isError = part.state === 'output-error'
   return (
-    <Tool key={key} defaultOpen={isError}>
-      <ToolHeader type={part.type} state={part.state || 'output-available'} className="cursor-pointer" />
-      <ToolContent>
-        <ToolInput input={part.input || {}} />
-        <ToolOutput output={part.output} errorText={part.errorText} />
-      </ToolContent>
-    </Tool>
+    <div key={key} className="min-w-0 max-w-full [&_pre]:max-w-full [&_pre]:overflow-x-auto">
+      <Tool defaultOpen={isError}>
+        <ToolHeader type={part.type} state={part.state || 'output-available'} className="cursor-pointer" />
+        <ToolContent>
+          <ToolInput input={part.input || {}} />
+          <ToolOutput output={part.output} errorText={part.errorText} />
+        </ToolContent>
+      </Tool>
+    </div>
   )
 }
 
@@ -110,7 +112,7 @@ function renderFilePart(part: FileUIPart, key: string) {
         key={key}
         src={part.url}
         alt={part.filename ?? 'Image'}
-        className="max-w-xs rounded-lg border border-border object-cover"
+        className="max-w-full sm:max-w-xs rounded-lg border border-border object-cover"
       />
     )
   }
@@ -153,9 +155,11 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
 function ChatInterface({
   threadId,
   onTitleSet,
+  onOpenSessions,
 }: {
   threadId: string
   onTitleSet: (title: string) => void
+  onOpenSessions?: () => void
 }) {
   const [input, setInput] = useState('')
   const titleSetRef = useRef(false)
@@ -195,8 +199,19 @@ function ChatInterface({
   }, [messages.length, threadId, onTitleSet, sendMessage])
 
   return (
-    <div className="relative flex flex-1 flex-col overflow-hidden p-6">
-      <Conversation className="h-full">
+    <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden p-2 sm:p-4 md:p-6">
+      <div className="mb-2 flex items-center gap-2 md:hidden">
+        <Button
+          variant="outline"
+          size="icon"
+          className="h-11 w-11 shrink-0"
+          onClick={onOpenSessions}
+          aria-label="Open chat sessions"
+        >
+          <Menu className="size-4" />
+        </Button>
+      </div>
+      <Conversation className="h-full min-w-0">
         <ConversationContent>
           {messages.map(message => {
             const parts = message.parts ?? []
@@ -279,16 +294,18 @@ function ChatInterface({
           )}
 
           {status === 'error' && (
-            <div className="flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-              <AlertCircle className="mt-0.5 size-4 shrink-0" />
-              <div className="flex min-w-0 flex-1 flex-col gap-1">
-                <span className="font-medium">Request failed</span>
-                <span className="text-xs opacity-80">{friendlyError(error)}</span>
+            <div className="flex flex-col items-stretch gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive sm:flex-row sm:items-start">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span className="font-medium">Request failed</span>
+                  <span className="text-xs opacity-80">{friendlyError(error)}</span>
+                </div>
               </div>
               <Button
                 size="sm"
                 variant="outline"
-                className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10"
+                className="h-11 w-full shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 sm:h-8 sm:w-auto"
                 onClick={() => regenerate()}
               >
                 <RefreshCw className="mr-1.5 size-3" />
@@ -303,7 +320,7 @@ function ChatInterface({
 
       <PromptInput
         onSubmit={handleSubmit}
-        className="mt-20"
+        className="mt-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:mt-20 md:pb-0"
         accept="image/*,text/*,application/pdf"
         multiple
         maxFileSize={MAX_FILE_SIZE}
@@ -350,20 +367,22 @@ function SessionSidebar({
   onSelect,
   onNew,
   onDelete,
+  className,
 }: {
   sessions: Session[]
   activeId: string | null
   onSelect: (id: string) => void
   onNew: () => void
   onDelete: (id: string, e: React.MouseEvent) => void
+  className?: string
 }) {
   return (
-    <div className="flex w-56 shrink-0 flex-col border-r border-border bg-muted/30">
+    <div className={cn('flex w-full shrink-0 flex-col border-border bg-muted/30 md:w-56 md:border-r', className)}>
       <div className="p-3">
         <Button
           variant="outline"
           size="sm"
-          className="w-full justify-start gap-2 text-xs"
+          className="h-11 w-full justify-start gap-2 text-xs md:h-8"
           onClick={onNew}
         >
           <MessageSquarePlus className="size-3.5" />
@@ -376,15 +395,23 @@ function SessionSidebar({
           <p className="px-2 py-6 text-center text-xs text-muted-foreground">No sessions yet</p>
         )}
         {sessions.map(session => (
-          <button
+          <div
             key={session.id}
+            role="button"
+            tabIndex={0}
             onClick={() => onSelect(session.id)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onSelect(session.id)
+              }
+            }}
             className={cn(
-              'group relative flex w-full flex-col gap-0.5 rounded-md px-2.5 py-2 text-left text-xs transition-colors hover:bg-accent',
+              'group relative flex w-full min-w-0 cursor-pointer flex-col gap-0.5 rounded-md px-2.5 py-2.5 text-left text-xs transition-colors hover:bg-accent md:py-2',
               activeId === session.id && 'bg-accent'
             )}
           >
-            <span className="truncate pr-5 font-medium leading-tight">
+            <span className="truncate pr-9 font-medium leading-tight md:pr-5">
               {session.title || 'New Chat'}
             </span>
             <span className="text-muted-foreground">
@@ -392,11 +419,12 @@ function SessionSidebar({
             </span>
             <button
               onClick={e => onDelete(session.id, e)}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+              aria-label="Delete session"
+              className="absolute right-1 top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded opacity-100 transition-opacity hover:text-destructive md:size-6 md:opacity-0 md:group-hover:opacity-100"
             >
-              <Trash2 className="size-3" />
+              <Trash2 className="size-3.5" />
             </button>
-          </button>
+          </div>
         ))}
       </div>
     </div>
@@ -410,6 +438,7 @@ function SessionSidebar({
 export default function Chat() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null)
+  const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false)
 
   useEffect(() => {
     fetch('/api/chat/sessions')
@@ -432,6 +461,12 @@ export default function Chat() {
     const session: Session = { id, title, createdAt, updatedAt: createdAt }
     setSessions(prev => [session, ...prev])
     setActiveThreadId(id)
+    setMobileSessionsOpen(false)
+  }
+
+  const handleSelectSession = (id: string) => {
+    setActiveThreadId(id)
+    setMobileSessionsOpen(false)
   }
 
   const handleDelete = async (id: string, e: React.MouseEvent) => {
@@ -451,8 +486,9 @@ export default function Chat() {
   }
 
   return (
-    <div className="flex h-full w-full overflow-hidden">
+    <div className="relative flex h-full w-full overflow-hidden">
       <SessionSidebar
+        className="hidden md:flex"
         sessions={sessions}
         activeId={activeThreadId}
         onSelect={setActiveThreadId}
@@ -460,17 +496,58 @@ export default function Chat() {
         onDelete={handleDelete}
       />
 
+      {mobileSessionsOpen && (
+        <div className="fixed inset-0 z-50 flex md:hidden">
+          <button
+            aria-label="Close sessions"
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setMobileSessionsOpen(false)}
+          />
+          <div className="relative flex h-full w-72 max-w-[80vw] flex-col bg-background shadow-xl">
+            <div className="flex items-center justify-between border-b border-border p-2">
+              <span className="px-2 text-sm font-medium">Chats</span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-11 w-11"
+                onClick={() => setMobileSessionsOpen(false)}
+                aria-label="Close sessions"
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
+            <SessionSidebar
+              className="flex h-full w-full border-r-0"
+              sessions={sessions}
+              activeId={activeThreadId}
+              onSelect={handleSelectSession}
+              onNew={handleNewChat}
+              onDelete={handleDelete}
+            />
+          </div>
+        </div>
+      )}
+
       {activeThreadId ? (
         <ChatInterface
           key={activeThreadId}
           threadId={activeThreadId}
           onTitleSet={title => handleTitleSet(activeThreadId, title)}
+          onOpenSessions={() => setMobileSessionsOpen(true)}
         />
       ) : (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-4 text-center text-muted-foreground">
           <MessageSquarePlus className="size-8 opacity-40" />
           <p className="text-sm">Start a new chat to begin</p>
-          <Button size="sm" onClick={handleNewChat}>New Chat</Button>
+          <Button size="sm" className="h-11 md:h-8" onClick={handleNewChat}>New Chat</Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-11 md:hidden"
+            onClick={() => setMobileSessionsOpen(true)}
+          >
+            View chat history
+          </Button>
         </div>
       )}
     </div>
