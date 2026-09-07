@@ -126,6 +126,9 @@ interface MonitorState {
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000, 60000, 60000];
 const MAX_RETRIES = 10;
 const PAPER_POLL_INTERVAL_MS = 10_000;
+// Fallback cadence for live exchanges whose ccxt.pro implementation doesn't
+// support batched watchTickers (e.g. BingX) — REST fetchTicker per symbol instead.
+const REST_TICKER_POLL_INTERVAL_MS = 5_000;
 const PRICE_TOLERANCE_PCT = 0.005;
 // Profit lock: how often the periodic sync checks live trailing positions and
 // materializes their software-computed trailSlPrice as a real resting order.
@@ -1558,6 +1561,10 @@ class PositionMonitorManager {
           ...(creds.password ? { password: creds.password } : {}),
         });
 
+        const supportsWatchTickers = Boolean(
+          (exchange as unknown as { has: Record<string, boolean> }).has?.watchTickers,
+        );
+
         while (!state.stopped) {
           // Identify unique symbols across all open positions — trailing
           // positions need continuous ratchet ticks, fixed-mode positions
@@ -1585,10 +1592,27 @@ class PositionMonitorManager {
             pairs.map((p) => [toExchangeSymbol(p.symbol, p.marketType), p]),
           );
 
-          // Watch tickers for all open-position symbols simultaneously
-          const tickers = await (exchange as unknown as {
-            watchTickers: (symbols: string[]) => Promise<Record<string, { last?: number | null }>>;
-          }).watchTickers([...exchangeSymbolToPair.keys()]);
+          // Watch tickers for all open-position symbols simultaneously. Some
+          // exchanges' ccxt.pro implementation doesn't support the batched
+          // watchTickers call (e.g. BingX) — fall back to REST fetchTicker
+          // polling per symbol so trailing/fixed exits still run for them.
+          let tickers: Record<string, { last?: number | null }>;
+          if (supportsWatchTickers) {
+            tickers = await (exchange as unknown as {
+              watchTickers: (symbols: string[]) => Promise<Record<string, { last?: number | null }>>;
+            }).watchTickers([...exchangeSymbolToPair.keys()]);
+          } else {
+            tickers = {};
+            for (const exchangeSymbol of exchangeSymbolToPair.keys()) {
+              if (state.stopped) break;
+              try {
+                tickers[exchangeSymbol] = await exchange.fetchTicker(exchangeSymbol);
+              } catch {
+                // skip this symbol this tick; retried next cycle
+              }
+            }
+            await new Promise<void>((resolve) => setTimeout(resolve, REST_TICKER_POLL_INTERVAL_MS));
+          }
 
           if (state.stopped) break;
 
