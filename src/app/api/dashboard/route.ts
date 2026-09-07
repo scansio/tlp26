@@ -75,6 +75,7 @@ export async function GET() {
           stopLoss: tradeSignals.stopLoss,
           takeProfit: tradeSignals.takeProfit,
           entryAt: tradeExecutions.entryAt,
+          leverage: tradeExecutions.leverage,
         })
         .from(tradeExecutions)
         .leftJoin(tradeSignals, eq(tradeExecutions.signalId, tradeSignals.id))
@@ -237,6 +238,7 @@ export async function GET() {
       entryPrice,
       currentPrice,
       positionSize,
+      leverage: pos.leverage ?? 1,
       unrealizedPnlUsd,
       unrealizedPnlPct,
       stopLoss: pos.stopLoss ? parseFloat(pos.stopLoss) : null,

@@ -40,6 +40,7 @@ export type OpenPosition = {
   entryPrice: number | null
   currentPrice: number | null
   positionSize: number | null
+  leverage?: number | null
   unrealizedPnlUsd: number | null
   unrealizedPnlPct: number | null
   stopLoss: number | null
@@ -80,6 +81,12 @@ function fmtSize(v: number | null, symbol: string): string {
 function fmtNotional(size: number | null, price: number | null): string | null {
   if (size === null || price === null) return null
   return `${(size * price).toFixed(2)} USDT`
+}
+
+function fmtMargin(size: number | null, price: number | null, leverage: number | null | undefined): string | null {
+  if (size === null || price === null) return null
+  const lev = leverage && leverage > 0 ? leverage : 1
+  return `${((size * price) / lev).toFixed(2)} USDT`
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +190,7 @@ function Feedback({ status, msg, onRetry }: { status: ActionStatus; msg: string;
           <TriangleAlert className="size-4 shrink-0" />
           <span className="flex-1">{msg}</span>
         </div>
-        <Button size="sm" variant="outline" className="w-full" onClick={onRetry}>Try again</Button>
+        <Button size="sm" variant="outline" className="w-full h-11 md:h-8" onClick={onRetry}>Try again</Button>
       </div>
     )
   }
@@ -419,6 +426,13 @@ export function PositionDrawer({
           <span className="mx-1.5 text-border">·</span>
           {position.exchangeName.toUpperCase()}
         </p>
+        {fmtMargin(position.positionSize, position.currentPrice ?? position.entryPrice, position.leverage) && (
+          <p className="mx-4 md:mx-5 mt-0.5 text-xs text-muted-foreground tabular-nums">
+            Margin: {fmtMargin(position.positionSize, position.currentPrice ?? position.entryPrice, position.leverage)}
+            <span className="mx-1.5 text-border">·</span>
+            {position.leverage && position.leverage > 0 ? position.leverage : 1}x leverage
+          </p>
+        )}
 
         {/* ── Actions ────────────────────────────────────────────────── */}
         <div className="flex-1 overflow-y-auto px-4 md:px-5 py-4 space-y-3">
@@ -594,38 +608,43 @@ export function PositionDrawer({
           }}
         >
           {/* Title bar */}
-          <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2 border-b bg-background">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <span>{position.symbol}</span>
-              <Badge variant={isLong ? 'default' : 'destructive'} className="text-xs px-1.5 py-0">
+          <div className="shrink-0 flex items-center justify-between gap-2 px-3 md:px-4 py-2 border-b bg-background">
+            <div className="flex items-center gap-2 text-sm font-semibold min-w-0">
+              <span className="truncate">{position.symbol}</span>
+              <Badge variant={isLong ? 'default' : 'destructive'} className="text-xs px-1.5 py-0 shrink-0">
                 {position.direction}
               </Badge>
-              <span className="text-muted-foreground font-normal text-xs">
+              <span className="hidden md:inline text-muted-foreground font-normal text-xs truncate">
                 Entry ${fmtPrice(position.entryPrice)} · SL ${fmtPrice(position.stopLoss)} · TP ${fmtPrice(position.takeProfit)}
               </span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 md:gap-2 shrink-0">
               <a
                 href={buildTradingViewUrl(position.symbol, position.exchangeName, position.marketType)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                title="Open in TradingView"
+                className="inline-flex items-center justify-center gap-1.5 rounded-md border p-2.5 md:px-2.5 md:py-1 min-h-11 min-w-11 md:min-h-0 md:min-w-0 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 md:h-3 md:w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                   <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
                   <polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
                 </svg>
-                TradingView
+                <span className="hidden md:inline">TradingView</span>
               </a>
               <button
                 type="button"
                 onClick={() => setShowChart(false)}
-                className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                className="rounded-md p-2.5 md:p-1.5 min-h-11 min-w-11 md:min-h-0 md:min-w-0 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                 aria-label="Close chart"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
+          </div>
+          {/* Mobile-only price line, wraps below the title row */}
+          <div className="md:hidden shrink-0 px-3 py-1.5 border-b bg-background text-xs text-muted-foreground truncate">
+            Entry ${fmtPrice(position.entryPrice)} · SL ${fmtPrice(position.stopLoss)} · TP ${fmtPrice(position.takeProfit)}
           </div>
           {/* Chart fills remaining height */}
           <div style={{ flex: 1, minHeight: 0 }}>
