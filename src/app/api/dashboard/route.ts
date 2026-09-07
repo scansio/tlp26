@@ -18,14 +18,13 @@ import { and, count, eq, gte, sql } from 'drizzle-orm';
 import ccxt, { type Exchange } from 'ccxt';
 import { db } from '@/db';
 import {
-  userExchanges,
   userRiskProfiles,
   tradeExecutions,
   tradeSignals,
 } from '@/db/schema';
-import { decrypt } from '@/lib/crypto';
 import { getCircuitBreakerState } from '@/lib/circuit-breaker';
 import { computePnlUsd, computePnlPct } from '@/lib/pnl';
+import { getUserActiveExchangeClient, extractUsdtBalance } from '@/lib/exchange-account';
 import { toExchangeSymbol, configureMarketType, type MarketType } from '@/mastra/tools/market-symbol';
 
 // ---------------------------------------------------------------------------
@@ -37,52 +36,6 @@ function startOfUtcDay(): Date {
   return new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0),
   );
-}
-
-async function getExchangeClient(
-  userId: string,
-): Promise<{ client: Exchange; exchangeName: string } | null> {
-  const rows = await db
-    .select({
-      exchangeName: userExchanges.exchangeName,
-      encryptedApiKey: userExchanges.encryptedApiKey,
-      encryptedApiSecret: userExchanges.encryptedApiSecret,
-      encryptedPassphrase: userExchanges.encryptedPassphrase,
-    })
-    .from(userExchanges)
-    .where(
-      and(
-        eq(userExchanges.userId, userId),
-        eq(userExchanges.status, 'active'),
-      ),
-    )
-    .limit(1);
-
-  if (!rows[0]) return null;
-
-  const { exchangeName, encryptedApiKey, encryptedApiSecret, encryptedPassphrase } = rows[0];
-
-  let apiKey: string;
-  let secret: string;
-  let password: string | undefined;
-
-  try {
-    apiKey = decrypt(encryptedApiKey);
-    secret = decrypt(encryptedApiSecret);
-    password = encryptedPassphrase ? decrypt(encryptedPassphrase) : undefined;
-  } catch {
-    return null;
-  }
-
-  const ExchangeClass = (ccxt as unknown as Record<string, new (config: object) => Exchange>)[exchangeName];
-  if (!ExchangeClass) return null;
-
-  const client = new ExchangeClass({
-    apiKey,
-    secret,
-    ...(password ? { password } : {}),
-  });
-  return { client, exchangeName };
 }
 
 // ---------------------------------------------------------------------------
@@ -215,18 +168,14 @@ export async function GET() {
   // its real balance instead of "N/A".
   let exchangeClient: Exchange | null = null;
   if (!isPaper) {
-    const resolved = await getExchangeClient(userId).catch(() => null);
+    const resolved = await getUserActiveExchangeClient(userId).catch(() => null);
     if (resolved) {
       exchangeClient = resolved.client;
       configureMarketType(exchangeClient, resolved.exchangeName, profileMarketType);
       try {
         const balance = await exchangeClient.fetchBalance();
-        // Total equity = total USDT/USDC free + used (including margin)
-        const usdtTotal =
-          (balance['USDT']?.total ?? 0) +
-          (balance['USDC']?.total ?? 0) +
-          (balance['USD']?.total ?? 0);
-        if (usdtTotal > 0) equity = usdtTotal;
+        const usdtTotal = extractUsdtBalance(balance);
+        if (usdtTotal !== null) equity = usdtTotal;
       } catch {
         // Exchange fetch failed — leave equity as null
       }

@@ -14,14 +14,14 @@
  * exchange concept.
  */
 
-import ccxt, { type Exchange } from 'ccxt';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '@/db';
-import { userExchanges, userRiskProfiles } from '@/db/schema';
-import { decrypt } from '@/lib/crypto';
+import { userRiskProfiles } from '@/db/schema';
 import { propagatePublisherSignal } from '@/lib/copy-mirror-engine';
+import { fetchLiveUsdtBalance } from '@/lib/exchange-account';
 import { createSignalTool } from '@/mastra/tools/create-signal-tool';
 import { executeTradeTool } from '@/mastra/tools/execute-trade-tool';
+import type { MarketType } from '@/mastra/tools/market-symbol';
 import { noopObserve } from '@mastra/core/tools';
 import type { MarketAnalysisResult } from './market-analysis';
 
@@ -53,45 +53,11 @@ export interface FinalizeForUserResult {
   } | null;
 }
 
-// ---------------------------------------------------------------------------
-// Live-balance resolution (mirrors the getExchangeClient pattern duplicated
-// across src/app/api/dashboard/route.ts and src/app/api/positions/route.ts)
-// ---------------------------------------------------------------------------
-
-export async function getUserActiveExchangeClient(userId: string): Promise<Exchange | null> {
-  const [row] = await db
-    .select({
-      exchangeName: userExchanges.exchangeName,
-      encryptedApiKey: userExchanges.encryptedApiKey,
-      encryptedApiSecret: userExchanges.encryptedApiSecret,
-      encryptedPassphrase: userExchanges.encryptedPassphrase,
-    })
-    .from(userExchanges)
-    .where(and(eq(userExchanges.userId, userId), eq(userExchanges.status, 'active')))
-    .limit(1);
-
-  if (!row) return null;
-
-  try {
-    const apiKey = decrypt(row.encryptedApiKey);
-    const secret = decrypt(row.encryptedApiSecret);
-    const password = row.encryptedPassphrase ? decrypt(row.encryptedPassphrase) : undefined;
-
-    const ExchangeClass = (ccxt as unknown as Record<string, new (config: object) => Exchange>)[
-      row.exchangeName
-    ];
-    if (!ExchangeClass) return null;
-
-    return new ExchangeClass({ apiKey, secret, ...(password ? { password } : {}) });
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Resolves the balance to size a position against. In paper mode this is
  * always the configured paper balance. In live mode it must be the real
- * exchange balance — returns null (never a guessed/paper number) if that
+ * exchange balance (via the shared exchange-account resolver, which is
+ * market-type-aware) — returns null (never a guessed/paper number) if that
  * can't be determined, so callers can skip sizing/execution rather than
  * computing against an unknown balance.
  */
@@ -99,30 +65,17 @@ export async function resolveAccountBalance(
   userId: string,
   executionMode: string,
   paperBalanceUsd: string | null,
+  marketType: MarketType,
 ): Promise<number | null> {
   if (executionMode !== 'live') {
     return Number(paperBalanceUsd ?? '10000.00');
   }
 
-  try {
-    const client = await getUserActiveExchangeClient(userId);
-    if (!client) {
-      console.warn(`finalizeForUser: live mode but no active exchange connected for userId=${userId}`);
-      return null;
-    }
-
-    const balance = await client.fetchBalance();
-    const totals = balance?.total as unknown as Record<string, number> | undefined;
-    const free = balance?.free as unknown as Record<string, number> | undefined;
-    const usdt = totals?.USDT ?? free?.USDT;
-    if (typeof usdt === 'number' && usdt > 0) return usdt;
-
-    console.warn(`finalizeForUser: live balance fetch returned no USDT for userId=${userId}`);
-    return null;
-  } catch (err) {
-    console.warn(`finalizeForUser: fetchBalance failed for userId=${userId}`, err);
-    return null;
+  const balance = await fetchLiveUsdtBalance(userId, marketType);
+  if (balance === null) {
+    console.warn(`finalizeForUser: could not determine live account balance for userId=${userId}`);
   }
+  return balance;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,7 +130,7 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
   }
 
   const executionExchange = input.executionExchange ?? analysis.exchange;
-  const accountBalance = await resolveAccountBalance(userId, executionMode, paperBalanceUsd);
+  const accountBalance = await resolveAccountBalance(userId, executionMode, paperBalanceUsd, marketType);
 
   // --- Risk sizing ---
   // accountBalance is null only when live mode couldn't determine a real

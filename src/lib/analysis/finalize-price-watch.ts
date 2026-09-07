@@ -95,7 +95,12 @@ export async function finalizePriceWatchTrade(
 
   // accountBalance is null only when live mode couldn't determine a real
   // balance — skip sizing entirely rather than computing against a guess.
-  const accountBalance = await resolveAccountBalance(watch.userId, executionMode, paperBalanceUsd);
+  const accountBalance = await resolveAccountBalance(
+    watch.userId,
+    executionMode,
+    paperBalanceUsd,
+    (watch.marketType as 'spot' | 'swap') ?? 'spot',
+  );
 
   let riskCalculation: Record<string, unknown> | null = null;
   const riskTool = mastra?.getTool('riskTool');
