@@ -1,5 +1,8 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
+import ccxt, { type Exchange } from 'ccxt';
+import { applyPublicDataMirror } from './exchange-public-client';
+import { toExchangeSymbol, type MarketType } from './market-symbol';
 
 // ---------------------------------------------------------------------------
 // Per-exchange taker fee rates (as decimals)
@@ -13,21 +16,86 @@ const TAKER_FEES: Record<string, number> = {
 const DEFAULT_SLIPPAGE = 0.0005; // 0.05%
 
 // ---------------------------------------------------------------------------
+// Market cache — loadMarkets() is a heavy multi-hundred-KB network call and
+// this tool is invoked once per pending signal on every queue-page poll, not
+// just once per worker tick. Cache the whole per-exchange market map (not
+// per-symbol) since loadMarkets() fetches everything in one call anyway.
+// ---------------------------------------------------------------------------
+const MARKETS_CACHE_TTL_MS = 10 * 60 * 1000;
+const marketsCache = new Map<string, { markets: Exchange['markets']; expiresAt: number }>();
+
+async function getSwapMarkets(exchangeId: 'binance' | 'bybit' | 'bingx'): Promise<Exchange['markets']> {
+  const cached = marketsCache.get(exchangeId);
+  if (cached && cached.expiresAt > Date.now()) return cached.markets;
+
+  const ExchangeClass = ccxt[exchangeId as keyof typeof ccxt] as new (config?: object) => Exchange;
+  if (!ExchangeClass) throw new Error(`Exchange '${exchangeId}' is not supported by CCXT.`);
+
+  const client = new ExchangeClass({ enableRateLimit: true });
+  applyPublicDataMirror(client, exchangeId, 'swap');
+  await client.loadMarkets();
+
+  marketsCache.set(exchangeId, { markets: client.markets, expiresAt: Date.now() + MARKETS_CACHE_TTL_MS });
+  return client.markets;
+}
+
+/**
+ * Max leverage the exchange allows for this symbol, from CCXT's unified
+ * market.limits.leverage.max. Throws (fails closed, same pattern as
+ * resolveAccountBalance returning null) if the market can't be loaded or the
+ * symbol isn't found — margin sizing must never silently proceed against an
+ * unknown leverage cap. A loaded symbol that simply doesn't report a
+ * leverage limit falls back to 1 (conservative, not a failure).
+ */
+async function fetchMaxLeverage(
+  exchangeId: 'binance' | 'bybit' | 'bingx',
+  symbol: string,
+  marketType: MarketType,
+): Promise<number> {
+  if (marketType !== 'swap') return 1;
+
+  const markets = await getSwapMarkets(exchangeId);
+  const exchangeSymbol = toExchangeSymbol(symbol, marketType);
+  const market = markets[exchangeSymbol];
+  if (!market) {
+    throw new Error(`Swap market '${exchangeSymbol}' not found on ${exchangeId} — cannot determine leverage cap.`);
+  }
+
+  const max = market.limits?.leverage?.max;
+  return typeof max === 'number' && max > 0 ? Math.floor(max) : 1;
+}
+
+// ---------------------------------------------------------------------------
 // Risk Tool
-// Sizes positions so that net loss (after round-trip fees + slippage) stays
-// within the user's riskPerTrade% of account balance. Returns both gross and
-// net P&L figures and a break-even distance.
+//
+// Margin is always sized to riskPerTrade% of account balance, and leverage is
+// derived (never a rigid, separately-configured number) so that a loss at the
+// stop-loss price exactly consumes that margin:
+//
+//   loss = leverage × margin × (slDistanceRate + fees + slippage)
+//   margin := riskPerTrade% of balance  =>  leverage = 1 / (slDistanceRate + fees + slippage)
+//
+// If that derived leverage exceeds what the exchange allows for this symbol,
+// leverage is capped at the exchange's max and margin is increased instead
+// (never leverage beyond the cap) so the position still uses the full
+// riskPerTrade% budget — capped again at the account balance itself as a
+// last-resort safety net so this can never ask for more margin than exists.
 // ---------------------------------------------------------------------------
 export const riskTool = createTool({
   id: 'risk-tool',
   description:
-    'Calculate position size and realistic P&L for a trade, accounting for ' +
+    'Calculate position size, margin, and leverage for a trade, accounting for ' +
     'round-trip exchange fees and slippage. Always call this after a trade ' +
     'decision to size the position correctly and report net figures.',
   inputSchema: z.object({
     exchange: z
       .enum(['binance', 'bybit', 'bingx'])
       .describe('Exchange the trade will be executed on'),
+    symbol: z.string().describe('Trading pair symbol, e.g. BTC/USDT — used to look up the exchange leverage cap'),
+    marketType: z
+      .enum(['spot', 'swap'])
+      .default('spot')
+      .describe("'swap' = USDT-M perpetual futures; leverage is only derived for swap, always 1 for spot"),
     accountBalance: z
       .number()
       .positive()
@@ -67,8 +135,15 @@ export const riskTool = createTool({
     entryPrice: z.number(),
     stopLossPrice: z.number(),
     takeProfitPrice: z.number(),
+    // Margin + leverage
+    marginUsdt: z.number().describe('Capital committed as margin, in USDT'),
+    leverage: z.number().describe('Derived leverage — set on the exchange account before order placement'),
+    maxSymbolLeverage: z.number().describe("Exchange's max leverage for this symbol (1 for spot)"),
+    leverageCapped: z
+      .boolean()
+      .describe('True when the exchange leverage cap was below the ideal derived leverage'),
     // Position sizing
-    positionSizeUsdt: z.number().describe('Notional position size in USDT'),
+    positionSizeUsdt: z.number().describe('Notional position size in USDT (leverage × margin)'),
     positionSizeUnits: z.number().describe('Position size in base asset units'),
     // Fee & slippage model
     takerFeePct: z.number().describe('Per-side taker fee as a percentage'),
@@ -95,6 +170,8 @@ export const riskTool = createTool({
   execute: async (inputData) => {
     const {
       exchange,
+      symbol,
+      marketType,
       accountBalance,
       riskPerTradePct,
       entryPrice,
@@ -104,6 +181,8 @@ export const riskTool = createTool({
       slippagePct: inputSlippage,
     } = inputData as {
       exchange: 'binance' | 'bybit' | 'bingx';
+      symbol: string;
+      marketType: MarketType;
       accountBalance: number;
       riskPerTradePct: number;
       entryPrice: number;
@@ -120,27 +199,55 @@ export const riskTool = createTool({
     const roundTripFeeRate = 2 * takerFeeRate;
 
     // Total drag on notional per unit of position: fees + one-way slippage on entry
-    // We apply slippage once (entry) since it's a market impact cost.
     const totalDragRate = roundTripFeeRate + slippageRate;
 
-    // ---------------------------------------------------------------------------
-    // Position sizing — net loss must stay within riskPerTrade%
-    //
-    // Gross SL distance as fraction of entry price:
-    //   LONG:  (entry - sl) / entry
-    //   SHORT: (sl - entry) / entry
-    //
-    // Net loss on $N position = N × slDistanceRate + N × totalDragRate
-    //   => N × (slDistanceRate + totalDragRate) ≤ balance × riskPerTradePct%
-    //   => N = (balance × riskPerTradePct%) / (slDistanceRate + totalDragRate)
-    // ---------------------------------------------------------------------------
     const slDistanceRate =
       direction === 'LONG'
         ? (entryPrice - stopLossPrice) / entryPrice
         : (stopLossPrice - entryPrice) / entryPrice;
 
+    // Effective loss rate on notional, including fees/slippage drag.
+    const effectiveLossRate = slDistanceRate + totalDragRate;
+
     const maxRiskUsdt = accountBalance * (riskPerTradePct / 100);
-    const positionSizeUsdt = maxRiskUsdt / (slDistanceRate + totalDragRate);
+
+    // ---------------------------------------------------------------------------
+    // Margin + leverage — derived, not rigid.
+    //
+    //   loss = leverage × margin × effectiveLossRate = maxRiskUsdt
+    //
+    // Ideal case: margin := maxRiskUsdt, leverage := 1 / effectiveLossRate.
+    // If that leverage exceeds the exchange's cap for this symbol, cap
+    // leverage there and solve margin upward instead, so the full risk
+    // budget is still used rather than silently under-risking — capped
+    // again at the account balance itself as a last-resort safety net.
+    // ---------------------------------------------------------------------------
+    const maxSymbolLeverage = await fetchMaxLeverage(exchange, symbol, marketType);
+
+    let leverage: number;
+    let marginUsdt: number;
+    let leverageCapped = false;
+
+    if (marketType === 'swap') {
+      const idealLeverage = Math.max(1, Math.floor(1 / effectiveLossRate));
+      leverage = Math.min(idealLeverage, maxSymbolLeverage);
+      leverageCapped = leverage < idealLeverage;
+
+      if (!leverageCapped) {
+        marginUsdt = maxRiskUsdt;
+      } else {
+        // Safety net: never require more margin than the account has. A 2%
+        // haircut leaves headroom for the entry taker fee and margin dust —
+        // committing exactly 100% of free balance as margin still bounces
+        // on the exchange.
+        marginUsdt = Math.min(maxRiskUsdt / (leverage * effectiveLossRate), accountBalance * 0.98);
+      }
+    } else {
+      leverage = 1;
+      marginUsdt = maxRiskUsdt / effectiveLossRate;
+    }
+
+    const positionSizeUsdt = leverage * marginUsdt;
     const positionSizeUnits = positionSizeUsdt / entryPrice;
 
     // ---------------------------------------------------------------------------
@@ -172,7 +279,8 @@ export const riskTool = createTool({
     const breakEvenDistance = (roundTripFeeRate + slippageRate) * 100;
 
     // ---------------------------------------------------------------------------
-    // Net risk as % of account (sanity check — should equal riskPerTradePct)
+    // Net risk as % of account (sanity check — should equal riskPerTradePct
+    // unless the account-balance safety clamp above kicked in)
     // ---------------------------------------------------------------------------
     const netRiskPct = (netExpectedLoss / accountBalance) * 100;
 
@@ -182,6 +290,10 @@ export const riskTool = createTool({
       entryPrice,
       stopLossPrice,
       takeProfitPrice,
+      marginUsdt: round(marginUsdt, 4),
+      leverage,
+      maxSymbolLeverage,
+      leverageCapped,
       positionSizeUsdt: round(positionSizeUsdt, 2),
       positionSizeUnits: round(positionSizeUnits, 6),
       takerFeePct: round(takerFeeRate * 100, 4),

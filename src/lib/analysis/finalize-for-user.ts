@@ -106,7 +106,11 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
   let tradingMode = 'manual'; // 'auto' | 'manual'
   let paperBalanceUsd: string | null = null;
   let marketType: 'spot' | 'swap' = 'spot';
-  let leverage = 1;
+  // Leverage is derived per-trade by riskTool (see below), not a rigid
+  // profile setting — this is only a last-resort fallback for the rare case
+  // riskTool never ran (e.g. live balance unavailable), so a signal still has
+  // *some* leverage value to persist.
+  let profileLeverageFallback = 1;
   let marginMode: 'cross' | 'isolated' = 'cross';
   try {
     const context = await resolveUserTradingContext(userId);
@@ -117,7 +121,7 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
       tradingMode = context.tradingMode;
       paperBalanceUsd = context.paperBalanceUsd;
       marketType = context.marketType;
-      leverage = context.leverage;
+      profileLeverageFallback = context.leverage;
       marginMode = context.marginMode;
     }
   } catch (err) {
@@ -152,6 +156,8 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
       riskCalculation = (await riskTool.execute!(
         {
           exchange: executionExchange,
+          symbol,
+          marketType,
           accountBalance,
           riskPerTradePct,
           entryPrice,
@@ -170,6 +176,12 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
       `finalizeForUser: live account balance unavailable for userId=${userId} — creating signal without a computed position size.`,
     );
   }
+
+  // Leverage is now derived by riskTool (capped to the exchange's per-symbol
+  // max, margin adjusted upward to compensate — see risk-tool.ts) rather than
+  // a rigid profile setting; only fall back to the profile's leverage when
+  // riskTool never ran.
+  const leverage = (riskCalculation?.leverage as number | undefined) ?? profileLeverageFallback;
 
   // --- News/on-chain snapshot for persistence ---
   const newsItems = analysis.news?.items ?? [];

@@ -9,10 +9,9 @@
  * are NOT enforced upstream here and must be checked explicitly.
  */
 
-import { and, eq } from 'drizzle-orm';
-import { db } from '@/db';
-import { userRiskProfiles, type priceWatches } from '@/db/schema';
+import type { priceWatches } from '@/db/schema';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
+import { resolveUserTradingContext } from '@/lib/user-trading-context';
 import { resolveAccountBalance } from './finalize-for-user';
 import { createSignalTool } from '@/mastra/tools/create-signal-tool';
 import { executeTradeTool } from '@/mastra/tools/execute-trade-tool';
@@ -76,18 +75,18 @@ export async function finalizePriceWatchTrade(
   let executionMode = 'paper';
   let tradingMode = 'manual';
   let paperBalanceUsd: string | null = null;
+  // Same last-resort-only fallback as finalizeForUser — riskTool derives the
+  // real leverage per-trade below.
+  let profileLeverageFallback = 1;
   try {
-    const [profile] = await db
-      .select()
-      .from(userRiskProfiles)
-      .where(and(eq(userRiskProfiles.userId, watch.userId)))
-      .limit(1);
-    if (profile) {
-      riskPerTradePct = parseFloat(profile.riskPerTradePct ?? '1.0');
-      slippagePct = profile.slippagePct ? parseFloat(profile.slippagePct) : 0.05;
-      executionMode = profile.executionMode ?? 'paper';
-      tradingMode = profile.tradingMode ?? 'manual';
-      paperBalanceUsd = profile.paperBalanceUsd ?? null;
+    const context = await resolveUserTradingContext(watch.userId);
+    if (context) {
+      riskPerTradePct = context.riskPerTradePct;
+      slippagePct = context.slippagePct;
+      executionMode = context.executionMode;
+      tradingMode = context.tradingMode;
+      paperBalanceUsd = context.paperBalanceUsd;
+      profileLeverageFallback = context.leverage;
     }
   } catch (err) {
     console.warn('finalizePriceWatchTrade: could not load risk profile, using defaults', err);
@@ -109,6 +108,8 @@ export async function finalizePriceWatchTrade(
       riskCalculation = (await riskTool.execute!(
         {
           exchange: watch.exchange,
+          symbol: watch.symbol,
+          marketType: (watch.marketType as 'spot' | 'swap') ?? 'spot',
           accountBalance,
           riskPerTradePct,
           entryPrice: triggeredPrice,
@@ -130,6 +131,10 @@ export async function finalizePriceWatchTrade(
     );
   }
 
+  // Leverage is derived by riskTool (see risk-tool.ts) rather than the
+  // watch's own rigid leverage field; only fall back when riskTool never ran.
+  const leverage = (riskCalculation?.leverage as number | undefined) ?? watch.leverage ?? profileLeverageFallback;
+
   const created = (await createSignalTool.execute!(
     {
       userId: watch.userId,
@@ -146,7 +151,7 @@ export async function finalizePriceWatchTrade(
       strategySource: watch.strategySource ?? 'Price Watch',
       exchange: watch.exchange,
       marketType: watch.marketType as 'spot' | 'swap',
-      leverage: watch.leverage ?? 1,
+      leverage,
       marginMode: (watch.marginMode as 'cross' | 'isolated') ?? 'cross',
       rawPayloadExtraJson: JSON.stringify({ priceWatchId: watch.id, riskCalculation }),
     },
@@ -193,7 +198,7 @@ export async function finalizePriceWatchTrade(
         mode: toolMode,
         slippagePct,
         marketType: watch.marketType as 'spot' | 'swap',
-        leverage: watch.leverage ?? 1,
+        leverage,
         marginMode: (watch.marginMode as 'cross' | 'isolated') ?? 'cross',
       },
       { observe: noopObserve },

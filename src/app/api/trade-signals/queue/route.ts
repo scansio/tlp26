@@ -14,12 +14,13 @@ import { NextResponse } from 'next/server';
 import { eq, desc, and, or } from 'drizzle-orm';
 import { db } from '@/db';
 import { tradeSignals, userRiskProfiles, userExchanges } from '@/db/schema';
+import { riskTool } from '@/mastra/tools/risk-tool';
+import { noopObserve } from '@mastra/core/tools';
 
-// Per-exchange taker fee rates — mirrors risk-tool.ts and main trade-signals route
 const DEFAULT_TAKER_FEE = 0.0004;
 const DEFAULT_SLIPPAGE_PCT = 0.05;
 
-function computeFeeData(
+async function computeFeeData(
   direction: string,
   entryPrice: string | null,
   stopLoss: string | null,
@@ -27,6 +28,9 @@ function computeFeeData(
   slippagePct: number,
   accountBalance: number | null,
   riskPerTradePct: number | null,
+  exchange: 'binance' | 'bybit' | 'bingx',
+  symbol: string,
+  marketType: 'spot' | 'swap',
 ) {
   const entry = Number(entryPrice);
   const sl = Number(stopLoss);
@@ -53,17 +57,37 @@ function computeFeeData(
   const r = (n: number, dp: number) =>
     Math.round(n * Math.pow(10, dp)) / Math.pow(10, dp);
 
-  // Position sizing — mirrors risk-tool.ts and backtester.ts formula:
-  // N = (balance × riskPerTradePct%) / (slDistanceRate + totalDragRate)
+  // Position/margin/leverage sizing — delegates to risk-tool.ts (the same
+  // tool finalizeForUser calls before execution) instead of re-deriving the
+  // formula here, so this display figure can never drift from what actually
+  // gets executed.
   let positionSizeUsdt: number | null = null;
   let positionSizeUnits: number | null = null;
+  let marginUsdt: number | null = null;
+  let leverage: number | null = null;
   if (accountBalance && accountBalance > 0 && riskPerTradePct && riskPerTradePct > 0) {
-    const totalDragRate = roundTripFeeRate + slippageRate;
-    const maxRiskUsdt = accountBalance * (riskPerTradePct / 100);
-    const rawPositionSizeUsdt = maxRiskUsdt / (slDistanceRate + totalDragRate);
-    if (rawPositionSizeUsdt > 0) {
-      positionSizeUsdt = r(rawPositionSizeUsdt, 2);
-      positionSizeUnits = r(rawPositionSizeUsdt / entry, 6);
+    try {
+      const calc = (await riskTool.execute!(
+        {
+          exchange,
+          symbol,
+          marketType,
+          accountBalance,
+          riskPerTradePct,
+          entryPrice: entry,
+          stopLossPrice: sl,
+          takeProfitPrice: tp,
+          direction: direction as 'LONG' | 'SHORT',
+          slippagePct,
+        },
+        { observe: noopObserve },
+      )) as { positionSizeUsdt: number; positionSizeUnits: number; marginUsdt: number; leverage: number };
+      positionSizeUsdt = calc.positionSizeUsdt;
+      positionSizeUnits = calc.positionSizeUnits;
+      marginUsdt = calc.marginUsdt;
+      leverage = calc.leverage;
+    } catch (err) {
+      console.warn('trade-signals/queue: riskTool failed', err);
     }
   }
 
@@ -78,6 +102,8 @@ function computeFeeData(
     riskReward: r(rr, 2),
     positionSizeUsdt,
     positionSizeUnits,
+    marginUsdt,
+    leverage,
   };
 }
 
@@ -151,35 +177,42 @@ export async function GET() {
     .orderBy(desc(tradeSignals.createdAt))
     .limit(tradingMode === 'auto' ? 50 : 100);
 
-  const signals = rows.map((row) => ({
-    id: row.id,
-    symbol: row.symbol,
-    timeframe: row.timeframe,
-    direction: row.direction,
-    entryPrice: row.entryPrice,
-    stopLoss: row.stopLoss,
-    takeProfit: row.takeProfit,
-    confidence: row.confidence,
-    reasoning: row.reasoning,
-    strategySource: row.strategySource,
-    source: row.source ?? 'ai',
-    status: row.status,
-    exitMode: row.exitMode,
-    marketType: row.marketType ?? 'spot',
-    rawPayload: row.rawPayload,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-    expiresAt: row.expiresAt,
-    feeData: computeFeeData(
-      row.direction,
-      row.entryPrice,
-      row.stopLoss,
-      row.takeProfit,
-      slippagePct,
-      accountBalance,
-      riskPerTradePct,
-    ),
-  }));
+  const resolvedExchange = (connectedExchange as 'binance' | 'bybit' | 'bingx' | null) ?? 'binance';
+
+  const signals = await Promise.all(
+    rows.map(async (row) => ({
+      id: row.id,
+      symbol: row.symbol,
+      timeframe: row.timeframe,
+      direction: row.direction,
+      entryPrice: row.entryPrice,
+      stopLoss: row.stopLoss,
+      takeProfit: row.takeProfit,
+      confidence: row.confidence,
+      reasoning: row.reasoning,
+      strategySource: row.strategySource,
+      source: row.source ?? 'ai',
+      status: row.status,
+      exitMode: row.exitMode,
+      marketType: row.marketType ?? 'spot',
+      rawPayload: row.rawPayload,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      expiresAt: row.expiresAt,
+      feeData: await computeFeeData(
+        row.direction,
+        row.entryPrice,
+        row.stopLoss,
+        row.takeProfit,
+        slippagePct,
+        accountBalance,
+        riskPerTradePct,
+        resolvedExchange,
+        row.symbol,
+        (row.marketType as 'spot' | 'swap') ?? 'spot',
+      ),
+    })),
+  );
 
   return NextResponse.json({
     signals,

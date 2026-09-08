@@ -26,6 +26,7 @@ import { tradeSignals, tradeExecutions, userRiskProfiles } from '@/db/schema';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
 import { fetchLiveUsdtBalance } from '@/lib/exchange-account';
 import { executeTradeTool } from '@/mastra/tools/execute-trade-tool';
+import { riskTool } from '@/mastra/tools/risk-tool';
 import { toExchangeSymbol, type MarketType } from '@/mastra/tools/market-symbol';
 import { noopObserve } from '@mastra/core/tools';
 
@@ -227,21 +228,44 @@ export async function PATCH(
     // Apply slippage model (same as live)
     const simulatedFillPrice = applySlippage(fillPrice, signal.direction, slippagePct);
 
-    // Compute position size from virtual balance and risk parameters
-    // Formula: (paperBalance × riskPerTradePct%) / |fillPrice − stopLoss|
+    // Record paper execution in trade_executions
+    const rawPayload = signal.rawPayload as Record<string, unknown> | null;
+    const exchangeName = ((rawPayload?.exchange as string | undefined) ?? 'binance') as
+      | 'binance'
+      | 'bybit'
+      | 'bingx';
+
+    // Margin/leverage sizing — delegates to risk-tool.ts (the same tool the
+    // auto-trading worker uses) rather than a separate formula, so a manual
+    // approval never diverges from what auto-execution would have done.
     const paperBalance = profile?.paperBalanceUsd ? Number(profile.paperBalanceUsd) : 10_000;
     const riskPct = profile?.riskPerTradePct ? Number(profile.riskPerTradePct) : 1;
     const signalStopLoss = signal.stopLoss ? Number(signal.stopLoss) : null;
     let positionSize: number | null = null;
+    let paperLeverage = signal.leverage ?? 1;
     if (signalStopLoss !== null && Math.abs(simulatedFillPrice - signalStopLoss) > 0) {
-      const riskAmount = paperBalance * (riskPct / 100);
-      const slDistance = Math.abs(simulatedFillPrice - signalStopLoss);
-      positionSize = riskAmount / slDistance;
+      try {
+        const calc = (await riskTool.execute!(
+          {
+            exchange: exchangeName,
+            symbol: signal.symbol,
+            marketType: (signal.marketType as MarketType) ?? 'spot',
+            accountBalance: paperBalance,
+            riskPerTradePct: riskPct,
+            entryPrice: simulatedFillPrice,
+            stopLossPrice: signalStopLoss,
+            takeProfitPrice: Number(signal.takeProfit),
+            direction: signal.direction as 'LONG' | 'SHORT',
+            slippagePct,
+          },
+          { observe: noopObserve },
+        )) as { positionSizeUnits: number; leverage: number };
+        positionSize = calc.positionSizeUnits;
+        paperLeverage = calc.leverage;
+      } catch (err) {
+        console.warn('trade-signals/[id]: riskTool failed for paper approval', err);
+      }
     }
-
-    // Record paper execution in trade_executions
-    const rawPayload = signal.rawPayload as Record<string, unknown> | null;
-    const exchangeName = (rawPayload?.exchange as string | undefined) ?? 'paper';
 
     const [execution] = await db
       .insert(tradeExecutions)
@@ -255,7 +279,7 @@ export async function PATCH(
         mode: 'paper',
         status: 'open',
         marketType: signal.marketType ?? 'spot',
-        leverage: signal.leverage ?? 1,
+        leverage: paperLeverage,
         marginMode: signal.marginMode ?? 'cross',
         entryAt: new Date(),
       })
@@ -302,10 +326,13 @@ export async function PATCH(
     );
   }
 
-  // Compute position size in USDT from risk profile, sized against the real
-  // exchange balance — never the paper-trading balance setting. This route
-  // fails closed: an unknown live balance must never silently fall back to
-  // a paper number and produce a wrong-sized real order.
+  // Margin/leverage sizing — delegates to risk-tool.ts (the same tool the
+  // auto-trading worker uses via finalizeForUser) rather than a separate
+  // formula, so a manual approval can never diverge from — or under-margin
+  // relative to — what auto-execution would have done. Sized against the
+  // real exchange balance — never the paper-trading balance setting. This
+  // route fails closed: an unknown live balance must never silently fall
+  // back to a paper number and produce a wrong-sized real order.
   const riskPct = profile?.riskPerTradePct ? Number(profile.riskPerTradePct) : 1;
   const signalStopLoss = signal.stopLoss ? Number(signal.stopLoss) : null;
 
@@ -325,9 +352,33 @@ export async function PATCH(
       { status: 422 },
     );
   }
-  const riskAmount = liveBalance * (riskPct / 100);
-  const slDistance = Math.abs(liveEntryPrice - signalStopLoss);
-  const positionSizeUsdt = (riskAmount / slDistance) * liveEntryPrice;
+
+  let positionSizeUsdt: number;
+  let leverage = signal.leverage ?? 1;
+  try {
+    const calc = (await riskTool.execute!(
+      {
+        exchange: exchangeName,
+        symbol: signal.symbol,
+        marketType: signalMarketType,
+        accountBalance: liveBalance,
+        riskPerTradePct: riskPct,
+        entryPrice: liveEntryPrice,
+        stopLossPrice: signalStopLoss,
+        takeProfitPrice: Number(signal.takeProfit),
+        direction: signal.direction as 'LONG' | 'SHORT',
+        slippagePct,
+      },
+      { observe: noopObserve },
+    )) as { positionSizeUsdt: number; leverage: number };
+    positionSizeUsdt = calc.positionSizeUsdt;
+    leverage = calc.leverage;
+  } catch (err) {
+    return NextResponse.json(
+      { error: `Failed to size position: ${err instanceof Error ? err.message : String(err)}` },
+      { status: 422 },
+    );
+  }
 
   const toolResult = await executeTradeTool.execute!(
     {
@@ -343,7 +394,7 @@ export async function PATCH(
       mode: 'live',
       slippagePct,
       marketType: signalMarketType,
-      leverage: signal.leverage ?? 1,
+      leverage,
       marginMode: (signal.marginMode as 'cross' | 'isolated') ?? 'cross',
     },
     { observe: noopObserve },
