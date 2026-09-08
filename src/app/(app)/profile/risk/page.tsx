@@ -41,7 +41,6 @@ interface RiskProfile {
   paperMode: boolean;
   paperBalanceUsd: number;
   marketType: 'spot' | 'swap';
-  defaultLeverage: number;
   marginMode: 'cross' | 'isolated';
   profitLockEnabled: boolean;
   exitMode: 'fixed' | 'trailing';
@@ -63,7 +62,6 @@ interface FormState {
   allowedSymbols: string[];
   paperBalanceUsd: number;
   marketType: 'spot' | 'swap';
-  defaultLeverage: number;
   marginMode: 'cross' | 'isolated';
   profitLockEnabled: boolean;
   exitMode: 'fixed' | 'trailing';
@@ -96,7 +94,6 @@ const DEFAULT_FORM: FormState = {
   allowedSymbols: [],
   paperBalanceUsd: 10_000,
   marketType: 'spot',
-  defaultLeverage: 1,
   marginMode: 'cross',
   profitLockEnabled: false,
   exitMode: 'fixed',
@@ -225,7 +222,6 @@ function FallbackForm({
         allowedSymbols: profile.allowedSymbols ?? [],
         paperBalanceUsd: profile.paperBalanceUsd ?? 10_000,
         marketType: profile.marketType ?? 'spot',
-        defaultLeverage: profile.defaultLeverage ?? 1,
         marginMode: profile.marginMode ?? 'cross',
         profitLockEnabled: profile.profitLockEnabled ?? false,
         exitMode: profile.exitMode ?? 'fixed',
@@ -272,7 +268,6 @@ function FallbackForm({
       allowedSymbols: form.allowedSymbols,
       paperBalanceUsd: form.paperBalanceUsd,
       marketType: form.marketType,
-      defaultLeverage: form.defaultLeverage,
       marginMode: form.marginMode,
       profitLockEnabled: form.profitLockEnabled,
       exitMode: form.exitMode,
@@ -514,31 +509,10 @@ function FallbackForm({
 
       {form.marketType === 'swap' && (
         <>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-medium">Default Leverage</label>
-              <span className="text-sm font-semibold tabular-nums">{form.defaultLeverage}x</span>
-            </div>
-            <input
-              type="range"
-              min={1}
-              max={20}
-              step={1}
-              value={form.defaultLeverage}
-              onChange={(e) => {
-                setForm((f) => ({ ...f, defaultLeverage: Number(e.target.value) }));
-                setSaveMessage('');
-              }}
-              className="w-full accent-primary"
-            />
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span>1x</span>
-              <span>20x</span>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Higher leverage means a smaller price move can liquidate your position.
-            </p>
-          </div>
+          <p className="text-xs text-muted-foreground">
+            Leverage is calculated automatically per trade from your stop-loss distance and Risk per Trade
+            below, capped to what the exchange allows for that symbol — it&apos;s never a fixed number you set.
+          </p>
 
           <div className="space-y-2">
             <label className="text-sm font-medium">Margin Mode</label>
