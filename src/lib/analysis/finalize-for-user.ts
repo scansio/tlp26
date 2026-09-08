@@ -199,6 +199,7 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
         riskCalculation,
         smcStructures: analysis.smcStructures,
         chartPatterns: analysis.chartPatterns,
+        indicators15m: analysis.indicators15m,
         indicators1h: analysis.indicators1h,
       }),
     },

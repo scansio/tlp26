@@ -213,9 +213,11 @@ export interface MarketAnalysisResult {
   symbol: string;
   exchange: 'binance' | 'bybit' | 'bingx';
   triggeredBy: 'scheduled' | 'manual' | 'tradingview';
+  candles15m: z.infer<typeof candleSchema>[];
   candles1h: z.infer<typeof candleSchema>[];
   candles4h: z.infer<typeof candleSchema>[];
   candles1d: z.infer<typeof candleSchema>[];
+  indicators15m: z.infer<typeof indicatorsResultSchema>;
   indicators1h: z.infer<typeof indicatorsResultSchema>;
   indicators4h: z.infer<typeof indicatorsResultSchema>;
   indicators1d: z.infer<typeof indicatorsResultSchema>;
@@ -246,6 +248,7 @@ export async function fetchMarketDataPhase<T extends { symbol: string; exchange:
   mastra: any,
 ): Promise<
   T & {
+    candles15m: z.infer<typeof candleSchema>[];
     candles1h: z.infer<typeof candleSchema>[];
     candles4h: z.infer<typeof candleSchema>[];
     candles1d: z.infer<typeof candleSchema>[];
@@ -256,7 +259,8 @@ export async function fetchMarketDataPhase<T extends { symbol: string; exchange:
     const tool = mastra?.getTool('marketDataTool');
     if (!tool) throw new Error('marketDataTool not found in Mastra instance');
 
-    const [r1h, r4h, r1d] = await Promise.all([
+    const [r15m, r1h, r4h, r1d] = await Promise.all([
+      tool.execute!({ symbol, timeframe: '15m', limit: 200, exchange }, {}),
       tool.execute!({ symbol, timeframe: '1h', limit: 200, exchange }, {}),
       tool.execute!({ symbol, timeframe: '4h', limit: 200, exchange }, {}),
       tool.execute!({ symbol, timeframe: '1d', limit: 200, exchange }, {}),
@@ -264,6 +268,7 @@ export async function fetchMarketDataPhase<T extends { symbol: string; exchange:
 
     return {
       ...input,
+      candles15m: (r15m as { candles: z.infer<typeof candleSchema>[] }).candles,
       candles1h: (r1h as { candles: z.infer<typeof candleSchema>[] }).candles,
       candles4h: (r4h as { candles: z.infer<typeof candleSchema>[] }).candles,
       candles1d: (r1d as { candles: z.infer<typeof candleSchema>[] }).candles,
@@ -277,6 +282,10 @@ export async function fetchMarketDataPhase<T extends { symbol: string; exchange:
 
 export async function computeIndicatorsPhase<
   T extends {
+    // Optional: the eval harness replays frozen fixtures recorded before the
+    // 15m LTF was added and doesn't carry this field. Production (worker +
+    // trade-analysis-workflow) always fetches it via fetchMarketDataPhase.
+    candles15m?: z.infer<typeof candleSchema>[];
     candles1h: z.infer<typeof candleSchema>[];
     candles4h: z.infer<typeof candleSchema>[];
     candles1d: z.infer<typeof candleSchema>[];
@@ -284,6 +293,7 @@ export async function computeIndicatorsPhase<
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 >(input: T, mastra: any): Promise<
   T & {
+    indicators15m?: z.infer<typeof indicatorsResultSchema>;
     indicators1h: z.infer<typeof indicatorsResultSchema>;
     indicators4h: z.infer<typeof indicatorsResultSchema>;
     indicators1d: z.infer<typeof indicatorsResultSchema>;
@@ -293,7 +303,10 @@ export async function computeIndicatorsPhase<
     const tool = mastra?.getTool('indicatorsTool');
     if (!tool) throw new Error('indicatorsTool not found in Mastra instance');
 
-    const [ind1h, ind4h, ind1d] = await Promise.all([
+    const has15m = Array.isArray(input.candles15m) && input.candles15m.length > 0;
+
+    const [ind15m, ind1h, ind4h, ind1d] = await Promise.all([
+      has15m ? tool.execute!({ candles: input.candles15m }, {}) : Promise.resolve(undefined),
       tool.execute!({ candles: input.candles1h }, {}),
       tool.execute!({ candles: input.candles4h }, {}),
       tool.execute!({ candles: input.candles1d }, {}),
@@ -301,6 +314,7 @@ export async function computeIndicatorsPhase<
 
     return {
       ...input,
+      ...(ind15m !== undefined ? { indicators15m: ind15m as z.infer<typeof indicatorsResultSchema> } : {}),
       indicators1h: ind1h as z.infer<typeof indicatorsResultSchema>,
       indicators4h: ind4h as z.infer<typeof indicatorsResultSchema>,
       indicators1d: ind1d as z.infer<typeof indicatorsResultSchema>,
@@ -522,9 +536,13 @@ export async function fetchOnchainSignalsPhase<T extends { symbol: string }>(
 
 export interface AgentDecisionInput {
   symbol: string;
+  // Optional: see computeIndicatorsPhase — absent when replaying eval fixtures
+  // recorded before the 15m LTF was added.
+  candles15m?: z.infer<typeof candleSchema>[];
   candles1h: z.infer<typeof candleSchema>[];
   candles4h: z.infer<typeof candleSchema>[];
   candles1d: z.infer<typeof candleSchema>[];
+  indicators15m?: z.infer<typeof indicatorsResultSchema>;
   indicators1h: z.infer<typeof indicatorsResultSchema>;
   indicators4h: z.infer<typeof indicatorsResultSchema>;
   indicators1d: z.infer<typeof indicatorsResultSchema>;
@@ -570,7 +588,16 @@ RULES YOU MUST FOLLOW:
 - If tradeBias is BEARISH → only ENTER_SHORT or HOLD are allowed. ENTER_LONG is FORBIDDEN.
 - If tradeBias is NEUTRAL → ENTER_LONG or ENTER_SHORT are allowed but confidence must be MEDIUM or lower.
 - When a counter-trend trade would otherwise trigger, output HOLD and cite the HTF filter in reasoning.
-- Include "top-down-alignment" in strategiesTriggered when the LTF signal agrees with tradeBias.`;
+- Include "top-down-alignment" in strategiesTriggered when the LTF signal agrees with tradeBias.` +
+        (input.indicators15m
+          ? `
+
+## LTF ENTRY TIMING (15m)
+The 15m timeframe is for entry timing and trigger precision only — it never overrides tradeBias.
+Use it to judge whether price is at a favorable entry right now (momentum exhaustion, pullback into
+the zone, fresh crossover) versus chasing an extended move. Include "ltf-entry-timing" in
+strategiesTriggered when the 15m indicators support entering at the current price.`
+          : '');
 
       const prompt = `You are the trading decision engine. Analyze the following data and return ONLY a valid JSON object with no prose.
 
@@ -580,11 +607,14 @@ ${topDownSection}
 ${input.symbol}
 
 ## Market Data (candle counts)
-- 1h candles: ${input.candles1h.length}
+${input.candles15m ? `- 15m candles: ${input.candles15m.length}\n` : ''}- 1h candles: ${input.candles1h.length}
 - 4h candles: ${input.candles4h.length}
 - 1d candles: ${input.candles1d.length}
 
-## Technical Indicators
+## Technical Indicators${input.indicators15m ? `
+### 15m (entry timing only)
+${JSON.stringify(input.indicators15m, null, 2)}
+` : ''}
 ### 1h
 ${JSON.stringify(input.indicators1h, null, 2)}
 
