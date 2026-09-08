@@ -82,7 +82,7 @@ Defined with `createTool()` from `@mastra/core/tools`. Input/output schemas use 
 |------|------|---------|
 | `market-data-tool` | `src/mastra/tools/market-data-tool.ts` | OHLCV via CCXT |
 | `indicators-tool` | `src/mastra/tools/indicators-tool.ts` | RSI, EMA, MACD, BB, ADX via `technicalindicators` |
-| `news-tool` | `src/mastra/tools/news-tool.ts` | CryptoPanic + CoinGecko sentiment |
+| `news-tool` | `src/mastra/tools/news-tool.ts` | Apify CryptoPanic scraper (primary) → CryptoPanic API → CoinGecko sentiment |
 | `onchain-tool` | `src/mastra/tools/onchain-tool.ts` | Funding rates + liquidation levels (Coinglass) + netflow (Santiment) |
 | `smc-tool` | `src/mastra/tools/smc-tool.ts` | FVG, Order Blocks, BOS/ChoCH, liquidity sweeps |
 | `pattern-tool` | `src/mastra/tools/pattern-tool.ts` | H&S, double top/bottom, triangles, flags, wedges |
@@ -118,7 +118,8 @@ CLERK_SECRET_KEY              # Clerk backend secret (required)
 CLERK_PUBLISHABLE_KEY         # Clerk frontend key (required)
 CLERK_WEBHOOK_SECRET          # Clerk webhook signature verification (required)
 EXCHANGE_KEY_ENCRYPTION_SECRET # AES-256-GCM key for encrypting exchange API keys (required)
-CRYPTOPANIC_API_TOKEN         # CryptoPanic news API (optional, falls back to CoinGecko)
+APIFY_API_TOKEN                # Apify CryptoPanic News Scraper actor (optional, primary crypto news source)
+CRYPTOPANIC_API_TOKEN         # CryptoPanic direct API (optional, fallback if Apify unset)
 COINGLASS_API_KEY             # Coinglass funding rates + liquidation data (optional)
 MASTRA_CLOUD_ACCESS_TOKEN     # Mastra Cloud trace export (optional)
 ```

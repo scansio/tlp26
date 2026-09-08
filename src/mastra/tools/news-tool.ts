@@ -1,4 +1,5 @@
 import { createTool } from '@mastra/core/tools';
+import { ApifyClient } from 'apify-client';
 import { z } from 'zod';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -44,6 +45,17 @@ interface CoinGeckoNewsArticle {
 
 interface CoinGeckoNewsResponse {
   data: CoinGeckoNewsArticle[];
+}
+
+interface ApifyNewsItem {
+  title: string;
+  url: string;
+  publishedAt: string;
+  votes?: {
+    total_count?: number;
+    positive_count?: number;
+    like_count?: number;
+  };
 }
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
@@ -100,7 +112,47 @@ function computeOverallSentiment(items: NewsItem[]): Sentiment {
   return 'NEUTRAL';
 }
 
-// ─── CryptoPanic fetch ────────────────────────────────────────────────────────
+// ─── Apify CryptoPanic scraper (primary) ──────────────────────────────────────
+
+let apifyClient: ApifyClient | null = null;
+
+function getApifyClient(): ApifyClient {
+  if (!apifyClient) {
+    const token = process.env.APIFY_API_TOKEN;
+    if (!token) throw new Error('APIFY_API_TOKEN not set');
+    apifyClient = new ApifyClient({ token });
+  }
+  return apifyClient;
+}
+
+async function fetchFromApify(currencies: string[]): Promise<NewsItem[]> {
+  const client = getApifyClient();
+
+  const run = await client.actor('getascraper/cryptopanic-news-scraper').call({
+    currencies: currencies.map(c => c.toUpperCase()),
+    newsFilter: 'Hot',
+    maxItems: 5,
+  });
+
+  const { items } = await client.dataset(run.defaultDatasetId).listItems({ limit: 5 });
+  const posts = items as unknown as ApifyNewsItem[];
+
+  return posts.slice(0, 5).map((post): NewsItem => {
+    const positive = post.votes?.positive_count ?? 0;
+    const total = post.votes?.total_count ?? 0;
+    const score = total > 0 ? positive / total : 0.5;
+    return {
+      title: post.title,
+      source: 'CryptoPanic',
+      url: post.url,
+      publishedAt: post.publishedAt,
+      sentiment: deriveSentiment(score),
+      sentimentScore: Math.round(score * 1000) / 1000,
+    };
+  });
+}
+
+// ─── CryptoPanic direct API fetch ─────────────────────────────────────────────
 
 async function fetchFromCryptoPanic(currencies: string[]): Promise<NewsItem[]> {
   const token = process.env.CRYPTOPANIC_API_TOKEN;
@@ -180,14 +232,19 @@ async function fetchNews(currencies: string[]): Promise<NewsResult> {
   let items: NewsItem[] = [];
 
   try {
-    items = await fetchFromCryptoPanic(currencies);
+    items = await fetchFromApify(currencies);
   } catch {
-    // CryptoPanic unavailable or token missing — fall back to CoinGecko
+    // Apify scraper unavailable or token missing — fall back to CryptoPanic direct API
     try {
-      items = await fetchFromCoinGecko(currencies);
+      items = await fetchFromCryptoPanic(currencies);
     } catch {
-      // Both sources failed — return empty result gracefully
-      items = [];
+      // CryptoPanic unavailable or token missing — fall back to CoinGecko
+      try {
+        items = await fetchFromCoinGecko(currencies);
+      } catch {
+        // All sources failed — return empty result gracefully
+        items = [];
+      }
     }
   }
 
@@ -210,8 +267,9 @@ export const newsTool = createTool({
   id: 'crypto-news',
   description:
     'Fetches top 5 real-time crypto news items with sentiment scores for given currencies. ' +
-    'Primary source: CryptoPanic (requires CRYPTOPANIC_API_TOKEN). ' +
-    'Fallback: CoinGecko /api/v3/news. Results cached for 5 minutes.',
+    'Primary source: Apify CryptoPanic News Scraper actor (requires APIFY_API_TOKEN). ' +
+    'Fallbacks: direct CryptoPanic API (requires CRYPTOPANIC_API_TOKEN), then CoinGecko /api/v3/news. ' +
+    'Results cached for 5 minutes.',
   inputSchema: z.object({
     currencies: z
       .array(z.string())
