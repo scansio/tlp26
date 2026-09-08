@@ -130,7 +130,7 @@ async function fetchFromApify(currencies: string[]): Promise<NewsItem[]> {
 
   const run = await client.actor('getascraper/cryptopanic-news-scraper').call({
     currencies: currencies.map(c => c.toUpperCase()),
-    newsFilter: 'Hot',
+    newsFilter: 'hot',
     maxItems: 5,
   });
 
@@ -233,16 +233,19 @@ async function fetchNews(currencies: string[]): Promise<NewsResult> {
 
   try {
     items = await fetchFromApify(currencies);
-  } catch {
-    // Apify scraper unavailable or token missing — fall back to CryptoPanic direct API
+    console.log(`[news-tool] apify: ${items.length} items for [${currencies.join(',')}]`);
+  } catch (err) {
+    console.error(`[news-tool] apify failed for [${currencies.join(',')}]:`, err instanceof Error ? err.message : err);
     try {
       items = await fetchFromCryptoPanic(currencies);
-    } catch {
-      // CryptoPanic unavailable or token missing — fall back to CoinGecko
+      console.log(`[news-tool] cryptopanic: ${items.length} items for [${currencies.join(',')}]`);
+    } catch (err2) {
+      console.error(`[news-tool] cryptopanic failed for [${currencies.join(',')}]:`, err2 instanceof Error ? err2.message : err2);
       try {
         items = await fetchFromCoinGecko(currencies);
-      } catch {
-        // All sources failed — return empty result gracefully
+        console.log(`[news-tool] coingecko: ${items.length} items for [${currencies.join(',')}]`);
+      } catch (err3) {
+        console.error(`[news-tool] coingecko failed for [${currencies.join(',')}]:`, err3 instanceof Error ? err3.message : err3);
         items = [];
       }
     }
