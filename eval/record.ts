@@ -44,7 +44,8 @@ const CASES_DIR = join(process.cwd(), 'eval', 'cases');
 async function recordCase(symbol: string): Promise<void> {
   const mastra = createEvalMastra();
   const exchange = 'binance' as const;
-  const base = { symbol, exchange };
+  const marketType = 'spot' as const;
+  const base = { symbol, exchange, marketType };
 
   console.log(`[record] ${symbol}: fetching market data…`);
   const withCandles = await fetchMarketDataPhase(base, mastra);

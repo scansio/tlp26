@@ -59,6 +59,8 @@ const step1InputSchema = z.object({
   triggeredBy: z.enum(['scheduled', 'manual', 'tradingview']),
   /** Exchange to use for all data + execution (default: binance). */
   exchange: z.enum(['binance', 'bybit', 'bingx']).default('binance'),
+  /** Market to analyze against — 'swap' = USDT-M perpetual futures (default: spot). */
+  marketType: z.enum(['spot', 'swap']).default('spot'),
 });
 
 const step1OutputSchema = step1InputSchema.extend({
@@ -216,6 +218,7 @@ const agentDecisionOutputSchema = z.object({
   symbol: z.string(),
   triggeredBy: z.enum(['scheduled', 'manual', 'tradingview']),
   exchange: z.enum(['binance', 'bybit', 'bingx']),
+  marketType: z.enum(['spot', 'swap']),
   candles15m: z.array(candleSchema),
   candles1h: z.array(candleSchema),
   candles4h: z.array(candleSchema),
@@ -292,6 +295,7 @@ const finalizeSignal = createStep({
     const analysis: MarketAnalysisResult = {
       symbol: inputData.symbol,
       exchange: inputData.exchange,
+      marketType: inputData.marketType,
       triggeredBy: inputData.triggeredBy,
       candles15m: inputData.candles15m,
       candles1h: inputData.candles1h,
@@ -347,6 +351,10 @@ export const tradeAnalysisWorkflow = createWorkflow({
       .enum(['binance', 'bybit', 'bingx'])
       .default('binance')
       .describe('Exchange to use for market data and execution'),
+    marketType: z
+      .enum(['spot', 'swap'])
+      .default('spot')
+      .describe("Market to analyze/execute against — 'swap' = USDT-M perpetual futures"),
   }),
   outputSchema: finalizeSignalOutputSchema,
 })

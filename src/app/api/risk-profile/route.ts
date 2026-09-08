@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { userRiskProfiles } from '@/db/schema';
+import { normalizeSymbolList } from '@/lib/symbols';
 
 // ---------------------------------------------------------------------------
 // Validation schema
@@ -148,6 +149,7 @@ export async function POST(req: Request) {
     typeof body === 'object' && body !== null ? Object.keys(body) : [],
   );
   const provided = (key: string) => bodyKeys.has(key);
+  const allowedSymbols = normalizeSymbolList(data.allowedSymbols);
 
   const [upserted] = await db
     .insert(userRiskProfiles)
@@ -160,7 +162,7 @@ export async function POST(req: Request) {
       // executionMode in schema stores paper/live; tradingMode stores auto/manual
       tradingMode: data.executionMode,
       preferredTimeframes: data.preferredTimeframes,
-      allowedSymbols: data.allowedSymbols,
+      allowedSymbols,
       slippagePct: String(data.slippagePct),
       paperBalanceUsd: String(data.paperBalanceUsd),
       minRiskRewardRatio: String(data.minRiskRewardRatio),
@@ -184,7 +186,7 @@ export async function POST(req: Request) {
         maxDailyLossPct: String(data.maxDailyLossPct),
         tradingMode: data.executionMode,
         preferredTimeframes: data.preferredTimeframes,
-        allowedSymbols: data.allowedSymbols,
+        allowedSymbols,
         slippagePct: String(data.slippagePct),
         paperBalanceUsd: String(data.paperBalanceUsd),
         minRiskRewardRatio: String(data.minRiskRewardRatio),

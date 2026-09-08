@@ -9,17 +9,10 @@
 import crypto from 'node:crypto';
 import { runMarketAnalysis } from '@/lib/analysis/market-analysis';
 import { finalizeForUser } from '@/lib/analysis/finalize-for-user';
-import { fetchEligibleUsers, type ExchangeName } from './eligibility';
+import { fetchEligibleUsers } from './eligibility';
 import { groupIntoConfluenceGroups } from './grouping';
 import { withGlobalTickLock } from './lock';
 import { chunk } from './util';
-
-const VALID_EXCHANGES: readonly ExchangeName[] = ['binance', 'bybit', 'bingx'];
-
-function resolveReferenceExchange(): ExchangeName {
-  const raw = process.env.WORKER_REFERENCE_EXCHANGE ?? 'binance';
-  return (VALID_EXCHANGES as readonly string[]).includes(raw) ? (raw as ExchangeName) : 'binance';
-}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function runTick(mastra: any): Promise<void> {
@@ -30,8 +23,7 @@ export async function runTick(mastra: any): Promise<void> {
       return;
     }
 
-    const referenceExchange = resolveReferenceExchange();
-    const groups = groupIntoConfluenceGroups(eligibleUsers, referenceExchange);
+    const groups = groupIntoConfluenceGroups(eligibleUsers);
     console.log(
       `[worker] tick: ${eligibleUsers.length} eligible user(s) -> ${groups.length} confluence group(s)`,
     );
@@ -43,6 +35,7 @@ export async function runTick(mastra: any): Promise<void> {
         const analysis = await runMarketAnalysis({
           symbol: group.symbol,
           exchange: group.referenceExchange,
+          marketType: group.referenceMarketType,
           triggeredBy: 'scheduled',
           mastra,
         });

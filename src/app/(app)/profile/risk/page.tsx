@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Alert } from '@/components/ui/alert';
 import { CircuitBreakerPanel } from '@/components/circuit-breaker/circuit-breaker-panel';
+import { normalizeSymbolList } from '@/lib/symbols';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -118,9 +119,9 @@ function SymbolTagInput({
   const [inputValue, setInputValue] = useState('');
 
   function addTag() {
-    const tag = inputValue.trim().toUpperCase();
-    if (tag && !value.includes(tag)) {
-      onChange([...value, tag]);
+    const newTags = normalizeSymbolList([inputValue]).filter((tag) => !value.includes(tag));
+    if (newTags.length > 0) {
+      onChange([...value, ...newTags]);
     }
     setInputValue('');
   }

@@ -9,30 +9,24 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { userExchanges, userRiskProfiles } from '@/db/schema';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
+import { normalizeSymbolList } from '@/lib/symbols';
+import { deriveTradingContext, type ExchangeName, type MarketType } from '@/lib/user-trading-context';
 import { chunk } from './util';
 
-export type ExchangeName = 'binance' | 'bybit' | 'bingx';
-
-const VALID_EXCHANGES: readonly ExchangeName[] = ['binance', 'bybit', 'bingx'];
-
-function isValidExchange(name: string): name is ExchangeName {
-  return (VALID_EXCHANGES as readonly string[]).includes(name);
-}
+export type { ExchangeName };
 
 export interface EligibleUser {
   userId: string;
   symbols: string[];
   /** The user's own connected execution exchange (falls back to 'binance' if none connected). */
   exchange: ExchangeName;
+  marketType: MarketType;
 }
 
 function resolveDefaultSymbols(): string[] {
   const raw = process.env.WORKER_DEFAULT_SYMBOLS;
   if (!raw) return [];
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  return normalizeSymbolList([raw]);
 }
 
 export async function fetchEligibleUsers(): Promise<EligibleUser[]> {
@@ -48,20 +42,22 @@ export async function fetchEligibleUsers(): Promise<EligibleUser[]> {
 
   const candidates = await Promise.all(
     profiles.map(async (profile) => {
-      const configuredSymbols = profile.allowedSymbols ?? [];
-      const symbols = configuredSymbols.length > 0 ? configuredSymbols : defaultSymbols;
-      if (configuredSymbols.length === 0 && defaultSymbols.length > 0) fallbackCount += 1;
-
       const [exchangeRow] = await db
         .select({ exchangeName: userExchanges.exchangeName })
         .from(userExchanges)
         .where(and(eq(userExchanges.userId, profile.userId), eq(userExchanges.status, 'active')))
         .limit(1);
 
-      const exchange: ExchangeName =
-        exchangeRow && isValidExchange(exchangeRow.exchangeName) ? exchangeRow.exchangeName : 'binance';
+      const context = deriveTradingContext(profile, exchangeRow, defaultSymbols);
+      const configuredSymbols = normalizeSymbolList(profile.allowedSymbols ?? []);
+      if (configuredSymbols.length === 0 && defaultSymbols.length > 0) fallbackCount += 1;
 
-      return { userId: profile.userId, symbols, exchange };
+      return {
+        userId: context.userId,
+        symbols: context.symbols,
+        exchange: context.exchange,
+        marketType: context.marketType,
+      };
     }),
   );
 

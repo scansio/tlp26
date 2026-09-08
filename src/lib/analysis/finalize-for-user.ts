@@ -6,19 +6,17 @@
  * this out cheaply to every user in a confluence group after the shared
  * market analysis (src/lib/analysis/market-analysis.ts) has run once.
  *
- * The market analysis always runs against one canonical reference exchange
- * (analysis.exchange), decoupled from each user's own connected execution
- * exchange — risk sizing and order placement here use `executionExchange`
- * (the user's own exchange), falling back to `analysis.exchange` for the
- * single-user webhook/manual path where there is no separate reference
- * exchange concept.
+ * Confluence groups are keyed by (symbol, exchange, marketType) — see
+ * src/worker/grouping.ts — so every user in a group already shares the same
+ * exchange/marketType the analysis ran against. Risk sizing and order
+ * placement here use `executionExchange` (the user's own exchange), falling
+ * back to `analysis.exchange` for the single-user webhook/manual path where
+ * there is no separate group concept.
  */
 
-import { eq } from 'drizzle-orm';
-import { db } from '@/db';
-import { userRiskProfiles } from '@/db/schema';
 import { propagatePublisherSignal } from '@/lib/copy-mirror-engine';
 import { fetchLiveUsdtBalance } from '@/lib/exchange-account';
+import { resolveUserTradingContext } from '@/lib/user-trading-context';
 import { createSignalTool } from '@/mastra/tools/create-signal-tool';
 import { executeTradeTool } from '@/mastra/tools/execute-trade-tool';
 import type { MarketType } from '@/mastra/tools/market-symbol';
@@ -99,8 +97,9 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
     return { signalId: null, action: 'HOLD', symbol, userId, executionMode: 'n/a', executionResult: null };
   }
 
-  // Load the user's risk profile once (previously loaded twice — once for risk
-  // sizing, once for routing — collapsed into a single query here).
+  // Load the user's trading context once via the shared resolver (same one
+  // the worker's eligibility pass and the TradingView webhook use), so
+  // marketType/leverage/margin/risk defaults can't drift between entry points.
   let riskPerTradePct = 1.0;
   let slippagePct = 0.05;
   let executionMode = 'paper'; // 'paper' | 'live'
@@ -110,23 +109,33 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
   let leverage = 1;
   let marginMode: 'cross' | 'isolated' = 'cross';
   try {
-    const [profile] = await db
-      .select()
-      .from(userRiskProfiles)
-      .where(eq(userRiskProfiles.userId, userId))
-      .limit(1);
-    if (profile) {
-      riskPerTradePct = parseFloat(profile.riskPerTradePct ?? '1.0');
-      slippagePct = profile.slippagePct ? parseFloat(profile.slippagePct) : 0.05;
-      executionMode = profile.executionMode ?? 'paper';
-      tradingMode = profile.tradingMode ?? 'manual';
-      paperBalanceUsd = profile.paperBalanceUsd ?? null;
-      marketType = (profile.marketType as 'spot' | 'swap') ?? 'spot';
-      leverage = profile.defaultLeverage ?? 1;
-      marginMode = (profile.marginMode as 'cross' | 'isolated') ?? 'cross';
+    const context = await resolveUserTradingContext(userId);
+    if (context) {
+      riskPerTradePct = context.riskPerTradePct;
+      slippagePct = context.slippagePct;
+      executionMode = context.executionMode;
+      tradingMode = context.tradingMode;
+      paperBalanceUsd = context.paperBalanceUsd;
+      marketType = context.marketType;
+      leverage = context.leverage;
+      marginMode = context.marginMode;
     }
   } catch (err) {
     console.warn('finalizeForUser: could not load risk profile, using defaults', err);
+  }
+
+  if (analysis.marketType !== marketType) {
+    // Expected on the TradingView auto-mode path: a ".P"/".PERP" alert
+    // suffix analyzes as swap regardless of the profile's default marketType
+    // (see normaliseSymbol() in src/lib/tradingview.ts) — execution still
+    // uses the profile's marketType below. For the scheduled worker this
+    // should never fire, since confluence groups are keyed by marketType
+    // (src/worker/grouping.ts) — if it does, that's a grouping bug.
+    console.warn(
+      `finalizeForUser: analysis ran as marketType=${analysis.marketType} but userId=${userId}'s profile says ` +
+        `marketType=${marketType} — expected for a TradingView alert-suffix override, a bug if triggeredBy=scheduled; ` +
+        `proceeding with the user's own profile value for sizing/execution.`,
+    );
   }
 
   const executionExchange = input.executionExchange ?? analysis.exchange;

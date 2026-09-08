@@ -204,6 +204,7 @@ async function withRetry<T>(
 export interface MarketAnalysisInput {
   symbol: string;
   exchange: 'binance' | 'bybit' | 'bingx';
+  marketType: 'spot' | 'swap';
   triggeredBy: 'scheduled' | 'manual' | 'tradingview';
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any;
@@ -212,6 +213,7 @@ export interface MarketAnalysisInput {
 export interface MarketAnalysisResult {
   symbol: string;
   exchange: 'binance' | 'bybit' | 'bingx';
+  marketType: 'spot' | 'swap';
   triggeredBy: 'scheduled' | 'manual' | 'tradingview';
   candles15m: z.infer<typeof candleSchema>[];
   candles1h: z.infer<typeof candleSchema>[];
@@ -242,7 +244,9 @@ export interface MarketAnalysisResult {
 // Phase 1 — fetchMarketData
 // ---------------------------------------------------------------------------
 
-export async function fetchMarketDataPhase<T extends { symbol: string; exchange: string }>(
+export async function fetchMarketDataPhase<
+  T extends { symbol: string; exchange: string; marketType: string },
+>(
   input: T,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any,
@@ -255,15 +259,15 @@ export async function fetchMarketDataPhase<T extends { symbol: string; exchange:
   }
 > {
   return withTimeout('fetchMarketData', async () => {
-    const { symbol, exchange } = input;
+    const { symbol, exchange, marketType } = input;
     const tool = mastra?.getTool('marketDataTool');
     if (!tool) throw new Error('marketDataTool not found in Mastra instance');
 
     const [r15m, r1h, r4h, r1d] = await Promise.all([
-      tool.execute!({ symbol, timeframe: '15m', limit: 200, exchange }, {}),
-      tool.execute!({ symbol, timeframe: '1h', limit: 200, exchange }, {}),
-      tool.execute!({ symbol, timeframe: '4h', limit: 200, exchange }, {}),
-      tool.execute!({ symbol, timeframe: '1d', limit: 200, exchange }, {}),
+      tool.execute!({ symbol, timeframe: '15m', limit: 200, exchange, marketType }, {}),
+      tool.execute!({ symbol, timeframe: '1h', limit: 200, exchange, marketType }, {}),
+      tool.execute!({ symbol, timeframe: '4h', limit: 200, exchange, marketType }, {}),
+      tool.execute!({ symbol, timeframe: '1d', limit: 200, exchange, marketType }, {}),
     ]);
 
     return {
@@ -452,7 +456,9 @@ export async function detectChartPatternsPhase<T extends { candles1h: z.infer<ty
 // Phase 5 — analyzeOrderBook
 // ---------------------------------------------------------------------------
 
-export async function analyzeOrderBookPhase<T extends { symbol: string; exchange: string }>(
+export async function analyzeOrderBookPhase<
+  T extends { symbol: string; exchange: string; marketType: string },
+>(
   input: T,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any,
@@ -465,6 +471,7 @@ export async function analyzeOrderBookPhase<T extends { symbol: string; exchange
       {
         symbol: input.symbol,
         exchange: input.exchange,
+        marketType: input.marketType,
         depth: 50,
       },
       {},

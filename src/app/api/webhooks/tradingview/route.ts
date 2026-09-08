@@ -1,9 +1,10 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '@/db';
-import { userRiskProfiles, tradeSignals } from '@/db/schema';
+import { userRiskProfiles, userExchanges, tradeSignals } from '@/db/schema';
 import { tvWebhookSchema, normaliseSymbol, actionToDirection } from '@/lib/tradingview';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
 import { propagatePublisherSignal } from '@/lib/copy-mirror-engine';
+import { deriveTradingContext } from '@/lib/user-trading-context';
 
 export const runtime = 'nodejs';
 
@@ -65,13 +66,29 @@ export async function POST(req: Request) {
   // so we don't end up with two trade_signals rows for one alert.
   if (tradingMode === 'auto') {
     try {
+      const [exchangeRow] = await db
+        .select({ exchangeName: userExchanges.exchangeName })
+        .from(userExchanges)
+        .where(and(eq(userExchanges.userId, userId), eq(userExchanges.status, 'active')))
+        .limit(1);
+      // The alert's ".P"/".PERP" ticker suffix is a stronger marketType signal
+      // than the profile default (see comment below), so it overrides the
+      // context's own marketType; exchange still comes from the shared resolver.
+      const { exchange } = deriveTradingContext(profile, exchangeRow);
+
       const { mastra } = await import('@/mastra');
       const workflow = mastra.getWorkflow('tradeAnalysisWorkflow');
       if (workflow) {
         const run = await workflow.createRun();
         run
           .start({
-            inputData: { userId, symbol: normalisedSymbol, triggeredBy: 'tradingview', exchange: 'binance' },
+            inputData: {
+              userId,
+              symbol: normalisedSymbol,
+              triggeredBy: 'tradingview',
+              exchange,
+              marketType,
+            },
           })
           .catch((err: unknown) => {
             console.error('[tradingview-webhook] workflow run error:', err);
