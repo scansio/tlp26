@@ -33,17 +33,18 @@ const PAGE_SIZE = 25;
 
 interface RawPayload {
   indicators1h?: {
-    rsi?: number | null;
-    ema20?: number | null;
-    ema50?: number | null;
-    ema200?: number | null;
-    macdLine?: number | null;
-    macdSignal?: number | null;
-    macdHistogram?: number | null;
-    adx?: number | null;
-    atrPct?: number | null;
-    bbWidth?: number | null;
-    emaAlignment?: string | null;
+    rsi?: { value: number | null } | null;
+    ema?: {
+      ema20?: number | null;
+      ema50?: number | null;
+      ema200?: number | null;
+      direction?: string | null;
+    } | null;
+    macd?: {
+      macdLine?: number | null;
+      signalLine?: number | null;
+      histogram?: number | null;
+    } | null;
     [key: string]: unknown;
   };
   smcStructures?: unknown;
@@ -312,14 +313,14 @@ export async function GET(req: NextRequest) {
       confidence: r.confidence ?? null,
       indicators: ind
         ? {
-            rsi: ind.rsi ?? null,
-            ema20: ind.ema20 ?? null,
-            ema50: ind.ema50 ?? null,
-            ema200: ind.ema200 ?? null,
-            emaAlignment: ind.emaAlignment ?? null,
-            macdLine: ind.macdLine ?? null,
-            macdSignal: ind.macdSignal ?? null,
-            macdHistogram: ind.macdHistogram ?? null,
+            rsi: ind.rsi?.value ?? null,
+            ema20: ind.ema?.ema20 ?? null,
+            ema50: ind.ema?.ema50 ?? null,
+            ema200: ind.ema?.ema200 ?? null,
+            emaAlignment: ind.ema?.direction ?? null,
+            macdLine: ind.macd?.macdLine ?? null,
+            macdSignal: ind.macd?.signalLine ?? null,
+            macdHistogram: ind.macd?.histogram ?? null,
           }
         : null,
       newsSentiment: r.newsSentiment ?? null,
