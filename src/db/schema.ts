@@ -229,9 +229,22 @@ export const tradeSignals = pgTable('trade_signals', {
   // Set when the computed position size can never clear the exchange's
   // minimum order size at current balance/risk% — the auto-execute retry
   // loop skips these (see src/worker/auto-execute-retry-loop.ts) instead of
-  // retrying a mathematically-doomed order every tick; manual Approve is
-  // unaffected and re-checks independently.
+  // retrying a mathematically-doomed order every tick. Manual Approve reads
+  // the same stored riskCalculation.belowExchangeMinimum flag (see below),
+  // so use the Recompute action first if balance/risk% has changed since.
   autoExecutionBlocked: boolean('auto_execution_blocked').default(false),
+  // Full risk-tool output computed once at signal-creation time (position
+  // size, margin, leverage, fees, P&L) — this is what Approve/auto-execute
+  // actually use to size the order (see finalize-for-user.ts, auto-execute.ts),
+  // not a fresh recompute, so what the user sees is exactly what executes.
+  // The 'recompute' action on PATCH /api/trade-signals/[id] is the explicit
+  // way to refresh this if the account balance has since changed.
+  riskCalculation: jsonb('risk_calculation'),
+  // Promoted out of riskCalculation for quick display without parsing JSON —
+  // the realistic dollar amount this trade risks if SL is hit, after fees/
+  // slippage (riskCalculation.netExpectedLoss), not the margin committed.
+  riskCapitalUsdt: numeric('risk_capital_usdt', { precision: 20, scale: 4 }),
+  riskCalculatedAt: timestamp('risk_calculated_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true }),

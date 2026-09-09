@@ -211,6 +211,13 @@
       "when": 1788970885094,
       "tag": "0029_little_gambit",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1788979127529,
+      "tag": "0030_stale_earthquake",
+      "breakpoints": true
     }
   ]
 }

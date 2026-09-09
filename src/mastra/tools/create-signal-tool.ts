@@ -56,6 +56,20 @@ export const createSignalTool = createTool({
       .string()
       .optional()
       .describe('Internal use only — do not set. JSON-stringified extra context merged into rawPayload.'),
+    // Same provider-safety reasoning as rawPayloadExtraJson above — a JSON
+    // string instead of a nested object. Internal use only: only
+    // finalize-for-user.ts / finalize-price-watch.ts populate this, never
+    // the LLM. This is the exact risk-tool output that Approve/auto-execute
+    // will size the order against later (see risk_calculation column comment
+    // in src/db/schema.ts) — not a fresh recompute at execution time.
+    riskCalculationJson: z
+      .string()
+      .optional()
+      .describe('Internal use only — do not set. JSON-stringified risk-tool output.'),
+    riskCapitalUsdt: z
+      .number()
+      .optional()
+      .describe('Internal use only — do not set. Realistic $ risked if SL hits (risk-tool netExpectedLoss).'),
   }),
   outputSchema: z.object({
     signalId: z.string(),
@@ -92,6 +106,8 @@ export const createSignalTool = createTool({
       onChainFundingBias,
       onChainNetflow,
       rawPayloadExtraJson,
+      riskCalculationJson,
+      riskCapitalUsdt,
     } = inputData as {
       userId: string;
       symbol: string;
@@ -115,6 +131,8 @@ export const createSignalTool = createTool({
       onChainFundingBias?: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
       onChainNetflow?: number;
       rawPayloadExtraJson?: string;
+      riskCalculationJson?: string;
+      riskCapitalUsdt?: number;
     };
 
     let rawPayloadExtra: Record<string, unknown> = {};
@@ -123,6 +141,15 @@ export const createSignalTool = createTool({
         rawPayloadExtra = JSON.parse(rawPayloadExtraJson) as Record<string, unknown>;
       } catch (err) {
         console.warn('createSignalTool: failed to parse rawPayloadExtraJson, ignoring', err);
+      }
+    }
+
+    let riskCalculation: Record<string, unknown> | null = null;
+    if (riskCalculationJson) {
+      try {
+        riskCalculation = JSON.parse(riskCalculationJson) as Record<string, unknown>;
+      } catch (err) {
+        console.warn('createSignalTool: failed to parse riskCalculationJson, ignoring', err);
       }
     }
 
@@ -151,6 +178,9 @@ export const createSignalTool = createTool({
         onChainFundingBias: onChainFundingBias ?? null,
         onChainNetflow: onChainNetflow != null ? String(onChainNetflow) : null,
         rawPayload: { exchange: exchange ?? 'binance', smcLevels: smcLevels ?? [], ...rawPayloadExtra },
+        riskCalculation: riskCalculation ?? undefined,
+        riskCapitalUsdt: riskCapitalUsdt != null ? String(riskCapitalUsdt) : null,
+        riskCalculatedAt: riskCalculation ? new Date() : null,
         expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1000),
       })
       .returning({

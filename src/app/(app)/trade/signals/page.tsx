@@ -131,6 +131,28 @@ export default function SignalQueuePage() {
     [],
   );
 
+  // Recompute doesn't change status, so refresh the whole queue instead of
+  // patching local state — keeps the recomputed feeData authoritative.
+  const handleRecompute = useCallback(
+    async (id: string) => {
+      const res = await fetch(`/api/trade-signals/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'recompute' }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(
+          (body as { error?: string }).error ?? `Recompute failed: ${res.status}`,
+        );
+      }
+
+      await fetchQueue();
+    },
+    [fetchQueue],
+  );
+
   const isAutoMode = tradingMode === 'auto';
   const pendingCount = signals.filter((s) => s.status === 'pending').length;
 
@@ -299,6 +321,7 @@ export default function SignalQueuePage() {
                 signal={signal}
                 showActions
                 onAction={handleAction}
+                onRecompute={handleRecompute}
                 connectedExchange={connectedExchange}
               />
             ))}

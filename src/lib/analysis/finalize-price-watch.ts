@@ -117,6 +117,7 @@ export async function finalizePriceWatchTrade(
           takeProfitPrice: tp,
           direction,
           slippagePct,
+          fallbackMaxLeverage: profileLeverageFallback,
         },
         {},
       )) as Record<string, unknown>;
@@ -153,7 +154,9 @@ export async function finalizePriceWatchTrade(
       marketType: watch.marketType as 'spot' | 'swap',
       leverage,
       marginMode: (watch.marginMode as 'cross' | 'isolated') ?? 'cross',
-      rawPayloadExtraJson: JSON.stringify({ priceWatchId: watch.id, riskCalculation }),
+      rawPayloadExtraJson: JSON.stringify({ priceWatchId: watch.id }),
+      riskCalculationJson: riskCalculation ? JSON.stringify(riskCalculation) : undefined,
+      riskCapitalUsdt: riskCalculation?.netExpectedLoss as number | undefined,
     },
     { observe: noopObserve },
   )) as { signalId: string };

@@ -105,69 +105,95 @@ export async function attemptSignalAutoExecution(signalId: string): Promise<Auto
       return { attempted: true, success: false, message };
     }
 
-    const accountBalance = await resolveAccountBalance(
-      claimed.userId,
-      context.executionMode,
-      context.paperBalanceUsd,
-      marketType,
-    );
-    if (accountBalance === null) {
-      const message = 'Could not determine account balance for position sizing.';
-      await persistOutcome(signalId, message);
-      return { attempted: true, success: false, message };
-    }
-
     const riskPerTradePct = claimed.riskOverridePct ? Number(claimed.riskOverridePct) : context.riskPerTradePct;
 
-    let positionSizeUsdt: number;
-    let leverage = claimed.leverage ?? context.leverage;
-    try {
-      const calc = (await riskTool.execute!(
-        {
-          exchange,
-          symbol: claimed.symbol,
-          marketType,
-          accountBalance,
-          riskPerTradePct,
-          entryPrice,
-          stopLossPrice: Number(claimed.stopLoss),
-          takeProfitPrice: Number(claimed.takeProfit),
-          direction: claimed.direction as 'LONG' | 'SHORT',
-          slippagePct: context.slippagePct,
-        },
-        { observe: noopObserve },
-      )) as {
-        positionSizeUsdt: number;
-        positionSizeUnits: number;
-        leverage: number;
-        minOrderSizeUnits: number;
-        belowExchangeMinimum: boolean;
-      };
+    // Execute against the exact risk calculation already shown to the user
+    // (computed once at signal-creation time, or by a previous Recompute) —
+    // never a fresh recompute here. This is the only path where a stored
+    // calc might legitimately be missing (a signal created before this
+    // column existed, or whose creation-time riskTool call failed), so that
+    // one case still computes fresh and persists it for next time.
+    type RiskCalcResult = {
+      positionSizeUsdt: number;
+      positionSizeUnits: number;
+      leverage: number;
+      minOrderSizeUnits: number;
+      belowExchangeMinimum: boolean;
+      netExpectedLoss?: number;
+    };
+    let calc = claimed.riskCalculation as RiskCalcResult | null;
 
-      // Below the exchange's minimum order size — no retry will ever fix
-      // this at the current balance/risk%, so stop the retry loop from
-      // picking this signal up again (manual Approve can still try, and
-      // will hit the same clear check rather than a cryptic CCXT error).
-      if (calc.belowExchangeMinimum) {
-        // Auto-retry has stopped for this signal (autoExecutionBlocked=true
-        // excludes it from the retry loop's candidate query) — increasing
-        // balance/risk% will NOT make it resume on its own; the message must
-        // say so, since Approve is the only path left that re-sizes it.
-        const message =
-          `Position size (${calc.positionSizeUnits} units, $${calc.positionSizeUsdt.toFixed(2)}) is below ${exchange}'s ` +
-          `minimum order size (${calc.minOrderSizeUnits} units) for ${claimed.symbol}. Auto-retry has stopped for this ` +
-          `signal — increase your risk-per-trade % or account balance, then click Approve to retry manually.`;
-        await persistOutcome(signalId, message, true);
+    let leverage = claimed.leverage ?? context.leverage;
+
+    if (!calc) {
+      const accountBalance = await resolveAccountBalance(
+        claimed.userId,
+        context.executionMode,
+        context.paperBalanceUsd,
+        marketType,
+      );
+      if (accountBalance === null) {
+        const message = 'Could not determine account balance for position sizing.';
+        await persistOutcome(signalId, message);
         return { attempted: true, success: false, message };
       }
 
-      positionSizeUsdt = calc.positionSizeUsdt;
-      leverage = calc.leverage;
-    } catch (err) {
-      const message = `Risk sizing failed: ${err instanceof Error ? err.message : String(err)}`;
-      await persistOutcome(signalId, message);
+      try {
+        calc = (await riskTool.execute!(
+          {
+            exchange,
+            symbol: claimed.symbol,
+            marketType,
+            accountBalance,
+            riskPerTradePct,
+            entryPrice,
+            stopLossPrice: Number(claimed.stopLoss),
+            takeProfitPrice: Number(claimed.takeProfit),
+            direction: claimed.direction as 'LONG' | 'SHORT',
+            slippagePct: context.slippagePct,
+            fallbackMaxLeverage: leverage,
+          },
+          { observe: noopObserve },
+        )) as unknown as RiskCalcResult;
+      } catch (err) {
+        const message = `Risk sizing failed: ${err instanceof Error ? err.message : String(err)}`;
+        await persistOutcome(signalId, message);
+        return { attempted: true, success: false, message };
+      }
+
+      if (!calc) {
+        const message = 'Risk sizing produced no result.';
+        await persistOutcome(signalId, message);
+        return { attempted: true, success: false, message };
+      }
+
+      await db
+        .update(tradeSignals)
+        .set({
+          riskCalculation: calc,
+          riskCapitalUsdt: calc.netExpectedLoss != null ? String(calc.netExpectedLoss) : null,
+          riskCalculatedAt: new Date(),
+        })
+        .where(eq(tradeSignals.id, signalId));
+    }
+
+    // Below the exchange's minimum order size — no retry will ever fix this
+    // without a new calculation, so stop the retry loop from picking this
+    // signal up again (manual Approve/Recompute can still try).
+    if (calc.belowExchangeMinimum) {
+      // Auto-retry has stopped for this signal (autoExecutionBlocked=true
+      // excludes it from the retry loop's candidate query) — the message
+      // must say so, since Recompute + Approve is the only path left.
+      const message =
+        `Position size (${calc.positionSizeUnits} units, $${calc.positionSizeUsdt.toFixed(2)}) is below ${exchange}'s ` +
+        `minimum order size (${calc.minOrderSizeUnits} units) for ${claimed.symbol}. Auto-retry has stopped for this ` +
+        `signal — click Recompute on the signal, or increase your risk-per-trade % or account balance, then Approve manually.`;
+      await persistOutcome(signalId, message, true);
       return { attempted: true, success: false, message };
     }
+
+    const positionSizeUsdt = calc.positionSizeUsdt;
+    leverage = calc.leverage;
 
     if (!positionSizeUsdt || positionSizeUsdt <= 0) {
       const message = 'Risk sizing produced no valid position size.';

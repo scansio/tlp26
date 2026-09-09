@@ -14,25 +14,37 @@ import { NextResponse } from 'next/server';
 import { eq, desc, and } from 'drizzle-orm';
 import { db } from '@/db';
 import { tradeSignals, userRiskProfiles, userExchanges } from '@/db/schema';
-import { riskTool } from '@/mastra/tools/risk-tool';
-import { noopObserve } from '@mastra/core/tools';
-import { fetchLiveUsdtBalance } from '@/lib/exchange-account';
 
 const DEFAULT_TAKER_FEE = 0.0004;
 const DEFAULT_SLIPPAGE_PCT = 0.05;
 
-async function computeFeeData(
+type StoredRiskCalculation = {
+  positionSizeUsdt?: number;
+  positionSizeUnits?: number;
+  marginUsdt?: number;
+  leverage?: number;
+  maxSymbolLeverage?: number;
+  leverageCapped?: boolean;
+  takerFeePct?: number;
+  accountBalance?: number;
+  riskPerTradePct?: number;
+};
+
+// Pure rate math (no I/O) plus whatever risk-tool output was stored on the
+// signal at creation time (or by a later Recompute) — never a live riskTool
+// call here. This is what makes the Signal Queue's 15s poll cheap: no
+// exchange balance fetch, no risk-tool invocation, just reading columns
+// already selected below. See risk_calculation column comment in
+// src/db/schema.ts for why display and execution both read the same value.
+function computeFeeData(
   direction: string,
   entryPrice: string | null,
   stopLoss: string | null,
   takeProfit: string | null,
   slippagePct: number,
-  accountBalance: number | null,
-  riskPerTradePct: number | null,
-  exchange: 'binance' | 'bybit' | 'bingx',
-  symbol: string,
-  marketType: 'spot' | 'swap',
-  riskOverridePct: string | null,
+  riskCalculation: StoredRiskCalculation | null,
+  riskCapitalUsdt: string | null,
+  riskCalculatedAt: Date | null,
 ) {
   const entry = Number(entryPrice);
   const sl = Number(stopLoss);
@@ -59,59 +71,6 @@ async function computeFeeData(
   const r = (n: number, dp: number) =>
     Math.round(n * Math.pow(10, dp)) / Math.pow(10, dp);
 
-  // Position/margin/leverage sizing — delegates to risk-tool.ts (the same
-  // tool finalizeForUser calls before execution) instead of re-deriving the
-  // formula here, so this display figure can never drift from what actually
-  // gets executed. Uses the signal's own risk override when set (manually-
-  // created signals may specify a per-trade risk % instead of the profile
-  // default) so the displayed calculation matches what auto-execution will
-  // actually size against.
-  const effectiveRiskPct = riskOverridePct ? Number(riskOverridePct) : riskPerTradePct;
-
-  let positionSizeUsdt: number | null = null;
-  let positionSizeUnits: number | null = null;
-  let marginUsdt: number | null = null;
-  let leverage: number | null = null;
-  let maxSymbolLeverage: number | null = null;
-  let leverageCapped: boolean | null = null;
-  let takerFeePct: number | null = null;
-  if (accountBalance && accountBalance > 0 && effectiveRiskPct && effectiveRiskPct > 0) {
-    try {
-      const calc = (await riskTool.execute!(
-        {
-          exchange,
-          symbol,
-          marketType,
-          accountBalance,
-          riskPerTradePct: effectiveRiskPct,
-          entryPrice: entry,
-          stopLossPrice: sl,
-          takeProfitPrice: tp,
-          direction: direction as 'LONG' | 'SHORT',
-          slippagePct,
-        },
-        { observe: noopObserve },
-      )) as {
-        positionSizeUsdt: number;
-        positionSizeUnits: number;
-        marginUsdt: number;
-        leverage: number;
-        maxSymbolLeverage: number;
-        leverageCapped: boolean;
-        takerFeePct: number;
-      };
-      positionSizeUsdt = calc.positionSizeUsdt;
-      positionSizeUnits = calc.positionSizeUnits;
-      marginUsdt = calc.marginUsdt;
-      leverage = calc.leverage;
-      maxSymbolLeverage = calc.maxSymbolLeverage;
-      leverageCapped = calc.leverageCapped;
-      takerFeePct = calc.takerFeePct;
-    } catch (err) {
-      console.warn('trade-signals/queue: riskTool failed', err);
-    }
-  }
-
   return {
     grossExpectedProfit: r(grossExpectedProfit * 100, 4),
     netExpectedProfit: r(netExpectedProfit * 100, 4),
@@ -121,15 +80,17 @@ async function computeFeeData(
     breakEvenDistance: r((roundTripFeeRate + slippageRate) * 100, 4),
     slDistancePct: r(slDistanceRate * 100, 2),
     riskReward: r(rr, 2),
-    positionSizeUsdt,
-    positionSizeUnits,
-    marginUsdt,
-    leverage,
-    maxSymbolLeverage,
-    leverageCapped,
-    takerFeePct,
-    accountBalanceUsed: accountBalance,
-    riskPerTradePctUsed: effectiveRiskPct ?? null,
+    positionSizeUsdt: riskCalculation?.positionSizeUsdt ?? null,
+    positionSizeUnits: riskCalculation?.positionSizeUnits ?? null,
+    marginUsdt: riskCalculation?.marginUsdt ?? null,
+    leverage: riskCalculation?.leverage ?? null,
+    maxSymbolLeverage: riskCalculation?.maxSymbolLeverage ?? null,
+    leverageCapped: riskCalculation?.leverageCapped ?? null,
+    takerFeePct: riskCalculation?.takerFeePct ?? null,
+    accountBalanceUsed: riskCalculation?.accountBalance ?? null,
+    riskPerTradePctUsed: riskCalculation?.riskPerTradePct ?? null,
+    riskCapitalUsdt: riskCapitalUsdt != null ? Number(riskCapitalUsdt) : null,
+    riskCalculatedAt: riskCalculatedAt ? riskCalculatedAt.toISOString() : null,
   };
 }
 
@@ -157,21 +118,6 @@ export async function GET() {
   const slippagePct = profile?.slippagePct
     ? Number(profile.slippagePct)
     : DEFAULT_SLIPPAGE_PCT;
-  const riskPerTradePct = profile?.riskPerTradePct ? Number(profile.riskPerTradePct) : 1;
-  const paperBalance = profile?.paperBalanceUsd ? Number(profile.paperBalanceUsd) : 10_000;
-
-  // In live mode, size against the real exchange balance (cached per market
-  // type — spot/swap wallets can differ) rather than the paper-balance
-  // setting, so the risk-calculation display never quietly shows a paper
-  // number to a live-mode user.
-  const liveBalanceCache = new Map<'spot' | 'swap', number | null>();
-  const resolveAccountBalanceForDisplay = async (marketType: 'spot' | 'swap'): Promise<number | null> => {
-    if (executionMode !== 'live') return paperBalance;
-    if (liveBalanceCache.has(marketType)) return liveBalanceCache.get(marketType)!;
-    const balance = await fetchLiveUsdtBalance(userId, marketType);
-    liveBalanceCache.set(marketType, balance);
-    return balance;
-  };
 
   // Signals themselves carry no exchange (only marketType) — resolve the user's
   // connected exchange once so the UI can build correct chart/TradingView links.
@@ -204,6 +150,9 @@ export async function GET() {
       exitMode: tradeSignals.exitMode,
       marketType: tradeSignals.marketType,
       riskOverridePct: tradeSignals.riskOverridePct,
+      riskCalculation: tradeSignals.riskCalculation,
+      riskCapitalUsdt: tradeSignals.riskCapitalUsdt,
+      riskCalculatedAt: tradeSignals.riskCalculatedAt,
       lastError: tradeSignals.lastError,
       lastErrorAt: tradeSignals.lastErrorAt,
       executionAttempts: tradeSignals.executionAttempts,
@@ -216,47 +165,40 @@ export async function GET() {
     .orderBy(desc(tradeSignals.createdAt))
     .limit(100);
 
-  const resolvedExchange = (connectedExchange as 'binance' | 'bybit' | 'bingx' | null) ?? 'binance';
-
-  const signals = await Promise.all(
-    rows.map(async (row) => ({
-      id: row.id,
-      symbol: row.symbol,
-      timeframe: row.timeframe,
-      direction: row.direction,
-      entryPrice: row.entryPrice,
-      stopLoss: row.stopLoss,
-      takeProfit: row.takeProfit,
-      confidence: row.confidence,
-      reasoning: row.reasoning,
-      strategySource: row.strategySource,
-      source: row.source ?? 'ai',
-      status: row.status,
-      exitMode: row.exitMode,
-      marketType: row.marketType ?? 'spot',
-      rawPayload: row.rawPayload,
-      riskOverridePct: row.riskOverridePct,
-      lastError: row.lastError,
-      lastErrorAt: row.lastErrorAt,
-      executionAttempts: row.executionAttempts ?? 0,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-      expiresAt: row.expiresAt,
-      feeData: await computeFeeData(
-        row.direction,
-        row.entryPrice,
-        row.stopLoss,
-        row.takeProfit,
-        slippagePct,
-        await resolveAccountBalanceForDisplay((row.marketType as 'spot' | 'swap') ?? 'spot'),
-        riskPerTradePct,
-        resolvedExchange,
-        row.symbol,
-        (row.marketType as 'spot' | 'swap') ?? 'spot',
-        row.riskOverridePct,
-      ),
-    })),
-  );
+  const signals = rows.map((row) => ({
+    id: row.id,
+    symbol: row.symbol,
+    timeframe: row.timeframe,
+    direction: row.direction,
+    entryPrice: row.entryPrice,
+    stopLoss: row.stopLoss,
+    takeProfit: row.takeProfit,
+    confidence: row.confidence,
+    reasoning: row.reasoning,
+    strategySource: row.strategySource,
+    source: row.source ?? 'ai',
+    status: row.status,
+    exitMode: row.exitMode,
+    marketType: row.marketType ?? 'spot',
+    rawPayload: row.rawPayload,
+    riskOverridePct: row.riskOverridePct,
+    lastError: row.lastError,
+    lastErrorAt: row.lastErrorAt,
+    executionAttempts: row.executionAttempts ?? 0,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    expiresAt: row.expiresAt,
+    feeData: computeFeeData(
+      row.direction,
+      row.entryPrice,
+      row.stopLoss,
+      row.takeProfit,
+      slippagePct,
+      row.riskCalculation as StoredRiskCalculation | null,
+      row.riskCapitalUsdt,
+      row.riskCalculatedAt,
+    ),
+  }));
 
   return NextResponse.json({
     signals,

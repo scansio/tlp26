@@ -165,6 +165,7 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
           takeProfitPrice: analysis.tp,
           direction,
           slippagePct,
+          fallbackMaxLeverage: profileLeverageFallback,
         },
         {},
       )) as Record<string, unknown>;
@@ -217,12 +218,13 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
         triggeredBy: analysis.triggeredBy,
         analysisExchange: analysis.exchange,
         topDownBias: analysis.topDownBias,
-        riskCalculation,
         smcStructures: analysis.smcStructures,
         chartPatterns: analysis.chartPatterns,
         indicators15m: analysis.indicators15m,
         indicators1h: analysis.indicators1h,
       }),
+      riskCalculationJson: riskCalculation ? JSON.stringify(riskCalculation) : undefined,
+      riskCapitalUsdt: riskCalculation?.netExpectedLoss as number | undefined,
     },
     { observe: noopObserve },
   )) as { signalId: string };

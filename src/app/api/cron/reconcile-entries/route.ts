@@ -48,7 +48,17 @@ interface ApprovedSignalRow {
   marginMode: string | null;
   entryOrderId: string | null;
   rawPayload: unknown;
+  riskCalculation: unknown;
 }
+
+type RiskCalcResult = {
+  positionSizeUsdt: number;
+  positionSizeUnits: number;
+  leverage: number;
+  minOrderSizeUnits: number;
+  belowExchangeMinimum: boolean;
+  netExpectedLoss?: number;
+};
 
 async function reconcileLiveSignal(signal: ApprovedSignalRow, exchangeName: ExchangeName) {
   if (!signal.entryOrderId) return { outcome: 'skipped' as const };
@@ -132,11 +142,16 @@ async function reconcilePaperSignal(signal: ApprovedSignalRow, exchangeName: Exc
   const slippagePct = profile?.slippagePct ? Number(profile.slippagePct) : 0.05;
   const stopLoss = Number(signal.stopLoss);
 
+  // Size against the risk calculation already computed at signal-creation
+  // time (or a later Recompute) — never a fresh recompute here, same
+  // "what the user saw is what executes" rule as manual Approve. Only falls
+  // back to computing fresh for a signal that legitimately has none yet.
   let positionSize: number | null = null;
   let leverage = signal.leverage ?? 1;
-  if (Math.abs(entryPrice - stopLoss) > 0) {
+  let calc = signal.riskCalculation as RiskCalcResult | null;
+  if (!calc && Math.abs(entryPrice - stopLoss) > 0) {
     try {
-      const calc = (await riskTool.execute!(
+      calc = (await riskTool.execute!(
         {
           exchange: exchangeName,
           symbol: signal.symbol,
@@ -148,14 +163,25 @@ async function reconcilePaperSignal(signal: ApprovedSignalRow, exchangeName: Exc
           takeProfitPrice: Number(signal.takeProfit),
           direction: signal.direction as 'LONG' | 'SHORT',
           slippagePct,
+          fallbackMaxLeverage: leverage,
         },
         { observe: noopObserve },
-      )) as { positionSizeUnits: number; leverage: number };
-      positionSize = calc.positionSizeUnits;
-      leverage = calc.leverage;
+      )) as unknown as RiskCalcResult;
+      await db
+        .update(tradeSignals)
+        .set({
+          riskCalculation: calc,
+          riskCapitalUsdt: calc.netExpectedLoss != null ? String(calc.netExpectedLoss) : null,
+          riskCalculatedAt: new Date(),
+        })
+        .where(eq(tradeSignals.id, signal.id));
     } catch (err) {
       console.warn('[cron/reconcile-entries] riskTool failed for paper fill', err);
     }
+  }
+  if (calc) {
+    positionSize = calc.positionSizeUnits;
+    leverage = calc.leverage;
   }
 
   await finalizePaperFill({
@@ -199,6 +225,7 @@ export async function GET(req: Request) {
       marginMode: tradeSignals.marginMode,
       entryOrderId: tradeSignals.entryOrderId,
       rawPayload: tradeSignals.rawPayload,
+      riskCalculation: tradeSignals.riskCalculation,
     })
     .from(tradeSignals)
     .where(eq(tradeSignals.status, 'approved'));

@@ -28,6 +28,8 @@ import { tradeSignals, userRiskProfiles } from '@/db/schema';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
 import { claimPendingSignal, releaseSignalClaim } from '@/lib/signal-claim';
 import { fetchLiveUsdtBalance } from '@/lib/exchange-account';
+import { resolveUserTradingContext } from '@/lib/user-trading-context';
+import { resolveAccountBalance } from '@/lib/analysis/finalize-for-user';
 import { executeTradeTool } from '@/mastra/tools/execute-trade-tool';
 import { riskTool } from '@/mastra/tools/risk-tool';
 import { type MarketType } from '@/mastra/tools/market-symbol';
@@ -42,6 +44,26 @@ import {
 } from '@/lib/entry-fill';
 
 const fetchLivePrice = fetchTickerPrice;
+
+type RiskCalcResult = {
+  positionSizeUsdt: number;
+  positionSizeUnits: number;
+  leverage: number;
+  minOrderSizeUnits: number;
+  belowExchangeMinimum: boolean;
+  netExpectedLoss?: number;
+};
+
+async function persistRiskCalculation(signalId: string, calc: RiskCalcResult): Promise<void> {
+  await db
+    .update(tradeSignals)
+    .set({
+      riskCalculation: calc,
+      riskCapitalUsdt: calc.netExpectedLoss != null ? String(calc.netExpectedLoss) : null,
+      riskCalculatedAt: new Date(),
+    })
+    .where(eq(tradeSignals.id, signalId));
+}
 
 // ---------------------------------------------------------------------------
 // GET — fetch signal status
@@ -99,9 +121,9 @@ export async function PATCH(
   }
 
   const { action } = body as { action?: string };
-  if (action !== 'approve' && action !== 'reject') {
+  if (action !== 'approve' && action !== 'reject' && action !== 'recompute') {
     return NextResponse.json(
-      { error: 'action must be "approve" or "reject"' },
+      { error: 'action must be "approve", "reject", or "recompute"' },
       { status: 400 },
     );
   }
@@ -127,6 +149,85 @@ export async function PATCH(
       { error: `Signal is already ${signal.status}. Only pending signals can be actioned.` },
       { status: 422 },
     );
+  }
+
+  // Recompute — explicit user-triggered refresh of the stored risk
+  // calculation (see risk_calculation column comment in src/db/schema.ts).
+  // Approve/auto-execute always use whatever is currently stored, never a
+  // silent recompute, so this is the only way to pick up a balance/leverage
+  // change since the signal was created.
+  if (action === 'recompute') {
+    const entryPrice = signal.entryPrice ? Number(signal.entryPrice) : null;
+    const stopLoss = signal.stopLoss ? Number(signal.stopLoss) : null;
+    const takeProfit = signal.takeProfit ? Number(signal.takeProfit) : null;
+    if (!entryPrice || !stopLoss || !takeProfit) {
+      return NextResponse.json(
+        { error: 'Cannot recompute: entry price, stop-loss, and take-profit are all required.' },
+        { status: 422 },
+      );
+    }
+
+    const context = await resolveUserTradingContext(userId);
+    const rawPayload = signal.rawPayload as Record<string, unknown> | null;
+    const exchange = ((rawPayload?.exchange as string | undefined) ?? context?.exchange ?? 'binance') as
+      | 'binance'
+      | 'bybit'
+      | 'bingx';
+    const marketType = (signal.marketType as MarketType) ?? context?.marketType ?? 'spot';
+    const riskPerTradePct = signal.riskOverridePct
+      ? Number(signal.riskOverridePct)
+      : context?.riskPerTradePct ?? 1;
+
+    const accountBalance = await resolveAccountBalance(
+      userId,
+      context?.executionMode ?? 'paper',
+      context?.paperBalanceUsd ?? null,
+      marketType,
+    );
+    if (accountBalance === null) {
+      return NextResponse.json(
+        { error: 'Could not determine account balance for position sizing.' },
+        { status: 422 },
+      );
+    }
+
+    let calc: RiskCalcResult;
+    try {
+      calc = (await riskTool.execute!(
+        {
+          exchange,
+          symbol: signal.symbol,
+          marketType,
+          accountBalance,
+          riskPerTradePct,
+          entryPrice,
+          stopLossPrice: stopLoss,
+          takeProfitPrice: takeProfit,
+          direction: signal.direction as 'LONG' | 'SHORT',
+          slippagePct: context?.slippagePct ?? 0.05,
+          fallbackMaxLeverage: signal.leverage ?? context?.leverage ?? 1,
+        },
+        { observe: noopObserve },
+      )) as unknown as RiskCalcResult;
+    } catch (err) {
+      return NextResponse.json(
+        { error: `Failed to recompute: ${err instanceof Error ? err.message : String(err)}` },
+        { status: 422 },
+      );
+    }
+
+    await db
+      .update(tradeSignals)
+      .set({
+        riskCalculation: calc,
+        riskCapitalUsdt: calc.netExpectedLoss != null ? String(calc.netExpectedLoss) : null,
+        riskCalculatedAt: new Date(),
+        leverage: calc.leverage,
+        updatedAt: new Date(),
+      })
+      .where(eq(tradeSignals.id, signalId));
+
+    return NextResponse.json({ signalId, riskCalculation: calc, riskCalculatedAt: new Date().toISOString() });
   }
 
   // Block approve if SL or TP is missing — enforce the hard requirement before any execution.
@@ -267,17 +368,21 @@ async function approveSignal(
       fillPrice = applySlippage(livePrice, signal.direction, slippagePct);
     }
 
-    // Margin/leverage sizing — delegates to risk-tool.ts (the same tool the
-    // auto-trading worker uses) rather than a separate formula, so a manual
-    // approval never diverges from what auto-execution would have done.
+    // Size against the exact risk calculation already shown to the user
+    // (computed once at signal-creation time, or by a previous Recompute) —
+    // never a fresh recompute here, so what was displayed is what executes.
+    // Only falls back to computing fresh (and persisting it) for a signal
+    // that legitimately has none yet — e.g. one created before this column
+    // existed, or whose creation-time riskTool call failed.
     const paperBalance = profile?.paperBalanceUsd ? Number(profile.paperBalanceUsd) : 10_000;
     const riskPct = profile?.riskPerTradePct ? Number(profile.riskPerTradePct) : 1;
     const signalStopLoss = signal.stopLoss ? Number(signal.stopLoss) : null;
     let positionSize: number | null = null;
     let paperLeverage = signal.leverage ?? 1;
-    if (signalStopLoss !== null && Math.abs(fillPrice - signalStopLoss) > 0) {
+    let paperCalc = signal.riskCalculation as RiskCalcResult | null;
+    if (!paperCalc && signalStopLoss !== null && Math.abs(fillPrice - signalStopLoss) > 0) {
       try {
-        const calc = (await riskTool.execute!(
+        paperCalc = (await riskTool.execute!(
           {
             exchange: exchangeName,
             symbol: signal.symbol,
@@ -289,14 +394,18 @@ async function approveSignal(
             takeProfitPrice: Number(signal.takeProfit),
             direction: signal.direction as 'LONG' | 'SHORT',
             slippagePct,
+            fallbackMaxLeverage: paperLeverage,
           },
           { observe: noopObserve },
-        )) as { positionSizeUnits: number; leverage: number };
-        positionSize = calc.positionSizeUnits;
-        paperLeverage = calc.leverage;
+        )) as unknown as RiskCalcResult;
+        await persistRiskCalculation(signalId, paperCalc);
       } catch (err) {
         console.warn('trade-signals/[id]: riskTool failed for paper approval', err);
       }
+    }
+    if (paperCalc) {
+      positionSize = paperCalc.positionSizeUnits;
+      paperLeverage = paperCalc.leverage;
     }
 
     const { executionId } = await finalizePaperFill({
@@ -345,81 +454,83 @@ async function approveSignal(
     );
   }
 
-  // Margin/leverage sizing — delegates to risk-tool.ts (the same tool the
-  // auto-trading worker uses via finalizeForUser) rather than a separate
-  // formula, so a manual approval can never diverge from — or under-margin
-  // relative to — what auto-execution would have done. Sized against the
-  // real exchange balance — never the paper-trading balance setting. This
-  // route fails closed: an unknown live balance must never silently fall
-  // back to a paper number and produce a wrong-sized real order.
+  // Size against the exact risk calculation already shown to the user
+  // (computed once at signal-creation time, or by a previous Recompute) —
+  // never a fresh recompute here, so a manual approval executes exactly
+  // what was displayed, not a number re-derived against whatever the
+  // balance happens to be right now. If the account balance has genuinely
+  // changed since, use the Recompute action first.
+  //
+  // Only falls back to computing fresh (fail-closed on an unknown live
+  // balance, same as before) for a signal that legitimately has no stored
+  // calc yet — e.g. one created before this column existed, or whose
+  // creation-time riskTool call failed.
   const riskPct = profile?.riskPerTradePct ? Number(profile.riskPerTradePct) : 1;
   const signalStopLoss = signal.stopLoss ? Number(signal.stopLoss) : null;
 
-  const liveBalance = await fetchLiveUsdtBalance(userId, signalMarketType);
-  if (liveBalance === null) {
-    return NextResponse.json(
-      {
-        error: `Could not determine a valid USDT balance on ${exchangeName}. Connect your exchange or check its balance, then retry. Refusing to size a live position from an unknown balance.`,
-      },
-      { status: 422 },
-    );
-  }
+  let liveCalc = signal.riskCalculation as RiskCalcResult | null;
 
-  if (signalStopLoss === null || Math.abs(liveEntryPrice - signalStopLoss) <= 0) {
-    return NextResponse.json(
-      { error: 'Cannot size a live position: stop-loss is missing or equal to the entry price.' },
-      { status: 422 },
-    );
-  }
-
-  let positionSizeUsdt: number;
-  let leverage = signal.leverage ?? 1;
-  try {
-    const calc = (await riskTool.execute!(
-      {
-        exchange: exchangeName,
-        symbol: signal.symbol,
-        marketType: signalMarketType,
-        accountBalance: liveBalance,
-        riskPerTradePct: riskPct,
-        entryPrice: liveEntryPrice,
-        stopLossPrice: signalStopLoss,
-        takeProfitPrice: Number(signal.takeProfit),
-        direction: signal.direction as 'LONG' | 'SHORT',
-        slippagePct,
-      },
-      { observe: noopObserve },
-    )) as {
-      positionSizeUsdt: number;
-      positionSizeUnits: number;
-      leverage: number;
-      minOrderSizeUnits: number;
-      belowExchangeMinimum: boolean;
-    };
-
-    // Fails fast with a clear reason instead of letting CCXT's own
-    // amountToPrecision() reject it with a cryptic "amount... must be
-    // greater than minimum amount precision" error at order-placement time.
-    if (calc.belowExchangeMinimum) {
+  if (!liveCalc) {
+    const liveBalance = await fetchLiveUsdtBalance(userId, signalMarketType);
+    if (liveBalance === null) {
       return NextResponse.json(
         {
-          error:
-            `Position size (${calc.positionSizeUnits} units, $${calc.positionSizeUsdt.toFixed(2)}) is below ` +
-            `${exchangeName}'s minimum order size (${calc.minOrderSizeUnits} units) for ${signal.symbol}. ` +
-            `Increase your risk-per-trade % or account balance, then retry.`,
+          error: `Could not determine a valid USDT balance on ${exchangeName}. Connect your exchange or check its balance, then retry. Refusing to size a live position from an unknown balance.`,
         },
         { status: 422 },
       );
     }
 
-    positionSizeUsdt = calc.positionSizeUsdt;
-    leverage = calc.leverage;
-  } catch (err) {
+    if (signalStopLoss === null || Math.abs(liveEntryPrice - signalStopLoss) <= 0) {
+      return NextResponse.json(
+        { error: 'Cannot size a live position: stop-loss is missing or equal to the entry price.' },
+        { status: 422 },
+      );
+    }
+
+    try {
+      liveCalc = (await riskTool.execute!(
+        {
+          exchange: exchangeName,
+          symbol: signal.symbol,
+          marketType: signalMarketType,
+          accountBalance: liveBalance,
+          riskPerTradePct: riskPct,
+          entryPrice: liveEntryPrice,
+          stopLossPrice: signalStopLoss,
+          takeProfitPrice: Number(signal.takeProfit),
+          direction: signal.direction as 'LONG' | 'SHORT',
+          slippagePct,
+          fallbackMaxLeverage: signal.leverage ?? 1,
+        },
+        { observe: noopObserve },
+      )) as unknown as RiskCalcResult;
+    } catch (err) {
+      return NextResponse.json(
+        { error: `Failed to size position: ${err instanceof Error ? err.message : String(err)}` },
+        { status: 422 },
+      );
+    }
+    await persistRiskCalculation(signalId, liveCalc);
+  }
+
+  // Fails fast with a clear reason instead of letting CCXT's own
+  // amountToPrecision() reject it with a cryptic "amount... must be
+  // greater than minimum amount precision" error at order-placement time.
+  if (liveCalc.belowExchangeMinimum) {
     return NextResponse.json(
-      { error: `Failed to size position: ${err instanceof Error ? err.message : String(err)}` },
+      {
+        error:
+          `Position size (${liveCalc.positionSizeUnits} units, $${liveCalc.positionSizeUsdt.toFixed(2)}) is below ` +
+          `${exchangeName}'s minimum order size (${liveCalc.minOrderSizeUnits} units) for ${signal.symbol}. Click ` +
+          `Recompute, or increase your risk-per-trade % or account balance, then retry.`,
+      },
       { status: 422 },
     );
   }
+
+  const positionSizeUsdt = liveCalc.positionSizeUsdt;
+  const leverage = liveCalc.leverage;
 
   const toolResult = await executeTradeTool.execute!(
     {

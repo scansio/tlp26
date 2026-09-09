@@ -6,6 +6,9 @@ import { tradeSignals, signalPublishers, userRiskProfiles } from '@/db/schema';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
 import { resolveUserTradingContext } from '@/lib/user-trading-context';
 import { attemptSignalAutoExecution } from '@/lib/auto-execute';
+import { resolveAccountBalance } from '@/lib/analysis/finalize-for-user';
+import { riskTool } from '@/mastra/tools/risk-tool';
+import { noopObserve } from '@mastra/core/tools';
 
 // ---------------------------------------------------------------------------
 // Per-exchange taker fee rates (as decimals) — mirrors risk-tool.ts
@@ -118,6 +121,8 @@ export async function GET() {
       updatedAt: tradeSignals.updatedAt,
       expiresAt: tradeSignals.expiresAt,
       exitMode: tradeSignals.exitMode,
+      riskCapitalUsdt: tradeSignals.riskCapitalUsdt,
+      riskCalculatedAt: tradeSignals.riskCalculatedAt,
       // Publisher name (only populated for copy-sourced signals)
       publisherName: signalPublishers.displayName,
     })
@@ -152,6 +157,8 @@ export async function GET() {
     expiresAt: row.expiresAt,
     // Resolved exit mode — drives "Trailing" badge in the signal card
     exitMode: effectiveExitMode(row.exitMode, profile?.exitMode ?? null),
+    riskCapitalUsdt: row.riskCapitalUsdt != null ? Number(row.riskCapitalUsdt) : null,
+    riskCalculatedAt: row.riskCalculatedAt ? row.riskCalculatedAt.toISOString() : null,
     // "COPY" badge — present only for copy-sourced signals
     copyBadge:
       row.source === 'copy' && row.publisherName
@@ -292,6 +299,42 @@ export async function POST(req: Request) {
   }
 
   const context = await resolveUserTradingContext(userId);
+  const effMarketType = marketType ?? context?.marketType ?? 'spot';
+  const effLeverage = leverage ?? context?.leverage ?? 1;
+
+  // Risk sizing computed once here (best-effort, same fail-open pattern as
+  // every other signal-creation path) so Approve/auto-execute later size the
+  // order against this exact stored calculation, not a fresh recompute —
+  // see risk_calculation column comment in src/db/schema.ts.
+  let riskCalculation: Record<string, unknown> | null = null;
+  try {
+    const accountBalance = await resolveAccountBalance(
+      userId,
+      context?.executionMode ?? 'paper',
+      context?.paperBalanceUsd ?? null,
+      effMarketType,
+    );
+    if (accountBalance !== null) {
+      riskCalculation = (await riskTool.execute!(
+        {
+          exchange: context?.exchange ?? 'binance',
+          symbol,
+          marketType: effMarketType,
+          accountBalance,
+          riskPerTradePct: riskOverridePct ?? context?.riskPerTradePct ?? 1,
+          entryPrice,
+          stopLossPrice: stopLoss,
+          takeProfitPrice: takeProfit,
+          direction: direction as 'LONG' | 'SHORT',
+          slippagePct: context?.slippagePct ?? 0.05,
+          fallbackMaxLeverage: effLeverage,
+        },
+        { observe: noopObserve },
+      )) as Record<string, unknown>;
+    }
+  } catch (err) {
+    console.warn('trade-signals POST: riskTool failed, creating signal without a computed position size', err);
+  }
 
   const [created] = await db
     .insert(tradeSignals)
@@ -308,11 +351,15 @@ export async function POST(req: Request) {
       strategySource: 'Manual',
       source: 'manual',
       status: 'pending',
-      marketType: marketType ?? context?.marketType ?? 'spot',
-      leverage: leverage ?? context?.leverage ?? 1,
+      marketType: effMarketType,
+      leverage: (riskCalculation?.leverage as number | undefined) ?? effLeverage,
       marginMode: marginMode ?? context?.marginMode ?? 'cross',
       riskOverridePct: riskOverridePct !== null ? String(riskOverridePct) : null,
       rawPayload: { exchange: context?.exchange ?? 'binance' },
+      riskCalculation: riskCalculation ?? undefined,
+      riskCapitalUsdt:
+        riskCalculation?.netExpectedLoss != null ? String(riskCalculation.netExpectedLoss) : null,
+      riskCalculatedAt: riskCalculation ? new Date() : null,
       expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1000),
     })
     .returning({ id: tradeSignals.id });

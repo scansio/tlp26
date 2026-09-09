@@ -117,6 +117,26 @@ export default function SignalsPage() {
     setSignals((prev) => prev.filter((s) => s.id !== id));
   }, []);
 
+  // Recompute doesn't change status, so refresh the whole list instead of
+  // patching local state — keeps the recomputed feeData authoritative.
+  const handleRecompute = useCallback(
+    async (id: string) => {
+      const res = await fetch(`/api/trade-signals/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'recompute' }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `Recompute failed: ${res.status}`);
+      }
+
+      await fetchSignals();
+    },
+    [fetchSignals],
+  );
+
   const [signalTab, setSignalTab] = useState<SignalTabKey>('pending');
   const signalTabCounts = useMemo(() => {
     const counts = {} as Record<SignalTabKey, number>;
@@ -330,6 +350,7 @@ export default function SignalsPage() {
                 signal={signal}
                 showActions
                 onAction={handleAction}
+                onRecompute={handleRecompute}
                 connectedExchange={connectedExchange}
               />
             ))}

@@ -5,6 +5,9 @@ import { tvWebhookSchema, normaliseSymbol, actionToDirection } from '@/lib/tradi
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
 import { propagatePublisherSignal } from '@/lib/copy-mirror-engine';
 import { deriveTradingContext } from '@/lib/user-trading-context';
+import { resolveAccountBalance } from '@/lib/analysis/finalize-for-user';
+import { riskTool } from '@/mastra/tools/risk-tool';
+import { noopObserve } from '@mastra/core/tools';
 
 export const runtime = 'nodejs';
 
@@ -109,6 +112,50 @@ export async function POST(req: Request) {
 
   // Manual mode (or auto-mode workflow start failure): save the raw
   // TradingView values for manual review/approval.
+  //
+  // Risk sizing computed once here (best-effort — a failure leaves the
+  // signal without a computed position size rather than blocking creation,
+  // same fail-open pattern as every other signal-creation path) so Approve
+  // later executes against this exact stored calculation, not a fresh
+  // recompute — see risk_calculation column comment in src/db/schema.ts.
+  let riskCalculation: Record<string, unknown> | null = null;
+  if (price != null) {
+    try {
+      const [exchangeRow] = await db
+        .select({ exchangeName: userExchanges.exchangeName })
+        .from(userExchanges)
+        .where(and(eq(userExchanges.userId, userId), eq(userExchanges.status, 'active')))
+        .limit(1);
+      const { exchange } = deriveTradingContext(profile, exchangeRow);
+      const accountBalance = await resolveAccountBalance(
+        userId,
+        profile.executionMode ?? 'paper',
+        profile.paperBalanceUsd,
+        marketType,
+      );
+      if (accountBalance !== null) {
+        riskCalculation = (await riskTool.execute!(
+          {
+            exchange,
+            symbol: normalisedSymbol,
+            marketType,
+            accountBalance,
+            riskPerTradePct: profile.riskPerTradePct ? Number(profile.riskPerTradePct) : 1,
+            entryPrice: price,
+            stopLossPrice: sl,
+            takeProfitPrice: tp,
+            direction,
+            slippagePct: profile.slippagePct ? Number(profile.slippagePct) : 0.05,
+            fallbackMaxLeverage: profile.defaultLeverage ?? 1,
+          },
+          { observe: noopObserve },
+        )) as Record<string, unknown>;
+      }
+    } catch (err) {
+      console.warn('[tradingview-webhook] riskTool failed, creating signal without a computed position size', err);
+    }
+  }
+
   const [signal] = await db
     .insert(tradeSignals)
     .values({
@@ -122,11 +169,15 @@ export async function POST(req: Request) {
       // The ".P"/".PERP" ticker suffix is a stronger signal than the profile
       // default for this specific alert; leverage/margin still come from profile.
       marketType,
-      leverage: profile.defaultLeverage ?? 1,
+      leverage: (riskCalculation?.leverage as number | undefined) ?? profile.defaultLeverage ?? 1,
       marginMode: profile.marginMode ?? 'cross',
       source: 'tradingview',
       status: 'pending',
       rawPayload: body as Record<string, unknown>,
+      riskCalculation: riskCalculation ?? undefined,
+      riskCapitalUsdt:
+        riskCalculation?.netExpectedLoss != null ? String(riskCalculation.netExpectedLoss) : null,
+      riskCalculatedAt: riskCalculation ? new Date() : null,
     })
     .returning();
 

@@ -35,6 +35,8 @@ export interface SignalFeeData {
   takerFeePct?: number | null;
   accountBalanceUsed?: number | null;
   riskPerTradePctUsed?: number | null;
+  riskCapitalUsdt?: number | null;
+  riskCalculatedAt?: string | null;
 }
 
 export interface QueueSignal {
@@ -141,6 +143,18 @@ function timeUntilExpiry(expiresAt: string | Date | null, createdAt: string | Da
   return rem > 0 ? `Expires in ${hrs}h ${rem}m` : `Expires in ${hrs}h`;
 }
 
+function timeAgo(date: string | Date | null | undefined): string | null {
+  if (!date) return null;
+  const diffMs = Date.now() - new Date(date).getTime();
+  if (diffMs < 0) return 'just now';
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
 // ---------------------------------------------------------------------------
 // Expandable reasoning section
 // ---------------------------------------------------------------------------
@@ -240,16 +254,51 @@ function ReasoningSection({ signal }: { signal: QueueSignal }) {
 // Expandable risk calculation section
 // ---------------------------------------------------------------------------
 
-function RiskCalculationSection({ signal }: { signal: QueueSignal }) {
+function RiskCalculationSection({
+  signal,
+  onRecompute,
+}: {
+  signal: QueueSignal;
+  onRecompute?: (id: string) => Promise<void>;
+}) {
   const fee = signal.feeData;
   const riskOverride = signal.riskOverridePct != null ? Number(signal.riskOverridePct) : null;
+  const [recomputing, setRecomputing] = useState(false);
+  const [recomputeError, setRecomputeError] = useState<string | null>(null);
+
+  async function handleRecompute() {
+    if (!onRecompute) return;
+    setRecomputing(true);
+    setRecomputeError(null);
+    try {
+      await onRecompute(signal.id);
+    } catch (err) {
+      setRecomputeError(err instanceof Error ? err.message : 'Recompute failed.');
+    } finally {
+      setRecomputing(false);
+    }
+  }
+
+  const recomputeButton = onRecompute ? (
+    <Button
+      variant="outline"
+      size="sm"
+      className="h-6 px-2 text-xs"
+      disabled={recomputing}
+      onClick={handleRecompute}
+    >
+      {recomputing ? 'Recomputing…' : 'Recompute'}
+    </Button>
+  ) : null;
 
   if (!fee || fee.positionSizeUsdt == null) {
     return (
-      <div className="mt-3 pl-4 border-l-2 border-muted text-sm">
+      <div className="mt-3 pl-4 border-l-2 border-muted text-sm space-y-2">
         <p className="text-xs text-muted-foreground italic">
           Could not compute a risk calculation for this signal (unknown account balance or invalid sizing).
         </p>
+        {recomputeButton}
+        {recomputeError && <p className="text-xs text-destructive">{recomputeError}</p>}
       </div>
     );
   }
@@ -274,10 +323,16 @@ function RiskCalculationSection({ signal }: { signal: QueueSignal }) {
       value: fee.positionSizeUnits != null ? fmt(fee.positionSizeUnits, fee.positionSizeUnits >= 1 ? 2 : 6) : '—',
     },
     { label: 'Taker fee (per side)', value: fee.takerFeePct != null ? `${fmt(fee.takerFeePct, 4)}%` : '—' },
+    {
+      label: 'Risk capital',
+      value: fee.riskCapitalUsdt != null ? `$${fmt(fee.riskCapitalUsdt, 2)}` : '—',
+    },
   ];
 
+  const calculatedAgo = timeAgo(fee.riskCalculatedAt);
+
   return (
-    <div className="mt-3 pl-4 border-l-2 border-muted text-sm">
+    <div className="mt-3 pl-4 border-l-2 border-muted text-sm space-y-2">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1.5">
         {rows.map((row) => (
           <div key={row.label} className="flex items-center justify-between md:justify-start md:gap-2 text-xs">
@@ -286,6 +341,15 @@ function RiskCalculationSection({ signal }: { signal: QueueSignal }) {
           </div>
         ))}
       </div>
+      <div className="flex items-center justify-between gap-2 pt-1">
+        <span className="text-xs text-muted-foreground">
+          {calculatedAgo
+            ? `Risk calculated ${calculatedAgo} — this is what Approve executes. If your balance has changed since, click Recompute.`
+            : 'Risk calculated at signal creation — this is what Approve executes.'}
+        </span>
+        {recomputeButton}
+      </div>
+      {recomputeError && <p className="text-xs text-destructive">{recomputeError}</p>}
     </div>
   );
 }
@@ -338,6 +402,7 @@ interface SignalApprovalCardProps {
   signal: QueueSignal;
   showActions: boolean;
   onAction: (id: string, action: 'approve' | 'reject' | 'cancel') => Promise<void>;
+  onRecompute?: (id: string) => Promise<void>;
   connectedExchange?: string | null;
 }
 
@@ -345,6 +410,7 @@ export function SignalApprovalCard({
   signal,
   showActions,
   onAction,
+  onRecompute,
   connectedExchange,
 }: SignalApprovalCardProps) {
   const [expanded, setExpanded] = useState(false);
@@ -622,7 +688,7 @@ export function SignalApprovalCard({
             {showRisk ? 'Hide' : 'Show'} risk calculation
           </button>
 
-          {showRisk && <RiskCalculationSection signal={signal} />}
+          {showRisk && <RiskCalculationSection signal={signal} onRecompute={onRecompute} />}
         </div>
 
         {/* Execution error — persists across refreshes; auto-mode signals keep

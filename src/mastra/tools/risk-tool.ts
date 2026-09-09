@@ -44,8 +44,21 @@ async function getSwapMarkets(exchangeId: 'binance' | 'bybit' | 'bingx'): Promis
  * CCXT's unified market.limits. Throws (fails closed, same pattern as
  * resolveAccountBalance returning null) if the market can't be loaded or the
  * symbol isn't found — margin sizing must never silently proceed against an
- * unknown leverage cap. A loaded symbol that simply doesn't report a
- * leverage limit falls back to 1 (conservative, not a failure).
+ * unknown leverage cap.
+ *
+ * CCXT's unified `limits.leverage.max` is left `undefined` by its BingX and
+ * Binance adapters for every market (verified against ccxt/js/src/bingx.js
+ * and binance.js) — only Bybit actually populates it. Previously that meant
+ * every BingX/Binance swap signal silently collapsed to 1x leverage, which
+ * commits ~98% of the account balance as margin on a single trade and can
+ * drop below the exchange's minimum order size on smaller accounts. BingX's
+ * real per-symbol cap is available for free in the raw (un-normalized)
+ * market response as side-dependent `maxLongLeverage`/`maxShortLeverage`
+ * fields, so that's checked next. Binance's real cap requires an
+ * authenticated, per-user fetchLeverageTiers() call this shared/public
+ * market cache has no way to make — callers pass their own
+ * fallbackMaxLeverage (the user's configured defaultLeverage) instead of
+ * silently defaulting to 1.
  *
  * minAmountUnits is the largest of limits.amount.min and precision.amount —
  * either one can independently cause CCXT's own amountToPrecision() to round
@@ -59,6 +72,8 @@ async function fetchSwapMarketConstraints(
   exchangeId: 'binance' | 'bybit' | 'bingx',
   symbol: string,
   marketType: MarketType,
+  direction: 'LONG' | 'SHORT',
+  fallbackMaxLeverage?: number,
 ): Promise<{ maxLeverage: number; minAmountUnits: number }> {
   if (marketType !== 'swap') return { maxLeverage: 1, minAmountUnits: 0 };
 
@@ -69,8 +84,21 @@ async function fetchSwapMarketConstraints(
     throw new Error(`Swap market '${exchangeSymbol}' not found on ${exchangeId} — cannot determine leverage cap.`);
   }
 
-  const maxLev = market.limits?.leverage?.max;
-  const maxLeverage = typeof maxLev === 'number' && maxLev > 0 ? Math.floor(maxLev) : 1;
+  let maxLev = market.limits?.leverage?.max;
+
+  if ((typeof maxLev !== 'number' || maxLev <= 0) && exchangeId === 'bingx') {
+    const info = market.info as Record<string, unknown> | undefined;
+    const raw = direction === 'LONG' ? info?.maxLongLeverage : info?.maxShortLeverage;
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) maxLev = parsed;
+  }
+
+  if (typeof maxLev !== 'number' || maxLev <= 0) {
+    maxLev =
+      typeof fallbackMaxLeverage === 'number' && fallbackMaxLeverage > 0 ? fallbackMaxLeverage : 1;
+  }
+
+  const maxLeverage = Math.floor(maxLev);
 
   const minLimit = market.limits?.amount?.min;
   const minPrecision = market.precision?.amount;
@@ -145,6 +173,16 @@ export const riskTool = createTool({
       .describe(
         'Slippage estimate as a percentage (e.g. 0.05 = 0.05%). Defaults to 0.05% if not provided.',
       ),
+    fallbackMaxLeverage: z
+      .number()
+      .positive()
+      .optional()
+      .describe(
+        "User's configured default leverage (user_risk_profiles.defaultLeverage), used as the " +
+          "leverage cap when the exchange doesn't report one for this symbol (e.g. Binance, whose " +
+          'real per-symbol cap requires an authenticated leverage-tiers call this tool cannot make). ' +
+          'Falls back to 1 if omitted.',
+      ),
   }),
   outputSchema: z.object({
     exchange: z.string(),
@@ -152,6 +190,7 @@ export const riskTool = createTool({
     entryPrice: z.number(),
     stopLossPrice: z.number(),
     takeProfitPrice: z.number(),
+    accountBalance: z.number().describe('Account balance this position was sized against, in USDT'),
     // Margin + leverage
     marginUsdt: z.number().describe('Capital committed as margin, in USDT'),
     leverage: z.number().describe('Derived leverage — set on the exchange account before order placement'),
@@ -202,6 +241,7 @@ export const riskTool = createTool({
       takeProfitPrice,
       direction,
       slippagePct: inputSlippage,
+      fallbackMaxLeverage,
     } = inputData as {
       exchange: 'binance' | 'bybit' | 'bingx';
       symbol: string;
@@ -213,6 +253,7 @@ export const riskTool = createTool({
       takeProfitPrice: number;
       direction: 'LONG' | 'SHORT';
       slippagePct?: number;
+      fallbackMaxLeverage?: number;
     };
 
     const takerFeeRate = TAKER_FEES[exchange] ?? TAKER_FEES['binance'];
@@ -249,6 +290,8 @@ export const riskTool = createTool({
       exchange,
       symbol,
       marketType,
+      direction,
+      fallbackMaxLeverage,
     );
 
     let leverage: number;
@@ -322,6 +365,10 @@ export const riskTool = createTool({
       entryPrice,
       stopLossPrice,
       takeProfitPrice,
+      // Echoed back so a caller that only has the stored risk-calculation
+      // JSON (not the original request) can still display what balance this
+      // was sized against, without a live balance re-fetch.
+      accountBalance,
       marginUsdt: round(marginUsdt, 4),
       leverage,
       maxSymbolLeverage,
