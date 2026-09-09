@@ -5,8 +5,12 @@
  * responsible for detecting fills (or reconciling ones that happened while
  * offline) and cancelling whichever sibling order didn't fire.
  *
- * Trailing-mode positions do not use these — the ratchet requires constant
- * cancel/replace that isn't attempted here (see position-monitor.ts header).
+ * Trailing-mode positions also get a resting SL placed here at entry, as
+ * pre-activation protection — position-monitor.ts cancels it the moment the
+ * trail activates and the software ratchet takes over. They never get a
+ * resting TP: reaching the initial TP must convert to trailing-TP-active,
+ * not fire a market close, and a resting order can't be intercepted before
+ * it fills (see position-monitor.ts header).
  */
 
 import type { Exchange } from 'ccxt';

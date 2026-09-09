@@ -153,6 +153,7 @@ export async function PATCH(
       contractSize: tradeExecutions.contractSize,
       slOrderId: tradeExecutions.slOrderId,
       tpOrderId: tradeExecutions.tpOrderId,
+      trailSlPrice: tradeExecutions.trailSlPrice,
     })
     .from(tradeExecutions)
     .leftJoin(tradeSignals, eq(tradeExecutions.signalId, tradeSignals.id))
@@ -256,7 +257,7 @@ export async function PATCH(
       // resize them to match what remains, otherwise they overhang the new size.
       if (isLive && newSize !== null && (exec.slOrderId || exec.tpOrderId)) {
         const exitMode = await resolveSignalExitMode(userId, exec.signalId);
-        if (exitMode !== 'trailing') {
+        if (exitMode !== 'trailing' || !exec.trailSlPrice) {
           const client = await getExchangeClient(userId, exec.exchangeName);
           if (client) {
             const newAmount = marketType === 'swap' ? newSize / contractSize : newSize;
@@ -350,7 +351,7 @@ export async function PATCH(
     let restingOrderWarning = '';
     if (isLive && positionSize) {
       const exitMode = await resolveSignalExitMode(userId, exec.signalId);
-      if (exitMode !== 'trailing') {
+      if (exitMode !== 'trailing' || !exec.trailSlPrice) {
         const client = await getExchangeClient(userId, exec.exchangeName);
         if (client) {
           const amount = marketType === 'swap' ? positionSize / contractSize : positionSize;
@@ -414,7 +415,7 @@ export async function PATCH(
     let restingOrderWarning = '';
     if (isLive && positionSize) {
       const exitMode = await resolveSignalExitMode(userId, exec.signalId);
-      if (exitMode !== 'trailing') {
+      if (exitMode !== 'trailing' || !exec.trailSlPrice) {
         const client = await getExchangeClient(userId, exec.exchangeName);
         if (client) {
           const amount = marketType === 'swap' ? positionSize / contractSize : positionSize;
@@ -428,7 +429,11 @@ export async function PATCH(
             updates.slOrderId = newSlOrderId;
             if (!newSlOrderId) failures.push('SL');
           }
-          if (body.tp !== undefined) {
+          // Trailing positions never get a resting TP order — reaching the
+          // initial TP must convert to trailing-TP-active, not fire a market
+          // close (see protective-orders.ts header). Only place/replace one
+          // for fixed-mode positions.
+          if (body.tp !== undefined && exitMode !== 'trailing') {
             const newTpOrderId = await replaceRestingOrder(
               client, exec.symbol, marketType, direction, amount, 'tp', exec.tpOrderId, body.tp,
             );

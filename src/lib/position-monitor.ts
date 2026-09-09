@@ -28,13 +28,21 @@
  *   fill, closes the position with the real fill price, and cancels the sibling
  *   order (an exchange-native OCO isn't exposed uniformly through CCXT's unified
  *   API, so the two orders are independent and this app plays OCO manually).
- * - Trailing-mode positions have NO resting order — the ratchet needs constant
- *   cancel/replace that isn't attempted here. They rely entirely on software:
- *   watchTicker drives continuous price checks, and when the ratcheted level is
- *   breached this module places a REAL reduceOnly market order via plain ccxt
- *   (see `placeMarketClose`) to flatten the position. Fixed-mode positions are
- *   ALSO checked this way on every tick (`checkFixedExit`) as a low-latency
- *   second line of defense alongside the resting order.
+ * - Trailing-mode positions get a resting SL order at entry (execute-trade-tool),
+ *   protecting against a reversal before the trail activates. The moment price
+ *   moves `trailActivationPct` in profit, `applyTrailingLogic` cancels that
+ *   resting SL on its first ratchet tick and hands off to software: watchTicker
+ *   drives continuous price checks, and when the ratcheted level is breached
+ *   this module places a REAL reduceOnly market order via plain ccxt (see
+ *   `placeMarketClose`) to flatten the position. Before activation, the
+ *   resting SL is checked in software too (`applyTrailingLogic`'s pre-activation
+ *   branch) as a low-latency second line of defense, same as fixed-mode's
+ *   resting order + `checkFixedExit` double coverage. There is never a resting
+ *   TP for trailing positions — reaching the initial TP converts to
+ *   trailing-TP-active (see below) rather than exiting, and a resting order
+ *   can't be intercepted before it fills. Once activated and in genuine
+ *   profit, the periodic profit-lock cycle (`syncProfitLockPosition`) can
+ *   re-establish a resting SL at the ratcheted level as a crash backstop.
  * - Startup reconciliation (`reconcileLivePositions`, called from `startMonitor`):
  *   watchOrders only reports fills from connection time onward, so a resting
  *   order that filled while this process was down would otherwise go unnoticed
@@ -1003,6 +1011,7 @@ async function checkFixedExit(position: OpenPosition, currentPrice: number): Pro
 async function applyTrailingLogic(
   position: OpenPosition,
   currentPrice: number,
+  client: Exchange | null,
 ): Promise<boolean> {
   const direction = position.direction ?? 'LONG';
   const entry = position.entryPrice ? parseFloat(position.entryPrice) : null;
@@ -1010,49 +1019,74 @@ async function applyTrailingLogic(
 
   const { trailSlPct, trailTpPct, trailActivationPct } = position;
   const activated = isTrailActivated(currentPrice, entry, direction, trailActivationPct);
-  if (!activated) return false;
 
-  // ------------------------------------------------------------------
-  // Trailing SL ratchet
-  // ------------------------------------------------------------------
-  const newSlCandidate = computeTrailSl(currentPrice, direction, trailSlPct);
-  const currentTrailSl = position.trailSlPrice ? parseFloat(position.trailSlPrice) : null;
-
-  let updatedTrailSl: number | null = null;
-
-  if (currentTrailSl === null) {
-    // First tick: establish the initial trailing SL
-    updatedTrailSl = newSlCandidate;
-    await updateTrailState(position.id, { trailSlPrice: String(newSlCandidate) });
-    await appendTrailAudit(position.id, position.userId, 'sl_move', currentPrice, newSlCandidate, null);
+  if (!activated) {
+    // Pre-activation: the resting SL order placed at entry (live mode) is the
+    // primary protection; this is the software-side low-latency backup,
+    // mirroring fixed-mode's belt-and-suspenders pattern (resting order +
+    // checkFixedExit every tick). TP is deliberately not checked here —
+    // reaching the initial TP converts to trailing (handled below), never a
+    // hard exit.
+    const stopLoss = position.stopLoss ? parseFloat(position.stopLoss) : null;
+    if (stopLoss !== null) {
+      const slHit = direction === 'LONG' ? currentPrice <= stopLoss : currentPrice >= stopLoss;
+      if (slHit) return executeExit(position, currentPrice, 'sl_hit');
+    }
   } else {
-    // Ratchet: LONG only moves up, SHORT only moves down
-    const shouldMove = direction === 'LONG'
-      ? newSlCandidate > currentTrailSl
-      : newSlCandidate < currentTrailSl;
+    // ------------------------------------------------------------------
+    // Trailing SL ratchet
+    // ------------------------------------------------------------------
+    const newSlCandidate = computeTrailSl(currentPrice, direction, trailSlPct);
+    const currentTrailSl = position.trailSlPrice ? parseFloat(position.trailSlPrice) : null;
 
-    if (shouldMove) {
+    let updatedTrailSl: number | null = null;
+
+    if (currentTrailSl === null) {
+      // First tick: establish the initial trailing SL, and hand off
+      // protection from the entry-time resting SL (now superseded) to this
+      // ratchet.
       updatedTrailSl = newSlCandidate;
       await updateTrailState(position.id, { trailSlPrice: String(newSlCandidate) });
-      await appendTrailAudit(position.id, position.userId, 'sl_move', currentPrice, newSlCandidate, currentTrailSl);
+      await appendTrailAudit(position.id, position.userId, 'sl_move', currentPrice, newSlCandidate, null);
+
+      if (client && position.slOrderId) {
+        await cancelProtectiveOrders(
+          client, position.symbol, (position.marketType as MarketType) ?? 'spot', [position.slOrderId],
+        );
+        await db.update(tradeExecutions).set({ slOrderId: null }).where(eq(tradeExecutions.id, position.id));
+        position.slOrderId = null;
+      }
     } else {
-      updatedTrailSl = currentTrailSl;
+      // Ratchet: LONG only moves up, SHORT only moves down
+      const shouldMove = direction === 'LONG'
+        ? newSlCandidate > currentTrailSl
+        : newSlCandidate < currentTrailSl;
+
+      if (shouldMove) {
+        updatedTrailSl = newSlCandidate;
+        await updateTrailState(position.id, { trailSlPrice: String(newSlCandidate) });
+        await appendTrailAudit(position.id, position.userId, 'sl_move', currentPrice, newSlCandidate, currentTrailSl);
+      } else {
+        updatedTrailSl = currentTrailSl;
+      }
     }
-  }
 
-  // Check if trailing SL has been breached
-  if (updatedTrailSl !== null) {
-    const slHit = direction === 'LONG'
-      ? currentPrice <= updatedTrailSl
-      : currentPrice >= updatedTrailSl;
+    // Check if trailing SL has been breached
+    if (updatedTrailSl !== null) {
+      const slHit = direction === 'LONG'
+        ? currentPrice <= updatedTrailSl
+        : currentPrice >= updatedTrailSl;
 
-    if (slHit) {
-      return executeExit(position, currentPrice, 'sl_hit');
+      if (slHit) {
+        return executeExit(position, currentPrice, 'sl_hit');
+      }
     }
   }
 
   // ------------------------------------------------------------------
-  // Trailing TP
+  // Trailing TP — independent of SL-activation: reaching the initial TP
+  // converts to trailing-TP-active regardless of whether the SL side has
+  // activated yet.
   // ------------------------------------------------------------------
   const initialTp = position.takeProfit ? parseFloat(position.takeProfit) : null;
 
@@ -1628,7 +1662,7 @@ class PositionMonitorManager {
 
             for (const position of symbolPositions) {
               if (position.exitMode === 'trailing') {
-                await applyTrailingLogic(position, currentPrice);
+                await applyTrailingLogic(position, currentPrice, exchange);
               } else {
                 await checkFixedExit(position, currentPrice);
               }
@@ -1699,7 +1733,7 @@ class PositionMonitorManager {
 
           for (const position of symbolPositions) {
             if (position.exitMode === 'trailing') {
-              await applyTrailingLogic(position, currentPrice);
+              await applyTrailingLogic(position, currentPrice, null);
             } else {
               await checkFixedExit(position, currentPrice);
             }
