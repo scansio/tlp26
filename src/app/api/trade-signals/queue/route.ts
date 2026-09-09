@@ -11,7 +11,7 @@
 
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { eq, desc, and, or } from 'drizzle-orm';
+import { eq, desc, and } from 'drizzle-orm';
 import { db } from '@/db';
 import { tradeSignals, userRiskProfiles, userExchanges } from '@/db/schema';
 import { riskTool } from '@/mastra/tools/risk-tool';
@@ -142,8 +142,10 @@ export async function GET() {
     .limit(1);
   const connectedExchange = exchangeRow?.exchangeName ?? null;
 
-  // For auto-execution users: return history (last 50 signals, any status)
-  // For manual users: return only pending signals
+  // Return signal history across all statuses so the UI can offer status
+  // tabs (Pending/Active/Executed/Expired/Cancelled) instead of only ever
+  // showing pending signals — manual-mode users still see pending front and
+  // center via the default tab, they just aren't limited to it anymore.
   const rows = await db
     .select({
       id: tradeSignals.id,
@@ -166,16 +168,9 @@ export async function GET() {
       expiresAt: tradeSignals.expiresAt,
     })
     .from(tradeSignals)
-    .where(
-      tradingMode === 'auto'
-        ? eq(tradeSignals.userId, userId)
-        : and(
-            eq(tradeSignals.userId, userId),
-            or(eq(tradeSignals.status, 'pending')),
-          ),
-    )
+    .where(eq(tradeSignals.userId, userId))
     .orderBy(desc(tradeSignals.createdAt))
-    .limit(tradingMode === 'auto' ? 50 : 100);
+    .limit(100);
 
   const resolvedExchange = (connectedExchange as 'binance' | 'bybit' | 'bingx' | null) ?? 'binance';
 

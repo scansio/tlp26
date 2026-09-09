@@ -11,10 +11,12 @@
  * Call getCircuitBreakerState(userId) for dashboard display.
  */
 
-import { and, count, eq, gte, sql } from 'drizzle-orm';
+import { and, count, eq, gte, inArray, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { userRiskProfiles, tradeExecutions, tradeSignals } from '@/db/schema';
 import { sendNotification } from '@/lib/notifications';
+import { buildExchangeClient, cancelEntryOrder } from '@/lib/entry-fill';
+import type { MarketType } from '@/mastra/tools/market-symbol';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -294,7 +296,10 @@ export async function getCircuitBreakerState(
 
 /**
  * Toggle the kill switch for a user.
- * When turning ON: also cancels all pending trade signals.
+ * When turning ON: also cancels all pending AND approved trade signals — an
+ * 'approved' signal can have a real limit order resting on the exchange (see
+ * src/lib/entry-fill.ts), which must be cancelled too or it can still fill
+ * after the user has explicitly tried to stop all trading.
  * Returns updated state.
  */
 export async function setKillSwitch(
@@ -307,22 +312,54 @@ export async function setKillSwitch(
     .set({ killSwitchActive: active, updatedAt: new Date() })
     .where(eq(userRiskProfiles.userId, userId));
 
-  // If activating: cancel all pending signals for this user
+  // If activating: cancel all pending/approved signals for this user
   if (active) {
-    await db
-      .update(tradeSignals)
-      .set({ status: 'cancelled', updatedAt: new Date() })
+    const toCancel = await db
+      .select({
+        id: tradeSignals.id,
+        symbol: tradeSignals.symbol,
+        marketType: tradeSignals.marketType,
+        entryOrderId: tradeSignals.entryOrderId,
+        rawPayload: tradeSignals.rawPayload,
+      })
+      .from(tradeSignals)
       .where(
         and(
           eq(tradeSignals.userId, userId),
-          eq(tradeSignals.status, 'pending'),
+          inArray(tradeSignals.status, ['pending', 'approved']),
         ),
       );
+
+    for (const signal of toCancel) {
+      if (!signal.entryOrderId) continue;
+      const rawPayload = signal.rawPayload as Record<string, unknown> | null;
+      const exchangeName = (rawPayload?.exchange as string | undefined) ?? 'binance';
+      try {
+        const client = await buildExchangeClient(userId, exchangeName);
+        if (client) {
+          await cancelEntryOrder(client, signal.symbol, (signal.marketType as MarketType) ?? 'spot', signal.entryOrderId);
+        }
+      } catch (err) {
+        console.error(`[circuit-breaker] Failed to cancel resting order for signal ${signal.id}:`, err);
+      }
+    }
+
+    if (toCancel.length > 0) {
+      await db
+        .update(tradeSignals)
+        .set({ status: 'cancelled', updatedAt: new Date(), entryOrderId: null })
+        .where(
+          inArray(
+            tradeSignals.id,
+            toCancel.map((s) => s.id),
+          ),
+        );
+    }
 
     // Notify user
     void sendNotification(userId, {
       event: 'daily_loss_limit', // reuse "kill switch activated" message
-      reason: 'Kill switch manually activated. All pending signals cancelled.',
+      reason: 'Kill switch manually activated. All pending and resting signals cancelled.',
     });
   }
 

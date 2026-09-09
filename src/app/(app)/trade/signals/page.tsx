@@ -11,7 +11,7 @@
  * Signals expire after 1 hour (enforced by /api/cron/expire-signals).
  */
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import {
   SignalApprovalCard,
   type QueueSignal,
@@ -19,8 +19,27 @@ import {
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 const POLL_INTERVAL_MS = 15_000; // 15 seconds
+
+// Status tabs — 'rejected' folds into Cancelled (both mean "never traded,
+// by explicit user action") to match the five categories requested.
+type TabKey = 'pending' | 'active' | 'executed' | 'expired' | 'cancelled';
+const TAB_STATUSES: Record<TabKey, string[]> = {
+  pending: ['pending'],
+  active: ['approved'],
+  executed: ['executed'],
+  expired: ['expired'],
+  cancelled: ['cancelled', 'rejected'],
+};
+const TAB_LABELS: Record<TabKey, string> = {
+  pending: 'Pending',
+  active: 'Active',
+  executed: 'Executed',
+  expired: 'Expired',
+  cancelled: 'Cancelled',
+};
 
 interface QueueResponse {
   signals: QueueSignal[];
@@ -81,14 +100,20 @@ export default function SignalQueuePage() {
     };
   }, [fetchQueue]);
 
-  // Handle approve / reject — optimistically removes from pending list on success
+  // Handle approve / reject / cancel — optimistically removes from its
+  // current tab's list; the next poll picks it up under its new status.
   const handleAction = useCallback(
-    async (id: string, action: 'approve' | 'reject') => {
-      const res = await fetch(`/api/trade-signals/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
-      });
+    async (id: string, action: 'approve' | 'reject' | 'cancel') => {
+      const res = await fetch(
+        `/api/trade-signals/${id}`,
+        action === 'cancel'
+          ? { method: 'DELETE' }
+          : {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action }),
+            },
+      );
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -97,7 +122,6 @@ export default function SignalQueuePage() {
         );
       }
 
-      // Remove signal from queue after successful action
       setSignals((prev) => prev.filter((s) => s.id !== id));
     },
     [],
@@ -105,6 +129,19 @@ export default function SignalQueuePage() {
 
   const isAutoMode = tradingMode === 'auto';
   const pendingCount = signals.filter((s) => s.status === 'pending').length;
+
+  const [tab, setTab] = useState<TabKey>('pending');
+  const tabCounts = useMemo(() => {
+    const counts = {} as Record<TabKey, number>;
+    for (const key of Object.keys(TAB_STATUSES) as TabKey[]) {
+      counts[key] = signals.filter((s) => TAB_STATUSES[key].includes(s.status ?? '')).length;
+    }
+    return counts;
+  }, [signals]);
+  const visibleSignals = useMemo(
+    () => signals.filter((s) => TAB_STATUSES[tab].includes(s.status ?? '')),
+    [signals, tab],
+  );
 
   return (
     <div className="max-w-3xl mx-auto p-4 space-y-4 md:p-6 md:space-y-6">
@@ -184,7 +221,7 @@ export default function SignalQueuePage() {
         </div>
       )}
 
-      {/* Empty state */}
+      {/* Empty state — no signals at all yet */}
       {!loading && !error && signals.length === 0 && (
         <Card className="p-6 text-center md:p-10">
           <div className="flex flex-col items-center gap-3">
@@ -210,29 +247,46 @@ export default function SignalQueuePage() {
         </Card>
       )}
 
-      {/* Signal list */}
+      {/* Status tabs + signal list */}
       {signals.length > 0 && (
-        <>
-          {/* Auto-execution notice */}
-          {isAutoMode && (
-            <Card className="p-4 bg-muted/50 border-dashed">
-              <p className="text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">Auto-execution is active.</span>{' '}
-                Pending signals below will execute automatically if left untouched — use Approve
-                or Reject to override before that happens. Switch to manual mode in your{' '}
-                <a
-                  href="/risk-profile"
-                  className="text-primary underline underline-offset-2"
-                >
-                  risk profile
-                </a>{' '}
-                to always review signals before execution.
-              </p>
-            </Card>
-          )}
+        <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)}>
+          <TabsList className="w-full overflow-x-auto sm:w-fit">
+            {(Object.keys(TAB_LABELS) as TabKey[]).map((key) => (
+              <TabsTrigger key={key} value={key} className="gap-1.5">
+                {TAB_LABELS[key]}
+                {tabCounts[key] > 0 && (
+                  <span className="text-[10px] text-muted-foreground">{tabCounts[key]}</span>
+                )}
+              </TabsTrigger>
+            ))}
+          </TabsList>
 
-          <div className="space-y-4">
-            {signals.map((signal) => (
+          <TabsContent value={tab} className="space-y-4 pt-4">
+            {/* Auto-execution notice */}
+            {isAutoMode && tab === 'pending' && visibleSignals.length > 0 && (
+              <Card className="p-4 bg-muted/50 border-dashed">
+                <p className="text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">Auto-execution is active.</span>{' '}
+                  Pending signals below will execute automatically if left untouched — use Approve
+                  or Reject to override before that happens. Switch to manual mode in your{' '}
+                  <a
+                    href="/risk-profile"
+                    className="text-primary underline underline-offset-2"
+                  >
+                    risk profile
+                  </a>{' '}
+                  to always review signals before execution.
+                </p>
+              </Card>
+            )}
+
+            {visibleSignals.length === 0 && (
+              <p className="text-center text-sm text-muted-foreground py-8">
+                No {TAB_LABELS[tab].toLowerCase()} signals.
+              </p>
+            )}
+
+            {visibleSignals.map((signal) => (
               <SignalApprovalCard
                 key={signal.id}
                 signal={signal}
@@ -241,8 +295,8 @@ export default function SignalQueuePage() {
                 connectedExchange={connectedExchange}
               />
             ))}
-          </div>
-        </>
+          </TabsContent>
+        </Tabs>
       )}
     </div>
   );

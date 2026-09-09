@@ -2,30 +2,42 @@
  * execute-trade-tool
  *
  * Places a trade order on a CEX exchange via CCXT (live mode) or simulates a
- * paper fill (paper mode).
+ * paper fill (paper mode). entryPrice is treated as an actual entry target
+ * (often an SMC retest/order-block zone away from current price — see
+ * trading-agent.ts), not a live snapshot: orders are LIMIT orders at
+ * entryPrice, not market orders.
  *
  * Live mode:
  *  - Decrypts user exchange credentials from user_exchanges
- *  - Places a market buy/sell order via CCXT createOrder
- *  - Records the exchange order ID in trade_executions
- *  - Updates the trade signal status to 'executed'
+ *  - Places a limit buy/sell order via CCXT createOrder at entryPrice
+ *  - If it fills immediately: records the exchange order ID + fill in
+ *    trade_executions and marks the signal 'executed'
+ *  - If it doesn't fill immediately: leaves it resting on the exchange and
+ *    marks the signal 'approved' (entryOrderId set) — /api/cron/reconcile-entries
+ *    polls it to completion; /api/cron/expire-signals cancels it on expiry
  *
  * Paper mode:
- *  - Applies a configurable slippage to the signal entry price
+ *  - Fills at entryPrice exactly (no slippage — that's what a limit order
+ *    does) once the current price has reached entryPrice; otherwise the
+ *    signal is left 'approved' for the same reconcile-entries cron to fill
  *  - Inserts a paper trade_execution record (no exchange API call)
- *  - Updates the trade signal status to 'executed'
  */
 
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
 import ccxt, { type Exchange } from 'ccxt';
 import { db } from '@/db';
-import { tradeSignals, tradeExecutions, userExchanges } from '@/db/schema';
+import { tradeSignals, userExchanges } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
 import { and, eq } from 'drizzle-orm';
 import { toExchangeSymbol, resolveHedgeMode, type MarketType } from './market-symbol';
-import { resolveSignalExitMode } from '@/lib/exit-config';
-import { placeProtectiveOrders } from '@/lib/protective-orders';
+import {
+  fetchTickerPrice,
+  isLimitMarketable,
+  applySlippage,
+  finalizeLiveFill,
+  finalizePaperFill,
+} from '@/lib/entry-fill';
 
 // Idempotency: setting margin mode to what it already is throws on most
 // exchanges (e.g. binance -4046 "No need to change margin type") — swallow
@@ -45,12 +57,6 @@ const DEFAULT_SLIPPAGE_PCT = 0.05; // 0.05%
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Apply slippage to the simulated fill price. */
-function applySlippage(price: number, direction: string, slippagePct: number): number {
-  const factor = slippagePct / 100;
-  return direction === 'LONG' ? price * (1 + factor) : price * (1 - factor);
-}
 
 /**
  * Retrieve and decrypt exchange credentials for a user.
@@ -95,8 +101,10 @@ export const executeTradeTool = createTool({
   description:
     'Execute a trade on a CEX exchange (live mode) or simulate a paper fill (paper mode). ' +
     'Always call this after risk sizing has produced a positionSizeUsdt value. ' +
-    'In live mode the tool places a market order via CCXT and records the exchange order ID. ' +
-    'In paper mode the tool simulates a fill with slippage and records a virtual execution.',
+    'Places a LIMIT order at entryPrice (not a market order) — entryPrice may be away from the ' +
+    'current price by design. If it does not fill immediately the signal is left "approved" ' +
+    '(resting order) rather than "executed"; check the returned signalStatus. ' +
+    'In paper mode the tool simulates the same limit-fill behavior without calling the exchange.',
 
   inputSchema: z.object({
     userId: z.string().describe('Clerk user ID'),
@@ -178,45 +186,62 @@ export const executeTradeTool = createTool({
     const slippagePct = inputSlippage ?? DEFAULT_SLIPPAGE_PCT;
 
     // -------------------------------------------------------------------------
-    // PAPER MODE — simulate fill, no exchange API call
+    // PAPER MODE — simulate a limit fill at entryPrice, no exchange API call.
+    // Entry is a target, not a live snapshot (see market-symbol.ts / trading
+    // agent's entryZone) — only fill immediately if the current price has
+    // actually reached it; otherwise the signal rests as 'approved' and the
+    // reconcile-entries cron fills it once price gets there.
     // -------------------------------------------------------------------------
     if (mode === 'paper') {
-      const fillPrice = applySlippage(entryPrice, direction, slippagePct);
+      const currentPrice = await fetchTickerPrice(symbol, exchange, effMarketType);
 
-      // Compute position size in base asset units for record-keeping
+      // Ticker unavailable — fall back to an immediate market-style fill with
+      // slippage rather than leaving the signal stuck with no way to reconcile.
+      const marketable = currentPrice === null || isLimitMarketable(direction, entryPrice, currentPrice);
+
+      if (!marketable) {
+        await db
+          .update(tradeSignals)
+          .set({ status: 'approved', updatedAt: new Date() })
+          .where(eq(tradeSignals.id, signalId));
+
+        return {
+          success: true,
+          executionId: null,
+          exchangeOrderId: null,
+          fillPrice: null,
+          mode: 'paper' as const,
+          signalStatus: 'approved',
+          message: `Paper limit order resting at $${entryPrice.toFixed(4)} (current price $${currentPrice!.toFixed(4)}) — will fill once price is reached.`,
+        };
+      }
+
+      // Limit fills exactly at entryPrice (no adverse slippage) once
+      // marketable; the ticker-unavailable fallback still applies slippage
+      // since that path can't distinguish a limit fill from a market one.
+      const fillPrice = currentPrice === null ? applySlippage(entryPrice, direction, slippagePct) : entryPrice;
       const positionSizeUnits = positionSizeUsdt / fillPrice;
 
-      const [execution] = await db
-        .insert(tradeExecutions)
-        .values({
-          signalId,
-          userId,
-          exchangeName: exchange,
-          symbol,
-          entryPrice: String(fillPrice),
-          positionSize: String(positionSizeUnits),
-          mode: 'paper',
-          status: 'open',
-          marketType: effMarketType,
-          leverage: effLeverage,
-          marginMode: effMarginMode,
-          entryAt: new Date(),
-        })
-        .returning({ id: tradeExecutions.id });
-
-      await db
-        .update(tradeSignals)
-        .set({ status: 'executed', updatedAt: new Date() })
-        .where(eq(tradeSignals.id, signalId));
+      const { executionId } = await finalizePaperFill({
+        signalId,
+        userId,
+        exchange,
+        symbol,
+        marketType: effMarketType,
+        fillPrice,
+        positionSizeUnits,
+        leverage: effLeverage,
+        marginMode: effMarginMode,
+      });
 
       return {
         success: true,
-        executionId: execution.id,
+        executionId,
         exchangeOrderId: null,
         fillPrice,
         mode: 'paper' as const,
         signalStatus: 'executed',
-        message: `Paper trade opened at simulated fill price $${fillPrice.toFixed(4)} (slippage: ${slippagePct}%).`,
+        message: `Paper trade filled at $${fillPrice.toFixed(4)} (${positionSizeUnits.toFixed(6)} units).`,
       };
     }
 
@@ -264,29 +289,30 @@ export const executeTradeTool = createTool({
     const side = direction === 'LONG' ? 'buy' : 'sell';
 
     let exchangeOrderId: string | null = null;
-    let fillPrice: number | null = null;
     let contractSize: number | null = null;
     let orderContracts: number | null = null;
     let hedged = false;
 
+    // Needed for priceToPrecision/amountToPrecision below regardless of
+    // market type — previously only loaded for swap.
+    try {
+      await client.loadMarkets();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        executionId: null,
+        exchangeOrderId: null,
+        fillPrice: null,
+        mode: 'live' as const,
+        signalStatus: 'pending',
+        message: `Failed to load ${exchange} markets: ${msg}`,
+      };
+    }
+
     if (effMarketType === 'swap') {
       // setLeverage/setMarginMode are real account mutations — only ever
       // called for live swap orders, never in paper mode.
-      try {
-        await client.loadMarkets();
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return {
-          success: false,
-          executionId: null,
-          exchangeOrderId: null,
-          fillPrice: null,
-          mode: 'live' as const,
-          signalStatus: 'pending',
-          message: `Failed to load ${exchange} markets: ${msg}`,
-        };
-      }
-
       const market = client.markets[exchangeSymbol];
       if (!market) {
         return {
@@ -346,14 +372,18 @@ export const executeTradeTool = createTool({
     }
 
     const orderAmount = orderContracts ?? amountUnits;
-
     const orderParams = effMarketType === 'swap' && hedged ? { hedged: true } : undefined;
 
+    // A resting LIMIT order at entryPrice, not a market order — entryPrice is
+    // frequently an SMC retest/order-block zone away from the current price
+    // (see trading-agent.ts), and a market order would fill immediately at
+    // whatever price the market happens to be, ignoring that target entirely.
+    let order;
     try {
-      const order = await client.createOrder(exchangeSymbol, 'market', side, orderAmount, undefined, orderParams);
+      const preciseAmount = Number(client.amountToPrecision(exchangeSymbol, orderAmount));
+      const precisePrice = Number(client.priceToPrecision(exchangeSymbol, entryPrice));
+      order = await client.createOrder(exchangeSymbol, 'limit', side, preciseAmount, precisePrice, orderParams);
       exchangeOrderId = order.id ?? null;
-      // Use actual fill price if returned, otherwise fall back to entry price
-      fillPrice = order.average ?? order.price ?? entryPrice;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[execute-trade-tool] CCXT createOrder failed for ${exchange}/${exchangeSymbol}:`, msg);
@@ -368,86 +398,58 @@ export const executeTradeTool = createTool({
       };
     }
 
-    // -------------------------------------------------------------------------
-    // Resting protective orders (fixed-mode only) — a real exchange-side SL/TP
-    // that fires even if this application's monitor process is down. Trailing
-    // positions skip this: the ratchet needs constant cancel/replace, which is
-    // position-monitor's software-driven job (see its header doc).
-    //
-    // Best-effort: the entry order above already happened and cannot be
-    // undone, so a failure here does not fail the trade — it's recorded with
-    // whatever protective orders did place, and the software poller in
-    // position-monitor.ts remains the fallback protection either way.
-    // -------------------------------------------------------------------------
-    let slOrderId: string | null = null;
-    let tpOrderId: string | null = null;
-    const exitMode = await resolveSignalExitMode(userId, signalId);
+    const isFilled = order.status === 'closed' && (order.filled ?? 0) > 0;
 
-    if (exitMode !== 'trailing') {
-      const protective = await placeProtectiveOrders({
-        client,
-        symbol,
-        marketType: effMarketType,
-        direction,
-        amount: orderAmount,
-        stopLossPrice: sl ?? null,
-        takeProfitPrice: tp ?? null,
-        hedged,
-      });
-      slOrderId = protective.slOrderId;
-      tpOrderId = protective.tpOrderId;
-      if (protective.errors.length > 0) {
-        console.error(
-          `[execute-trade-tool] Protective order placement issues for ${exchange}/${exchangeSymbol}:`,
-          protective.errors.join('; '),
-        );
-      }
+    if (!isFilled) {
+      // Order is resting on the exchange, not filled — reconcile-entries cron
+      // polls it to completion (fill or expiry-driven cancel).
+      await db
+        .update(tradeSignals)
+        .set({ status: 'approved', entryOrderId: exchangeOrderId, updatedAt: new Date() })
+        .where(eq(tradeSignals.id, signalId));
+
+      return {
+        success: true,
+        executionId: null,
+        exchangeOrderId,
+        fillPrice: null,
+        mode: 'live' as const,
+        signalStatus: 'approved',
+        message: `Limit order placed on ${exchange} at $${entryPrice.toFixed(4)} (orderId=${exchangeOrderId}) — resting, awaiting fill.`,
+      };
     }
 
-    // Record execution in trade_executions
-    const positionSizeUnits = positionSizeUsdt / (fillPrice ?? entryPrice);
-    const [execution] = await db
-      .insert(tradeExecutions)
-      .values({
-        signalId,
-        userId,
-        exchangeName: exchange,
-        symbol,
-        exchangeOrderId: exchangeOrderId ?? undefined,
-        entryPrice: String(fillPrice ?? entryPrice),
-        positionSize: String(positionSizeUnits),
-        mode: 'live',
-        status: 'open',
-        marketType: effMarketType,
-        leverage: effLeverage,
-        marginMode: effMarginMode,
-        contractSize: contractSize != null ? String(contractSize) : null,
-        orderContracts: orderContracts != null ? String(orderContracts) : null,
-        slOrderId: slOrderId ?? undefined,
-        tpOrderId: tpOrderId ?? undefined,
-        entryAt: new Date(),
-      })
-      .returning({ id: tradeExecutions.id });
+    const result = await finalizeLiveFill({
+      client,
+      order,
+      signalId,
+      userId,
+      exchange,
+      symbol,
+      direction,
+      marketType: effMarketType,
+      leverage: effLeverage,
+      marginMode: effMarginMode,
+      sl,
+      tp,
+      contractSize,
+      hedged,
+    });
 
-    // Update signal status to executed
-    await db
-      .update(tradeSignals)
-      .set({ status: 'executed', updatedAt: new Date() })
-      .where(eq(tradeSignals.id, signalId));
-
-    const protectiveWarning =
-      exitMode !== 'trailing' && (!slOrderId || !tpOrderId)
-        ? ' WARNING: one or more protective SL/TP orders failed to place — the software monitor is the only protection on this position until corrected.'
+    const protectiveWarning = !result.slOrderId
+      ? ' WARNING: the protective stop-loss order failed to place — the software monitor is the only protection on this position until corrected.'
+      : result.exitMode !== 'trailing' && !result.tpOrderId
+        ? ' WARNING: the protective take-profit order failed to place — the software monitor is the only protection on this position until corrected.'
         : '';
 
     return {
       success: true,
-      executionId: execution.id,
+      executionId: result.executionId,
       exchangeOrderId,
-      fillPrice: fillPrice ?? entryPrice,
+      fillPrice: result.fillPrice,
       mode: 'live' as const,
       signalStatus: 'executed',
-      message: `Live order placed on ${exchange}: orderId=${exchangeOrderId}, fill=$${(fillPrice ?? entryPrice).toFixed(4)}.${protectiveWarning}`,
+      message: `Live order filled on ${exchange}: orderId=${exchangeOrderId}, fill=$${result.fillPrice.toFixed(4)}.${protectiveWarning}`,
     };
   },
 });

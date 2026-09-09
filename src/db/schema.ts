@@ -155,7 +155,14 @@ export const tradeSignals = pgTable('trade_signals', {
   reasoning: text('reasoning'),
   strategySource: text('strategy_source'),
   source: text('source').default('ai'), // ai | tradingview | manual | copy
+  // pending = awaiting approval; approved = entry limit order resting/awaiting
+  // fill (live: real order on the exchange; paper: waiting for price to reach
+  // entryPrice) — see entryOrderId; executed = filled and a trade_execution
+  // exists; rejected/cancelled/expired = terminal, no execution.
   status: text('status').default('pending'), // pending | approved | rejected | executed | cancelled | expired
+  // Exchange order id for the resting entry limit order while status='approved'
+  // in live mode. Null for paper (no real order) and for every other status.
+  entryOrderId: varchar('entry_order_id', { length: 128 }),
   // publisherId: nullable FK — set when this signal is a copy of a publisher's signal
   publisherId: uuid('publisher_id').references(() => signalPublishers.id),
   // parentSignalId: FK to the publisher's own signal — enables cascade cancellation

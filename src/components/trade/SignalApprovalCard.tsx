@@ -86,6 +86,23 @@ function confidenceClass(confidence: string | null): string {
   return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400';
 }
 
+function statusBadge(status: string | null): { label: string; className: string } | null {
+  switch (status) {
+    case 'approved':
+      return { label: 'Awaiting Fill', className: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' };
+    case 'executed':
+      return { label: 'Executed', className: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' };
+    case 'expired':
+      return { label: 'Expired', className: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400' };
+    case 'cancelled':
+      return { label: 'Cancelled', className: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400' };
+    case 'rejected':
+      return { label: 'Rejected', className: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' };
+    default:
+      return null; // 'pending' — no badge, actions speak for themselves
+  }
+}
+
 function sourceLabel(source: string | null): { label: string; title: string } {
   if (source === 'tradingview') return { label: 'TV', title: 'TradingView webhook signal' };
   if (source === 'copy') return { label: 'COPY', title: 'Copy trade from publisher' };
@@ -213,7 +230,7 @@ function ReasoningSection({ signal }: { signal: QueueSignal }) {
 interface SignalApprovalCardProps {
   signal: QueueSignal;
   showActions: boolean;
-  onAction: (id: string, action: 'approve' | 'reject') => Promise<void>;
+  onAction: (id: string, action: 'approve' | 'reject' | 'cancel') => Promise<void>;
   connectedExchange?: string | null;
 }
 
@@ -225,7 +242,7 @@ export function SignalApprovalCard({
 }: SignalApprovalCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [showChart, setShowChart] = useState(false);
-  const [actionLoading, setActionLoading] = useState<'approve' | 'reject' | null>(null);
+  const [actionLoading, setActionLoading] = useState<'approve' | 'reject' | 'cancel' | null>(null);
   const [actionResult, setActionResult] = useState<{
     type: 'success' | 'error';
     message: string;
@@ -234,9 +251,13 @@ export function SignalApprovalCard({
   const { feeData } = signal;
   const expiryLabel = timeUntilExpiry(signal.expiresAt, signal.createdAt);
   const src = sourceLabel(signal.source);
+  const status = statusBadge(signal.status);
   const isPending = signal.status === 'pending';
+  // 'approved' = a limit order is resting (live) or a paper fill is waiting
+  // for price to reach entry — see src/lib/entry-fill.ts.
+  const isApproved = signal.status === 'approved';
 
-  async function handleAction(action: 'approve' | 'reject') {
+  async function handleAction(action: 'approve' | 'reject' | 'cancel') {
     setActionLoading(action);
     setActionResult(null);
     try {
@@ -246,7 +267,9 @@ export function SignalApprovalCard({
         message:
           action === 'approve'
             ? 'Signal approved and queued for execution.'
-            : 'Signal rejected and removed from queue.',
+            : action === 'cancel'
+              ? 'Order cancelled.'
+              : 'Signal rejected and removed from queue.',
       });
     } catch (err) {
       setActionResult({
@@ -309,6 +332,15 @@ export function SignalApprovalCard({
               )}
             </span>
 
+            {/* Status badge — pending has none (actions speak for it) */}
+            {status && (
+              <span
+                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${status.className}`}
+              >
+                {status.label}
+              </span>
+            )}
+
             {signal.exitMode === 'trailing' && (
               <Badge
                 variant="outline"
@@ -321,7 +353,7 @@ export function SignalApprovalCard({
 
           {/* Right-side: expiry + chart toggle */}
           <div className="flex items-center gap-2 shrink-0">
-            {expiryLabel && isPending && (
+            {expiryLabel && (isPending || isApproved) && (
               <span className="text-xs text-muted-foreground">{expiryLabel}</span>
             )}
             <button
@@ -519,6 +551,25 @@ export function SignalApprovalCard({
               onClick={() => void handleAction('reject')}
             >
               {actionLoading === 'reject' ? 'Rejecting…' : 'Reject'}
+            </Button>
+          </div>
+        )}
+
+        {/* Cancel button — approved signals have a resting entry order (live)
+            or a waiting paper fill; cancelling stops it before it fills. */}
+        {showActions && isApproved && !actionResult && (
+          <div className="flex items-center gap-3 pt-1">
+            <p className="flex-1 text-xs text-muted-foreground">
+              Awaiting fill at ${fmt(signal.entryPrice)} — order resting.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-11 md:h-8 border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+              disabled={actionLoading !== null}
+              onClick={() => void handleAction('cancel')}
+            >
+              {actionLoading === 'cancel' ? 'Cancelling…' : 'Cancel Order'}
             </Button>
           </div>
         )}

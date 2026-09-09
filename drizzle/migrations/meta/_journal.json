@@ -176,6 +176,13 @@
       "when": 1788711385979,
       "tag": "0024_old_wonder_man",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788950398724,
+      "tag": "0025_low_secret_warriors",
+      "breakpoints": true
     }
   ]
 }

@@ -5,71 +5,42 @@
  *
  * Body: { action: 'approve' | 'reject' }
  *
- * Approve behaviour:
+ * Approve behaviour — entryPrice is a limit target, not a live snapshot, so a
+ * fill isn't guaranteed immediately (see src/lib/entry-fill.ts):
  *  - Runs circuit-breaker checks (applies to both paper and live mode).
- *  - In paper mode: simulates a fill at the signal's entry price with slippage applied,
- *    inserts a trade_execution with mode='paper', does NOT call any exchange API.
- *  - In live mode: decrypts user exchange credentials and places a market order via CCXT,
- *    inserts a trade_execution with mode='live' and the exchange order ID.
- *  - Updates signal status to 'executed' on success.
+ *  - Paper mode: fills immediately at entryPrice if the current price has
+ *    already reached it; otherwise the signal rests as 'approved'.
+ *  - Live mode: places a real limit order via execute-trade-tool. If it fills
+ *    immediately the signal becomes 'executed'; otherwise it rests as
+ *    'approved' with the exchange order id stored, and
+ *    /api/cron/reconcile-entries polls it to completion.
  *
  * DELETE /api/trade-signals/[id]
- *  - Cancels a pending signal (sets status='cancelled').
+ *  - Cancels a pending or approved signal (sets status='cancelled'), cancelling
+ *    the resting exchange order first if one exists.
  */
 
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
-import ccxt, { type Exchange } from 'ccxt';
 import { db } from '@/db';
-import { tradeSignals, tradeExecutions, userRiskProfiles } from '@/db/schema';
+import { tradeSignals, userRiskProfiles } from '@/db/schema';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
 import { fetchLiveUsdtBalance } from '@/lib/exchange-account';
 import { executeTradeTool } from '@/mastra/tools/execute-trade-tool';
 import { riskTool } from '@/mastra/tools/risk-tool';
-import { toExchangeSymbol, type MarketType } from '@/mastra/tools/market-symbol';
+import { type MarketType } from '@/mastra/tools/market-symbol';
 import { noopObserve } from '@mastra/core/tools';
+import {
+  fetchTickerPrice,
+  isLimitMarketable,
+  applySlippage,
+  finalizePaperFill,
+  buildExchangeClient,
+  cancelEntryOrder,
+} from '@/lib/entry-fill';
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Apply slippage to the simulated fill price.
- * LONG entries: price increases by slippagePct (worse fill — buying higher).
- * SHORT entries: price decreases by slippagePct (worse fill — selling lower).
- */
-function applySlippage(
-  entryPrice: number,
-  direction: string,
-  slippagePct: number,
-): number {
-  const factor = slippagePct / 100;
-  return direction === 'LONG'
-    ? entryPrice * (1 + factor)
-    : entryPrice * (1 - factor);
-}
-
-/**
- * Fetch the current public ticker price for a symbol using the exchange name
- * stored on the signal (falls back to binance if not found).
- */
-async function fetchLivePrice(
-  symbol: string,
-  exchangeName: string,
-  marketType: MarketType = 'spot',
-): Promise<number | null> {
-  const name = (exchangeName ?? 'binance').toLowerCase();
-  const ExchangeClass = (ccxt as unknown as Record<string, new (c: object) => Exchange>)[name];
-  if (!ExchangeClass) return null;
-  try {
-    const ex = new ExchangeClass({});
-    const ticker = await ex.fetchTicker(toExchangeSymbol(symbol, marketType));
-    return ticker.last ?? null;
-  } catch {
-    return null;
-  }
-}
+const fetchLivePrice = fetchTickerPrice;
 
 // ---------------------------------------------------------------------------
 // GET — fetch signal status
@@ -205,35 +176,52 @@ export async function PATCH(
   const slippagePct = profile?.slippagePct ? Number(profile.slippagePct) : 0.05;
 
   // -------------------------------------------------------------------------
-  // PAPER MODE: Simulate fill — no exchange API call
+  // PAPER MODE: Simulate a limit fill at entryPrice — no exchange API call.
+  // entryPrice is a target (often an SMC retest zone), not a live snapshot:
+  // only fill now if the current price has actually reached it; otherwise
+  // rest as 'approved' for /api/cron/reconcile-entries to fill later.
   // -------------------------------------------------------------------------
   if (isPaper) {
     const signalEntry = signal.entryPrice ? Number(signal.entryPrice) : null;
-
-    // Use signal entry price; try to fetch live price if entry not available
-    let fillPrice = signalEntry;
-    if (!fillPrice) {
-      const rawPayload = signal.rawPayload as Record<string, string> | null;
-      const exchangeName = (rawPayload?.exchange as string) ?? 'binance';
-      fillPrice = await fetchLivePrice(signal.symbol, exchangeName, (signal.marketType as MarketType) ?? 'spot');
-    }
-
-    if (!fillPrice) {
-      return NextResponse.json(
-        { error: 'Cannot determine fill price — entry price missing and live price unavailable.' },
-        { status: 422 },
-      );
-    }
-
-    // Apply slippage model (same as live)
-    const simulatedFillPrice = applySlippage(fillPrice, signal.direction, slippagePct);
-
-    // Record paper execution in trade_executions
     const rawPayload = signal.rawPayload as Record<string, unknown> | null;
     const exchangeName = ((rawPayload?.exchange as string | undefined) ?? 'binance') as
       | 'binance'
       | 'bybit'
       | 'bingx';
+    const signalMarketType = (signal.marketType as MarketType) ?? 'spot';
+
+    let fillPrice: number;
+    if (signalEntry) {
+      const currentPrice = await fetchLivePrice(signal.symbol, exchangeName, signalMarketType);
+
+      if (currentPrice !== null && !isLimitMarketable(signal.direction, signalEntry, currentPrice)) {
+        await db
+          .update(tradeSignals)
+          .set({ status: 'approved', updatedAt: new Date() })
+          .where(eq(tradeSignals.id, signalId));
+
+        return NextResponse.json({
+          signalId,
+          status: 'approved',
+          mode: 'paper',
+          message: `Paper limit order resting at $${signalEntry.toFixed(4)} (current price $${currentPrice.toFixed(4)}) — will fill once price is reached.`,
+        });
+      }
+
+      // Marketable now (or ticker unavailable — fill at entry rather than get stuck)
+      fillPrice = signalEntry;
+    } else {
+      // No entry target at all (e.g. a webhook signal without one) — this is
+      // effectively a market fill, so the slippage model applies.
+      const livePrice = await fetchLivePrice(signal.symbol, exchangeName, signalMarketType);
+      if (!livePrice) {
+        return NextResponse.json(
+          { error: 'Cannot determine fill price — entry price missing and live price unavailable.' },
+          { status: 422 },
+        );
+      }
+      fillPrice = applySlippage(livePrice, signal.direction, slippagePct);
+    }
 
     // Margin/leverage sizing — delegates to risk-tool.ts (the same tool the
     // auto-trading worker uses) rather than a separate formula, so a manual
@@ -243,16 +231,16 @@ export async function PATCH(
     const signalStopLoss = signal.stopLoss ? Number(signal.stopLoss) : null;
     let positionSize: number | null = null;
     let paperLeverage = signal.leverage ?? 1;
-    if (signalStopLoss !== null && Math.abs(simulatedFillPrice - signalStopLoss) > 0) {
+    if (signalStopLoss !== null && Math.abs(fillPrice - signalStopLoss) > 0) {
       try {
         const calc = (await riskTool.execute!(
           {
             exchange: exchangeName,
             symbol: signal.symbol,
-            marketType: (signal.marketType as MarketType) ?? 'spot',
+            marketType: signalMarketType,
             accountBalance: paperBalance,
             riskPerTradePct: riskPct,
-            entryPrice: simulatedFillPrice,
+            entryPrice: fillPrice,
             stopLossPrice: signalStopLoss,
             takeProfitPrice: Number(signal.takeProfit),
             direction: signal.direction as 'LONG' | 'SHORT',
@@ -267,38 +255,25 @@ export async function PATCH(
       }
     }
 
-    const [execution] = await db
-      .insert(tradeExecutions)
-      .values({
-        signalId,
-        userId,
-        exchangeName,
-        symbol: signal.symbol,
-        entryPrice: String(simulatedFillPrice),
-        positionSize: positionSize !== null ? String(positionSize) : null,
-        mode: 'paper',
-        status: 'open',
-        marketType: signal.marketType ?? 'spot',
-        leverage: paperLeverage,
-        marginMode: signal.marginMode ?? 'cross',
-        entryAt: new Date(),
-      })
-      .returning({ id: tradeExecutions.id });
-
-    // Mark signal as executed
-    await db
-      .update(tradeSignals)
-      .set({ status: 'executed', updatedAt: new Date() })
-      .where(eq(tradeSignals.id, signalId));
+    const { executionId } = await finalizePaperFill({
+      signalId,
+      userId,
+      exchange: exchangeName,
+      symbol: signal.symbol,
+      marketType: signalMarketType,
+      fillPrice,
+      positionSizeUnits: positionSize,
+      leverage: paperLeverage,
+      marginMode: (signal.marginMode as 'cross' | 'isolated') ?? 'cross',
+    });
 
     return NextResponse.json({
       signalId,
-      executionId: execution.id,
+      executionId,
       status: 'executed',
       mode: 'paper',
-      fillPrice: simulatedFillPrice,
-      slippagePct,
-      message: `Paper trade opened at simulated fill price $${simulatedFillPrice.toFixed(4)} (slippage: ${slippagePct}%).`,
+      fillPrice,
+      message: `Paper trade filled at $${fillPrice.toFixed(4)}.`,
     });
   }
 
@@ -415,11 +390,13 @@ export async function PATCH(
     );
   }
 
+  // toolResult.signalStatus is 'executed' (filled immediately) or 'approved'
+  // (limit order resting on the exchange, awaiting fill via reconcile-entries).
   return NextResponse.json({
     signalId,
     executionId: toolResult.executionId,
     exchangeOrderId: toolResult.exchangeOrderId,
-    status: 'executed',
+    status: toolResult.signalStatus,
     mode: 'live',
     fillPrice: toolResult.fillPrice,
     message: toolResult.message,
@@ -442,7 +419,14 @@ export async function DELETE(
   const { id: signalId } = await params;
 
   const [signal] = await db
-    .select({ id: tradeSignals.id, status: tradeSignals.status })
+    .select({
+      id: tradeSignals.id,
+      status: tradeSignals.status,
+      symbol: tradeSignals.symbol,
+      marketType: tradeSignals.marketType,
+      entryOrderId: tradeSignals.entryOrderId,
+      rawPayload: tradeSignals.rawPayload,
+    })
     .from(tradeSignals)
     .where(
       and(
@@ -463,9 +447,26 @@ export async function DELETE(
     );
   }
 
+  // 'approved' means a real limit order may be resting on the exchange —
+  // cancel it before flipping the DB status, so it doesn't fill unexpectedly
+  // after the user thinks they've cancelled.
+  if (signal.status === 'approved' && signal.entryOrderId) {
+    const rawPayload = signal.rawPayload as Record<string, unknown> | null;
+    const exchangeName = (rawPayload?.exchange as string | undefined) ?? 'binance';
+    const client = await buildExchangeClient(userId, exchangeName);
+    if (client) {
+      await cancelEntryOrder(
+        client,
+        signal.symbol,
+        (signal.marketType as MarketType) ?? 'spot',
+        signal.entryOrderId,
+      );
+    }
+  }
+
   await db
     .update(tradeSignals)
-    .set({ status: 'cancelled', updatedAt: new Date() })
+    .set({ status: 'cancelled', updatedAt: new Date(), entryOrderId: null })
     .where(eq(tradeSignals.id, signalId));
 
   return NextResponse.json({ signalId, status: 'cancelled' });

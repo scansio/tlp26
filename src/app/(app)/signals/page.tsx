@@ -1,11 +1,37 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Eye, X, Loader2 } from 'lucide-react';
 import { SignalApprovalCard, type QueueSignal } from '@/components/trade/SignalApprovalCard';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+
+// Status tabs — 'rejected' folds into Cancelled (both mean "never traded, by
+// explicit user action") to match the five categories requested.
+type SignalTabKey = 'pending' | 'active' | 'executed' | 'expired' | 'cancelled';
+const SIGNAL_TAB_STATUSES: Record<SignalTabKey, string[]> = {
+  pending: ['pending'],
+  active: ['approved'],
+  executed: ['executed'],
+  expired: ['expired'],
+  cancelled: ['cancelled', 'rejected'],
+};
+const SIGNAL_TAB_LABELS: Record<SignalTabKey, string> = {
+  pending: 'Pending',
+  active: 'Active',
+  executed: 'Executed',
+  expired: 'Expired',
+  cancelled: 'Cancelled',
+};
+
+type WatchTabKey = 'active' | 'triggered' | 'cancelled';
+const WATCH_TAB_LABELS: Record<WatchTabKey, string> = {
+  active: 'Watching',
+  triggered: 'Triggered',
+  cancelled: 'Cancelled',
+};
 
 interface SignalsResponse {
   signals: QueueSignal[];
@@ -71,12 +97,17 @@ export default function SignalsPage() {
     }
   }, []);
 
-  const handleAction = useCallback(async (id: string, action: 'approve' | 'reject') => {
-    const res = await fetch(`/api/trade-signals/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action }),
-    });
+  const handleAction = useCallback(async (id: string, action: 'approve' | 'reject' | 'cancel') => {
+    const res = await fetch(
+      `/api/trade-signals/${id}`,
+      action === 'cancel'
+        ? { method: 'DELETE' }
+        : {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action }),
+          },
+    );
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -85,6 +116,27 @@ export default function SignalsPage() {
 
     setSignals((prev) => prev.filter((s) => s.id !== id));
   }, []);
+
+  const [signalTab, setSignalTab] = useState<SignalTabKey>('pending');
+  const signalTabCounts = useMemo(() => {
+    const counts = {} as Record<SignalTabKey, number>;
+    for (const key of Object.keys(SIGNAL_TAB_STATUSES) as SignalTabKey[]) {
+      counts[key] = signals.filter((s) => SIGNAL_TAB_STATUSES[key].includes(s.status ?? '')).length;
+    }
+    return counts;
+  }, [signals]);
+  const visibleSignals = useMemo(
+    () => signals.filter((s) => SIGNAL_TAB_STATUSES[signalTab].includes(s.status ?? '')),
+    [signals, signalTab],
+  );
+
+  const [watchTab, setWatchTab] = useState<WatchTabKey>('active');
+  const watchTabCounts = useMemo(() => {
+    const counts = { active: 0, triggered: 0, cancelled: 0 } as Record<WatchTabKey, number>;
+    for (const w of watches) counts[w.status] += 1;
+    return counts;
+  }, [watches]);
+  const visibleWatches = useMemo(() => watches.filter((w) => w.status === watchTab), [watches, watchTab]);
 
   const fetchWatches = useCallback(async () => {
     setWatchesLoading(true);
@@ -162,45 +214,66 @@ export default function SignalsPage() {
         )}
 
         {watches.length > 0 && (
-          <ul className="divide-y">
-            {watches.map((w) => (
-              <li key={w.id} className="flex items-center gap-3 py-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium">{w.symbol}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {w.direction} {w.targetPrice}
-                      {w.actionType === 'trade' && w.tradeDirection ? ` · ${w.tradeDirection} on trigger` : ''}
-                    </span>
-                    <WatchStatusBadge status={w.status} />
-                  </div>
-                  {w.note && <p className="text-xs text-muted-foreground mt-0.5">{w.note}</p>}
-                  {w.status === 'triggered' && (
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Hit at {w.triggeredPrice}
-                      {w.resultMessage ? ` — ${w.resultMessage}` : ''}
-                    </p>
+          <Tabs value={watchTab} onValueChange={(v) => setWatchTab(v as WatchTabKey)}>
+            <TabsList className="w-full overflow-x-auto sm:w-fit">
+              {(Object.keys(WATCH_TAB_LABELS) as WatchTabKey[]).map((key) => (
+                <TabsTrigger key={key} value={key} className="gap-1.5">
+                  {WATCH_TAB_LABELS[key]}
+                  {watchTabCounts[key] > 0 && (
+                    <span className="text-[10px] text-muted-foreground">{watchTabCounts[key]}</span>
                   )}
-                </div>
-                {w.status === 'active' && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-11 w-11 p-0 shrink-0 md:h-8 md:w-8"
-                    disabled={cancellingId === w.id}
-                    onClick={() => void handleCancelWatch(w.id)}
-                    aria-label="Cancel watch"
-                  >
-                    {cancellingId === w.id ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <X className="w-4 h-4" />
-                    )}
-                  </Button>
-                )}
-              </li>
-            ))}
-          </ul>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+
+            <TabsContent value={watchTab}>
+              {visibleWatches.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4 text-center">
+                  No {WATCH_TAB_LABELS[watchTab].toLowerCase()} watches.
+                </p>
+              ) : (
+                <ul className="divide-y">
+                  {visibleWatches.map((w) => (
+                    <li key={w.id} className="flex items-center gap-3 py-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium">{w.symbol}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {w.direction} {w.targetPrice}
+                            {w.actionType === 'trade' && w.tradeDirection ? ` · ${w.tradeDirection} on trigger` : ''}
+                          </span>
+                          <WatchStatusBadge status={w.status} />
+                        </div>
+                        {w.note && <p className="text-xs text-muted-foreground mt-0.5">{w.note}</p>}
+                        {w.status === 'triggered' && (
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            Hit at {w.triggeredPrice}
+                            {w.resultMessage ? ` — ${w.resultMessage}` : ''}
+                          </p>
+                        )}
+                      </div>
+                      {w.status === 'active' && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-11 w-11 p-0 shrink-0 md:h-8 md:w-8"
+                          disabled={cancellingId === w.id}
+                          onClick={() => void handleCancelWatch(w.id)}
+                          aria-label="Cancel watch"
+                        >
+                          {cancellingId === w.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <X className="w-4 h-4" />
+                          )}
+                        </Button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </TabsContent>
+          </Tabs>
         )}
       </Card>
 
@@ -233,17 +306,35 @@ export default function SignalsPage() {
       )}
 
       {signals.length > 0 && (
-        <div className="space-y-4">
-          {signals.map((signal) => (
-            <SignalApprovalCard
-              key={signal.id}
-              signal={signal}
-              showActions
-              onAction={handleAction}
-              connectedExchange={connectedExchange}
-            />
-          ))}
-        </div>
+        <Tabs value={signalTab} onValueChange={(v) => setSignalTab(v as SignalTabKey)}>
+          <TabsList className="w-full overflow-x-auto sm:w-fit">
+            {(Object.keys(SIGNAL_TAB_LABELS) as SignalTabKey[]).map((key) => (
+              <TabsTrigger key={key} value={key} className="gap-1.5">
+                {SIGNAL_TAB_LABELS[key]}
+                {signalTabCounts[key] > 0 && (
+                  <span className="text-[10px] text-muted-foreground">{signalTabCounts[key]}</span>
+                )}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+
+          <TabsContent value={signalTab} className="space-y-4 pt-4">
+            {visibleSignals.length === 0 && (
+              <p className="text-center text-sm text-muted-foreground py-8">
+                No {SIGNAL_TAB_LABELS[signalTab].toLowerCase()} signals.
+              </p>
+            )}
+            {visibleSignals.map((signal) => (
+              <SignalApprovalCard
+                key={signal.id}
+                signal={signal}
+                showActions
+                onAction={handleAction}
+                connectedExchange={connectedExchange}
+              />
+            ))}
+          </TabsContent>
+        </Tabs>
       )}
     </div>
   );
