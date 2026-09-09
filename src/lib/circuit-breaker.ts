@@ -3,7 +3,8 @@
  *
  * Checks run in this order before every trade execution:
  *  1. Daily trade count < maxTradesPerDay
- *  2. Daily realized + unrealized loss < maxDailyLoss% of starting equity (approximated as sum of realizedPnl today)
+ *  2. Daily realized loss < maxDailyLoss% of start-of-day equity (paper: paperBalanceUsd +
+ *     all-time realized P&L before today; live: real exchange balance)
  *  3. Kill switch is OFF
  *  4. Open positions < maxOpenPositions (default: 5)
  *
@@ -11,11 +12,12 @@
  * Call getCircuitBreakerState(userId) for dashboard display.
  */
 
-import { and, count, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, count, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { userRiskProfiles, tradeExecutions, tradeSignals } from '@/db/schema';
 import { sendNotification } from '@/lib/notifications';
 import { buildExchangeClient, cancelEntryOrder } from '@/lib/entry-fill';
+import { fetchLiveUsdtBalance } from '@/lib/exchange-account';
 import type { MarketType } from '@/mastra/tools/market-symbol';
 
 // ---------------------------------------------------------------------------
@@ -158,8 +160,11 @@ export async function checkCircuitBreaker(
     };
   }
 
+  const isPaper = (profile.executionMode ?? 'paper') !== 'live';
+  const marketType = (profile.marketType as MarketType) ?? 'spot';
+
   // --- Parallel DB queries ---
-  const [tradeCountRow, openPosRow, dailyLossRow] = await Promise.all([
+  const [tradeCountRow, openPosRow, dailyLossRow, priorRealizedRow] = await Promise.all([
     // Check 1: daily trade count (entries today, any status except cancelled)
     db
       .select({ cnt: count() })
@@ -185,37 +190,57 @@ export async function checkCircuitBreaker(
       )
       .then((rows) => rows[0]?.cnt ?? 0),
 
-    // Check 2: daily realized loss (sum of negative P&L today for closed positions)
-    // Unrealized: we sum (exitPrice-entryPrice)*positionSize for closed + approximate open
-    // as 0 (we don't have live prices without CCXT — open positions add risk but not loss yet)
+    // Check 2: daily realized loss (sum of negative P&L today for closed positions,
+    // scoped to the account's current trading mode so paper and live P&L never mix)
     db
       .select({
         totalLoss: sql<string>`COALESCE(SUM(CASE WHEN ${tradeExecutions.realizedPnl} < 0 THEN ABS(${tradeExecutions.realizedPnl}) ELSE 0 END), 0)`,
-        totalPositionSize: sql<string>`COALESCE(SUM(${tradeExecutions.positionSize}), 0)`,
       })
       .from(tradeExecutions)
       .where(
         and(
           eq(tradeExecutions.userId, userId),
           eq(tradeExecutions.status, 'closed'),
+          eq(tradeExecutions.mode, isPaper ? 'paper' : 'live'),
           gte(tradeExecutions.exitAt!, dayStart),
         ),
       )
       .then((rows) => rows[0]),
+
+    // Start-of-day equity component (paper only): all-time realized P&L before today
+    db
+      .select({
+        priorRealized: sql<string>`COALESCE(SUM(${tradeExecutions.realizedPnl}), 0)`,
+      })
+      .from(tradeExecutions)
+      .where(
+        and(
+          eq(tradeExecutions.userId, userId),
+          eq(tradeExecutions.status, 'closed'),
+          eq(tradeExecutions.mode, 'paper'),
+          lt(tradeExecutions.exitAt!, dayStart),
+        ),
+      )
+      .then((rows) => rows[0]?.priorRealized ?? '0'),
   ]);
 
   const dailyTradeCount = Number(tradeCountRow);
   const openPositions = Number(openPosRow);
   const dailyLossAbs = Number(dailyLossRow?.totalLoss ?? 0);
 
-  // Express loss as a % of total position size today (fallback: we use 0 if no reference)
-  // Simple approach: treat daily loss as a % against an internal $10k reference or
-  // aggregate position size. If positionSize is 0, treat as 0%.
-  // Note: the most meaningful comparison is loss / total_risk_deployed today, but
-  // without an account balance we approximate loss / sum(positionSizes today).
-  const totalPositionSize = Number(dailyLossRow?.totalPositionSize ?? 0);
+  // Denominator is start-of-day account equity, not a sum of raw position sizes
+  // (those are in base-asset units, not dollars, and aren't comparable across symbols).
+  let startOfDayEquity: number | null;
+  if (isPaper) {
+    startOfDayEquity = Number(profile.paperBalanceUsd ?? 10000) + Number(priorRealizedRow ?? 0);
+  } else {
+    startOfDayEquity = await fetchLiveUsdtBalance(userId, marketType);
+  }
+
+  // Fail open on an unresolvable live balance (exchange outage, no connection yet) —
+  // the other three checks still run; we just can't evaluate the loss-% check this cycle.
   const dailyLossPct =
-    totalPositionSize > 0 ? (dailyLossAbs / totalPositionSize) * 100 : 0;
+    startOfDayEquity && startOfDayEquity > 0 ? (dailyLossAbs / startOfDayEquity) * 100 : 0;
 
   const state = deriveStatus(
     killSwitch,
