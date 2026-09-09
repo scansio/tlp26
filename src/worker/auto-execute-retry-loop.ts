@@ -34,6 +34,7 @@ export function startAutoExecuteRetryLoop(): void {
         and(
           eq(tradeSignals.status, 'pending'),
           eq(userRiskProfiles.tradingMode, 'auto'),
+          eq(tradeSignals.autoExecutionBlocked, false),
           or(isNull(tradeSignals.expiresAt), gt(tradeSignals.expiresAt, now)),
         ),
       );

@@ -389,7 +389,29 @@ async function approveSignal(
         slippagePct,
       },
       { observe: noopObserve },
-    )) as { positionSizeUsdt: number; leverage: number };
+    )) as {
+      positionSizeUsdt: number;
+      positionSizeUnits: number;
+      leverage: number;
+      minOrderSizeUnits: number;
+      belowExchangeMinimum: boolean;
+    };
+
+    // Fails fast with a clear reason instead of letting CCXT's own
+    // amountToPrecision() reject it with a cryptic "amount... must be
+    // greater than minimum amount precision" error at order-placement time.
+    if (calc.belowExchangeMinimum) {
+      return NextResponse.json(
+        {
+          error:
+            `Position size (${calc.positionSizeUnits} units, $${calc.positionSizeUsdt.toFixed(2)}) is below ` +
+            `${exchangeName}'s minimum order size (${calc.minOrderSizeUnits} units) for ${signal.symbol}. ` +
+            `Increase your risk-per-trade % or account balance, then retry.`,
+        },
+        { status: 422 },
+      );
+    }
+
     positionSizeUsdt = calc.positionSizeUsdt;
     leverage = calc.leverage;
   } catch (err) {

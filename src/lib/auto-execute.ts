@@ -6,7 +6,7 @@
  * if that attempt failed or was skipped (unknown balance, invalid sizing), the
  * signal was left 'pending' forever with no record of why, until
  * expire-signals eventually killed it. This is the shared retry path: called
- * again by src/worker/auto-execute-loop.ts on an interval, and by the same
+ * again by src/worker/auto-execute-retry-loop.ts on an interval, and by the same
  * finalize-*.ts callers right after creation, so a first attempt and a later
  * retry behave identically and persist the same error to trade_signals.
  *
@@ -41,13 +41,14 @@ export interface AutoExecuteAttemptResult {
   message: string;
 }
 
-async function persistOutcome(signalId: string, error: string | null): Promise<void> {
+async function persistOutcome(signalId: string, error: string | null, blocked = false): Promise<void> {
   await db
     .update(tradeSignals)
     .set({
       lastError: error,
       lastErrorAt: error ? new Date() : null,
       executionAttempts: sql`${tradeSignals.executionAttempts} + 1`,
+      autoExecutionBlocked: blocked,
       updatedAt: new Date(),
     })
     .where(eq(tradeSignals.id, signalId));
@@ -135,7 +136,31 @@ export async function attemptSignalAutoExecution(signalId: string): Promise<Auto
           slippagePct: context.slippagePct,
         },
         { observe: noopObserve },
-      )) as { positionSizeUsdt: number; leverage: number };
+      )) as {
+        positionSizeUsdt: number;
+        positionSizeUnits: number;
+        leverage: number;
+        minOrderSizeUnits: number;
+        belowExchangeMinimum: boolean;
+      };
+
+      // Below the exchange's minimum order size — no retry will ever fix
+      // this at the current balance/risk%, so stop the retry loop from
+      // picking this signal up again (manual Approve can still try, and
+      // will hit the same clear check rather than a cryptic CCXT error).
+      if (calc.belowExchangeMinimum) {
+        // Auto-retry has stopped for this signal (autoExecutionBlocked=true
+        // excludes it from the retry loop's candidate query) — increasing
+        // balance/risk% will NOT make it resume on its own; the message must
+        // say so, since Approve is the only path left that re-sizes it.
+        const message =
+          `Position size (${calc.positionSizeUnits} units, $${calc.positionSizeUsdt.toFixed(2)}) is below ${exchange}'s ` +
+          `minimum order size (${calc.minOrderSizeUnits} units) for ${claimed.symbol}. Auto-retry has stopped for this ` +
+          `signal — increase your risk-per-trade % or account balance, then click Approve to retry manually.`;
+        await persistOutcome(signalId, message, true);
+        return { attempted: true, success: false, message };
+      }
+
       positionSizeUsdt = calc.positionSizeUsdt;
       leverage = calc.leverage;
     } catch (err) {

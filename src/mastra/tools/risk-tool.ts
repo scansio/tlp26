@@ -40,19 +40,27 @@ async function getSwapMarkets(exchangeId: 'binance' | 'bybit' | 'bingx'): Promis
 }
 
 /**
- * Max leverage the exchange allows for this symbol, from CCXT's unified
- * market.limits.leverage.max. Throws (fails closed, same pattern as
+ * Max leverage + minimum order size the exchange allows for this symbol, from
+ * CCXT's unified market.limits. Throws (fails closed, same pattern as
  * resolveAccountBalance returning null) if the market can't be loaded or the
  * symbol isn't found — margin sizing must never silently proceed against an
  * unknown leverage cap. A loaded symbol that simply doesn't report a
  * leverage limit falls back to 1 (conservative, not a failure).
+ *
+ * minAmountUnits is the largest of limits.amount.min and precision.amount —
+ * either one can independently cause CCXT's own amountToPrecision() to round
+ * an order down to zero and throw "amount ... must be greater than minimum
+ * amount precision" (a client-side guard, before the order ever reaches the
+ * exchange). Checking this before placing an order turns that cryptic,
+ * always-fails-identically error into a clear "position size below exchange
+ * minimum" one the retry loop can recognize and stop retrying.
  */
-async function fetchMaxLeverage(
+async function fetchSwapMarketConstraints(
   exchangeId: 'binance' | 'bybit' | 'bingx',
   symbol: string,
   marketType: MarketType,
-): Promise<number> {
-  if (marketType !== 'swap') return 1;
+): Promise<{ maxLeverage: number; minAmountUnits: number }> {
+  if (marketType !== 'swap') return { maxLeverage: 1, minAmountUnits: 0 };
 
   const markets = await getSwapMarkets(exchangeId);
   const exchangeSymbol = toExchangeSymbol(symbol, marketType);
@@ -61,8 +69,17 @@ async function fetchMaxLeverage(
     throw new Error(`Swap market '${exchangeSymbol}' not found on ${exchangeId} — cannot determine leverage cap.`);
   }
 
-  const max = market.limits?.leverage?.max;
-  return typeof max === 'number' && max > 0 ? Math.floor(max) : 1;
+  const maxLev = market.limits?.leverage?.max;
+  const maxLeverage = typeof maxLev === 'number' && maxLev > 0 ? Math.floor(maxLev) : 1;
+
+  const minLimit = market.limits?.amount?.min;
+  const minPrecision = market.precision?.amount;
+  const minAmountUnits = Math.max(
+    typeof minLimit === 'number' && minLimit > 0 ? minLimit : 0,
+    typeof minPrecision === 'number' && minPrecision > 0 ? minPrecision : 0,
+  );
+
+  return { maxLeverage, minAmountUnits };
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +162,12 @@ export const riskTool = createTool({
     // Position sizing
     positionSizeUsdt: z.number().describe('Notional position size in USDT (leverage × margin)'),
     positionSizeUnits: z.number().describe('Position size in base asset units'),
+    minOrderSizeUnits: z
+      .number()
+      .describe("Exchange's minimum order size in base-asset units for this symbol (0 for spot)"),
+    belowExchangeMinimum: z
+      .boolean()
+      .describe('True when positionSizeUnits is below minOrderSizeUnits — this order would be rejected by the exchange'),
     // Fee & slippage model
     takerFeePct: z.number().describe('Per-side taker fee as a percentage'),
     slippagePct: z.number().describe('Slippage estimate as a percentage'),
@@ -222,7 +245,11 @@ export const riskTool = createTool({
     // budget is still used rather than silently under-risking — capped
     // again at the account balance itself as a last-resort safety net.
     // ---------------------------------------------------------------------------
-    const maxSymbolLeverage = await fetchMaxLeverage(exchange, symbol, marketType);
+    const { maxLeverage: maxSymbolLeverage, minAmountUnits } = await fetchSwapMarketConstraints(
+      exchange,
+      symbol,
+      marketType,
+    );
 
     let leverage: number;
     let marginUsdt: number;
@@ -249,6 +276,11 @@ export const riskTool = createTool({
 
     const positionSizeUsdt = leverage * marginUsdt;
     const positionSizeUnits = positionSizeUsdt / entryPrice;
+
+    // Spot never enforces this (minAmountUnits is always 0 there — see
+    // fetchSwapMarketConstraints) since sizing there isn't leverage-amplified
+    // the same way and this codebase hasn't hit a spot minimum-size failure.
+    const belowExchangeMinimum = minAmountUnits > 0 && positionSizeUnits < minAmountUnits;
 
     // ---------------------------------------------------------------------------
     // Gross P&L (no fees)
@@ -296,6 +328,8 @@ export const riskTool = createTool({
       leverageCapped,
       positionSizeUsdt: round(positionSizeUsdt, 2),
       positionSizeUnits: round(positionSizeUnits, 6),
+      minOrderSizeUnits: round(minAmountUnits, 6),
+      belowExchangeMinimum,
       takerFeePct: round(takerFeeRate * 100, 4),
       slippagePct: round(slippageRate * 100, 4),
       roundTripFeePct: round(roundTripFeeRate * 100, 4),

@@ -1,0 +1,1 @@
+ALTER TABLE "trade_signals" ADD COLUMN "auto_execution_blocked" boolean DEFAULT false;

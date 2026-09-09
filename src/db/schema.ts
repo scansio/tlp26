@@ -200,6 +200,12 @@ export const tradeSignals = pgTable('trade_signals', {
   lastError: text('last_error'),
   lastErrorAt: timestamp('last_error_at', { withTimezone: true }),
   executionAttempts: integer('execution_attempts').default(0),
+  // Set when the computed position size can never clear the exchange's
+  // minimum order size at current balance/risk% — the auto-execute retry
+  // loop skips these (see src/worker/auto-execute-retry-loop.ts) instead of
+  // retrying a mathematically-doomed order every tick; manual Approve is
+  // unaffected and re-checks independently.
+  autoExecutionBlocked: boolean('auto_execution_blocked').default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true }),

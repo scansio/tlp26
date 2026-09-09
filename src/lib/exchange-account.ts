@@ -87,7 +87,16 @@ export async function fetchLiveUsdtBalance(
     configureMarketType(resolved.client, resolved.exchangeName, marketType);
     const balance = await resolved.client.fetchBalance();
     return extractUsdtBalance(balance);
-  } catch {
+  } catch (err) {
+    // Previously swallowed with no trace — indistinguishable from a
+    // genuinely zero balance in every caller's "could not determine live
+    // account balance" log line. Logging the real cause (network blip,
+    // exchange rate-limit, credential issue) here is the only place it's
+    // still available.
+    console.error(
+      `[exchange-account] fetchLiveUsdtBalance failed for userId=${userId} exchange=${resolved.exchangeName} marketType=${marketType}:`,
+      err instanceof Error ? err.message : err,
+    );
     return null;
   }
 }
