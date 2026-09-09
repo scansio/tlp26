@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogClose,
 } from '@/components/ui/dialog';
 
 // ---------------------------------------------------------------------------
@@ -504,7 +505,20 @@ function CalculationModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogContent className="fixed inset-0 h-screen w-screen max-w-none rounded-none overflow-y-auto">
+        <DialogClose asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="absolute right-4 top-4"
+            aria-label="Close"
+          >
+            <span aria-hidden="true" className="text-xl leading-none">
+              ×
+            </span>
+          </Button>
+        </DialogClose>
         <DialogHeader>
           <DialogTitle>Risk calculation — step by step</DialogTitle>
           <DialogDescription>
