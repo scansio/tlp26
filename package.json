@@ -8,7 +8,6 @@
     "start": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/migrate.mjs && next start",
     "lint": "eslint",
     "test": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --import tsx --test src/lib/protective-orders.test.ts src/lib/position-monitor.test.ts",
-    "worker": "tsx src/worker/index.ts",
     "studio": "mastra studio",
     "eval:record": "node --env-file-if-exists=.env --env-file-if-exists=.env.local ./node_modules/.bin/tsx eval/record.ts",
     "eval:challenge": "node --env-file-if-exists=.env --env-file-if-exists=.env.local ./node_modules/.bin/tsx eval/derive-challenge.ts",

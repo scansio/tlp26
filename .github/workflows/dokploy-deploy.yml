@@ -12,10 +12,14 @@ concurrency:
   cancel-in-progress: true
 
 # ── Domain map ────────────────────────────────────────────────────────────────
-#   App     │ Production                      │ Staging
-#   ────────┼─────────────────────────────────┼───────────────────────────────
-#   web     │ tlp26.softcopydev.space         │ staging.tlp26.softcopydev.space
-#   worker  │ (internal)                      │ (internal)
+#   App │ Production                      │ Staging
+#   ────┼─────────────────────────────────┼───────────────────────────────
+#   web │ tlp26.softcopydev.space         │ staging.tlp26.softcopydev.space
+#
+# The confluence-group trading worker (scheduled ticks, SL/TP monitor, price
+# watches, signal expiry, auto-execute retries) runs in-process inside this
+# same app via src/instrumentation.ts — there is no separate worker image to
+# build/deploy anymore.
 #
 # Both environments live in the same Dokploy instance/project (tlp26_testing),
 # just different environments — so DOKPLOY_URL + DOKPLOY_API_KEY are shared;
@@ -24,58 +28,17 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME_WEB:    scansio/tlp26-app
-  IMAGE_NAME_WORKER: scansio/tlp26-worker
+  IMAGE_NAME_WEB: scansio/tlp26-app
   IS_STAGING: ${{ github.ref == 'refs/heads/env/staging' }}
 
 jobs:
   # ============================================================================
-  # Detect which images need rebuilding
-  # ============================================================================
-  detect-changes:
-    name: Detect Changed Apps
-    runs-on: ubuntu-latest
-    outputs:
-      web:    ${{ steps.filter.outputs.web }}
-      worker: ${{ steps.filter.outputs.worker }}
-      shared: ${{ steps.filter.outputs.shared }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check for file changes
-        uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          base: ${{ github.event.before }}
-          filters: |
-            worker:
-              - 'src/worker/**'
-              - 'Dockerfile.worker'
-            web:
-              - 'src/**'
-              - '!src/worker/**'
-              - 'public/**'
-              - 'Dockerfile'
-              - 'next.config.*'
-              - 'drizzle/**'
-              - 'scripts/**'
-            shared:
-              - 'package.json'
-              - 'package-lock.json'
-              - '.github/workflows/**'
-
-  # ============================================================================
-  # Build and push web image (Next.js app + Mastra agents)
+  # Build and push web image (Next.js app + Mastra agents + trading worker)
   #   → tlp26.softcopydev.space  /  staging.tlp26.softcopydev.space
   # ============================================================================
   build-web:
     name: Build & Deploy Web
     runs-on: ubuntu-latest
-    needs: [detect-changes]
-    if: needs.detect-changes.outputs.web == 'true' || needs.detect-changes.outputs.shared == 'true' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
       packages: write
@@ -141,84 +104,12 @@ jobs:
           fi
 
   # ============================================================================
-  # Build and push worker image (confluence-group signal-generation worker — internal)
-  # ============================================================================
-  build-worker:
-    name: Build & Deploy Worker (internal)
-    runs-on: ubuntu-latest
-    needs: [detect-changes]
-    if: needs.detect-changes.outputs.worker == 'true' || needs.detect-changes.outputs.shared == 'true' || github.event_name == 'workflow_dispatch'
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_WORKER }}
-          tags: |
-            type=sha,prefix=
-            type=raw,value=${{ env.IS_STAGING == 'true' && 'staging' || 'latest' }}
-
-      - name: Build and push worker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile.worker
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=worker-${{ env.IS_STAGING == 'true' && 'staging' || 'production' }}
-          cache-to: type=gha,mode=max,scope=worker-${{ env.IS_STAGING == 'true' && 'staging' || 'production' }}
-          # No build-time args — DATABASE_URL, AI_PROVIDER, and all other vars
-          # are runtime secrets injected by Dokploy at container start.
-
-      - name: Deploy to Dokploy
-        env:
-          DOKPLOY_URL:     ${{ secrets.DOKPLOY_URL }}
-          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-          DOKPLOY_APP_ID:  ${{ env.IS_STAGING == 'true' && secrets.DOKPLOY_APP_ID_WORKER_STAGING || secrets.DOKPLOY_APP_ID_WORKER }}
-        run: |
-          response=$(curl -s -w "\n%{http_code}" -X POST \
-            "${DOKPLOY_URL}/api/application.deploy" \
-            -H "x-api-key: ${DOKPLOY_API_KEY}" \
-            -H "Content-Type: application/json" \
-            -d "{\"applicationId\": \"${DOKPLOY_APP_ID}\"}")
-
-          http_code=$(echo "$response" | tail -n1)
-          body=$(echo "$response" | sed '$d')
-
-          echo "Status: $http_code"
-          echo "Response: $body"
-
-          if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
-            echo "Worker deployment triggered successfully (${{ env.IS_STAGING == 'true' && 'staging' || 'production' }})"
-          else
-            echo "Worker deployment failed with status $http_code"
-            exit 1
-          fi
-
-  # ============================================================================
   # Deployment summary
   # ============================================================================
   summary:
     name: Deployment Summary
     runs-on: ubuntu-latest
-    needs: [detect-changes, build-web, build-worker]
+    needs: [build-web]
     if: always()
     steps:
       - name: Generate summary
@@ -237,21 +128,11 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** \`${SHORT_SHA}\` | **Branch:** \`${{ github.ref_name }}\` | **Env:** ${ENV_LABEL}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| App    | Status | URL |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|--------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| App | Status | URL |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|-----|" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ needs.build-web.result }}" = "success" ]; then
-            echo "| Web    | ✅ Deployed | ${WEB_URL} |" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ needs.build-web.result }}" = "skipped" ]; then
-            echo "| Web    | ⏭ Skipped (no changes) | - |" >> $GITHUB_STEP_SUMMARY
+            echo "| Web | ✅ Deployed | ${WEB_URL} |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| Web    | ❌ Failed | - |" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          if [ "${{ needs.build-worker.result }}" = "success" ]; then
-            echo "| Worker | ✅ Deployed | internal |" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ needs.build-worker.result }}" = "skipped" ]; then
-            echo "| Worker | ⏭ Skipped (no changes) | - |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| Worker | ❌ Failed | - |" >> $GITHUB_STEP_SUMMARY
+            echo "| Web | ❌ Failed | - |" >> $GITHUB_STEP_SUMMARY
           fi

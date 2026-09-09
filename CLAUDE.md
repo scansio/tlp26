@@ -96,6 +96,10 @@ Defined with `createWorkflow()` / `createStep()` from `@mastra/core/workflows`. 
 
 - `trade-analysis-workflow` — 9-step pipeline: market data → indicators → SMC → patterns → order book → news + on-chain (parallel) → agent decision → risk sizing → route signal
 
+### Background worker (`src/worker/`)
+
+The confluence-group trading worker — scheduled ticks (`tick.ts`/`schedule.ts`), SL/TP position monitoring, price watches, signal expiry, and auto-execute retries — runs **in-process** inside the Next.js server via `src/instrumentation.ts`'s `register()` hook. There is no separate worker container/image; it used to be `Dockerfile.worker` + `npm run worker`, deployed as its own Dokploy service, but that meant two independent processes each racing to hit exchange APIs and each with their own in-memory state. Startup is gated by `WORKER_ENABLED` (defaults to on in production, off elsewhere) so `npm run dev` doesn't start placing trades/polling exchanges unless you opt in. `src/worker/lock.ts` still takes a Postgres advisory lock around each tick so it stays safe if this app is ever scaled to multiple replicas.
+
 ### Auth
 
 **Clerk** (`@clerk/nextjs`) handles authentication. `src/middleware.ts` protects all routes except `/` and `/api/webhooks/tradingview`. All API routes read `auth().userId` from Clerk.
