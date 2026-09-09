@@ -26,8 +26,19 @@ type StoredRiskCalculation = {
   maxSymbolLeverage?: number;
   leverageCapped?: boolean;
   takerFeePct?: number;
+  slippagePct?: number;
+  roundTripFeePct?: number;
   accountBalance?: number;
   riskPerTradePct?: number;
+  maxRiskUsdt?: number;
+  slDistancePct?: number;
+  tpDistancePct?: number;
+  effectiveLossPct?: number;
+  idealLeverageRaw?: number;
+  grossExpectedLoss?: number;
+  grossExpectedProfit?: number;
+  netExpectedLoss?: number;
+  netExpectedProfit?: number;
 };
 
 // Pure rate math (no I/O) plus whatever risk-tool output was stored on the
@@ -79,6 +90,7 @@ function computeFeeData(
     totalFeeCost: r(roundTripFeeRate * 100, 4),
     breakEvenDistance: r((roundTripFeeRate + slippageRate) * 100, 4),
     slDistancePct: r(slDistanceRate * 100, 2),
+    tpDistancePct: r(tpDistanceRate * 100, 2),
     riskReward: r(rr, 2),
     positionSizeUsdt: riskCalculation?.positionSizeUsdt ?? null,
     positionSizeUnits: riskCalculation?.positionSizeUnits ?? null,
@@ -91,6 +103,24 @@ function computeFeeData(
     riskPerTradePctUsed: riskCalculation?.riskPerTradePct ?? null,
     riskCapitalUsdt: riskCapitalUsdt != null ? Number(riskCapitalUsdt) : null,
     riskCalculatedAt: riskCalculatedAt ? riskCalculatedAt.toISOString() : null,
+    // Raw inputs/intermediate steps from the stored risk-tool calculation,
+    // exposed so the "Show calculation" modal can walk through the exact
+    // same worked equations step by step for manual verification.
+    maxRiskUsdt: riskCalculation?.maxRiskUsdt ?? null,
+    calcSlDistancePct: riskCalculation?.slDistancePct ?? null,
+    calcTpDistancePct: riskCalculation?.tpDistancePct ?? null,
+    effectiveLossPct: riskCalculation?.effectiveLossPct ?? null,
+    idealLeverageRaw: riskCalculation?.idealLeverageRaw ?? null,
+    slippagePctUsed: riskCalculation?.slippagePct ?? null,
+    roundTripFeePct: riskCalculation?.roundTripFeePct ?? null,
+    // Dollar P&L at the actual position size — distinct from the %-of-notional
+    // grossExpectedLoss/netExpectedLoss above. lossUsdt/profitUsdt are before
+    // fees (leverage × margin × SL%or TP%/100, exactly the worked-example
+    // formula); netLossUsdt/netProfitUsdt are after fees + slippage.
+    lossUsdt: riskCalculation?.grossExpectedLoss ?? null,
+    profitUsdt: riskCalculation?.grossExpectedProfit ?? null,
+    netLossUsdt: riskCalculation?.netExpectedLoss ?? null,
+    netProfitUsdt: riskCalculation?.netExpectedProfit ?? null,
   };
 }
 

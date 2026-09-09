@@ -190,7 +190,18 @@ export const riskTool = createTool({
     entryPrice: z.number(),
     stopLossPrice: z.number(),
     takeProfitPrice: z.number(),
-    accountBalance: z.number().describe('Account balance this position was sized against, in USDT'),
+    accountBalance: z.number().describe('Account balance this position was sized against, in USDT ("RISK CAPITAL")'),
+    maxRiskUsdt: z
+      .number()
+      .describe('riskPerTradePct% of accountBalance, in USDT ("RISK PER TRADE = riskPerTradePct% of RISK CAPITAL")'),
+    slDistancePct: z.number().describe('Raw stop-loss distance from entry, as a % ("SL%")'),
+    tpDistancePct: z.number().describe('Raw take-profit distance from entry, as a % ("TP%")'),
+    effectiveLossPct: z
+      .number()
+      .describe('SL% + round-trip fee% + slippage% — the rate leverage is actually solved against'),
+    idealLeverageRaw: z
+      .number()
+      .describe('Unfloored 1 / (effectiveLossPct/100), before capping to the exchange max'),
     // Margin + leverage
     marginUsdt: z.number().describe('Capital committed as margin, in USDT'),
     leverage: z.number().describe('Derived leverage — set on the exchange account before order placement'),
@@ -297,9 +308,14 @@ export const riskTool = createTool({
     let leverage: number;
     let marginUsdt: number;
     let leverageCapped = false;
+    // Unfloored 1/effectiveLossRate — kept for display so the "LEVERAGE = ?"
+    // solve step can be shown before it's floored/capped, same as the manual
+    // risk-management worksheet this calculation follows.
+    let idealLeverageRaw = 1;
 
     if (marketType === 'swap') {
-      const idealLeverage = Math.max(1, Math.floor(1 / effectiveLossRate));
+      idealLeverageRaw = 1 / effectiveLossRate;
+      const idealLeverage = Math.max(1, Math.floor(idealLeverageRaw));
       leverage = Math.min(idealLeverage, maxSymbolLeverage);
       leverageCapped = leverage < idealLeverage;
 
@@ -369,6 +385,24 @@ export const riskTool = createTool({
       // JSON (not the original request) can still display what balance this
       // was sized against, without a live balance re-fetch.
       accountBalance,
+      // "RISK PER TRADE" dollar amount — riskPerTradePct% of accountBalance,
+      // before any exchange-leverage-cap adjustment. Echoed back so the UI
+      // can show the exact worked equation (RISK PER TRADE = riskPerTradePct%
+      // of RISK CAPITAL = maxRiskUsdt) for manual verification.
+      maxRiskUsdt: round(maxRiskUsdt, 4),
+      // Raw SL/TP distance from entry, as a %, before leverage is applied —
+      // the "SL%"/"TP%" terms in the manual risk-management worksheet this
+      // mirrors. Distinct from breakEvenDistance (fee/slippage-only).
+      slDistancePct: round(slDistanceRate * 100, 4),
+      tpDistancePct: round(tpDistanceRate * 100, 4),
+      // Effective loss rate used to solve for leverage — SL% plus round-trip
+      // fee% and slippage% (fees are deliberately kept in this solve; see
+      // roundTripFeePct/slippagePct below for the two components added to
+      // slDistancePct to get here).
+      effectiveLossPct: round(effectiveLossRate * 100, 4),
+      // Unfloored "LEVERAGE = 1 / effectiveLossRate" before flooring/capping —
+      // shown so the solve step is fully auditable, not just the final leverage.
+      idealLeverageRaw: round(idealLeverageRaw, 4),
       marginUsdt: round(marginUsdt, 4),
       leverage,
       maxSymbolLeverage,

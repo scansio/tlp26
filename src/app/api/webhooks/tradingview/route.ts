@@ -176,7 +176,7 @@ export async function POST(req: Request) {
       rawPayload: body as Record<string, unknown>,
       riskCalculation: riskCalculation ?? undefined,
       riskCapitalUsdt:
-        riskCalculation?.netExpectedLoss != null ? String(riskCalculation.netExpectedLoss) : null,
+        riskCalculation?.accountBalance != null ? String(riskCalculation.accountBalance) : null,
       riskCalculatedAt: riskCalculation ? new Date() : null,
     })
     .returning();

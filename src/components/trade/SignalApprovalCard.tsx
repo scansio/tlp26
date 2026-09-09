@@ -11,6 +11,10 @@ import {
   Dialog,
   DialogOverlay,
   DialogPortal,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
 } from '@/components/ui/dialog';
 
 // ---------------------------------------------------------------------------
@@ -25,6 +29,7 @@ export interface SignalFeeData {
   totalFeeCost: number;
   breakEvenDistance: number;
   slDistancePct?: number;
+  tpDistancePct?: number;
   riskReward?: number;
   positionSizeUsdt?: number | null;
   positionSizeUnits?: number | null;
@@ -37,6 +42,19 @@ export interface SignalFeeData {
   riskPerTradePctUsed?: number | null;
   riskCapitalUsdt?: number | null;
   riskCalculatedAt?: string | null;
+  // Raw inputs/intermediate steps for the "Show calculation" worked-example
+  // breakdown — see risk-tool.ts's maxRiskUsdt/effectiveLossPct/idealLeverageRaw.
+  maxRiskUsdt?: number | null;
+  calcSlDistancePct?: number | null;
+  calcTpDistancePct?: number | null;
+  effectiveLossPct?: number | null;
+  idealLeverageRaw?: number | null;
+  slippagePctUsed?: number | null;
+  roundTripFeePct?: number | null;
+  lossUsdt?: number | null;
+  profitUsdt?: number | null;
+  netLossUsdt?: number | null;
+  netProfitUsdt?: number | null;
 }
 
 export interface QueueSignal {
@@ -265,6 +283,7 @@ function RiskCalculationSection({
   const riskOverride = signal.riskOverridePct != null ? Number(signal.riskOverridePct) : null;
   const [recomputing, setRecomputing] = useState(false);
   const [recomputeError, setRecomputeError] = useState<string | null>(null);
+  const [showCalc, setShowCalc] = useState(false);
 
   async function handleRecompute() {
     if (!onRecompute) return;
@@ -308,7 +327,7 @@ function RiskCalculationSection({
       label: 'Risk per trade',
       value: fee.riskPerTradePctUsed != null ? `${fmt(fee.riskPerTradePctUsed, 2)}%${riskOverride != null ? ' (custom)' : ''}` : '—',
     },
-    { label: 'Account balance used', value: fee.accountBalanceUsed != null ? `$${fmt(fee.accountBalanceUsed, 2)}` : '—' },
+    { label: 'Risk capital', value: fee.accountBalanceUsed != null ? `$${fmt(fee.accountBalanceUsed, 2)}` : '—' },
     { label: 'Margin required', value: fee.marginUsdt != null ? `$${fmt(fee.marginUsdt, 2)}` : '—' },
     {
       label: 'Leverage',
@@ -323,10 +342,10 @@ function RiskCalculationSection({
       value: fee.positionSizeUnits != null ? fmt(fee.positionSizeUnits, fee.positionSizeUnits >= 1 ? 2 : 6) : '—',
     },
     { label: 'Taker fee (per side)', value: fee.takerFeePct != null ? `${fmt(fee.takerFeePct, 4)}%` : '—' },
-    {
-      label: 'Risk capital',
-      value: fee.riskCapitalUsdt != null ? `$${fmt(fee.riskCapitalUsdt, 2)}` : '—',
-    },
+    { label: 'Loss (at SL)', value: fee.lossUsdt != null ? `$${fmt(fee.lossUsdt, 4)}` : '—' },
+    { label: 'Profit (at TP)', value: fee.profitUsdt != null ? `$${fmt(fee.profitUsdt, 4)}` : '—' },
+    { label: 'Net loss (after fees)', value: fee.netLossUsdt != null ? `$${fmt(fee.netLossUsdt, 4)}` : '—' },
+    { label: 'Net profit (after fees)', value: fee.netProfitUsdt != null ? `$${fmt(fee.netProfitUsdt, 4)}` : '—' },
   ];
 
   const calculatedAgo = timeAgo(fee.riskCalculatedAt);
@@ -341,16 +360,132 @@ function RiskCalculationSection({
           </div>
         ))}
       </div>
-      <div className="flex items-center justify-between gap-2 pt-1">
+      <div className="flex items-center justify-between gap-2 pt-1 flex-wrap">
         <span className="text-xs text-muted-foreground">
           {calculatedAgo
             ? `Risk calculated ${calculatedAgo} — this is what Approve executes. If your balance has changed since, click Recompute.`
             : 'Risk calculated at signal creation — this is what Approve executes.'}
         </span>
-        {recomputeButton}
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-xs"
+            onClick={() => setShowCalc(true)}
+          >
+            Show calculation
+          </Button>
+          {recomputeButton}
+        </div>
       </div>
       {recomputeError && <p className="text-xs text-destructive">{recomputeError}</p>}
+      <CalculationModal signal={signal} fee={fee} open={showCalc} onOpenChange={setShowCalc} />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Step-by-step calculation breakdown — mirrors the manual risk-management
+// worksheet this platform's sizing follows (leverage solved from SL%/TP%
+// and fees, margin solved instead if the exchange's leverage cap binds),
+// using the exact stored values so a user can hand-verify every step.
+// ---------------------------------------------------------------------------
+
+function CalculationModal({
+  signal,
+  fee,
+  open,
+  onOpenChange,
+}: {
+  signal: QueueSignal;
+  fee: SignalFeeData;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const n = (v: number | null | undefined, dp = 4) => (v != null ? fmt(v, dp) : '?');
+
+  const slPct = fee.calcSlDistancePct ?? fee.slDistancePct ?? null;
+  const tpPct = fee.calcTpDistancePct ?? fee.tpDistancePct ?? null;
+  const leverage = fee.leverage ?? null;
+  const idealLeverageFloored = fee.idealLeverageRaw != null ? Math.max(1, Math.floor(fee.idealLeverageRaw)) : null;
+  const expectedLossPct = slPct != null && leverage != null ? slPct * leverage : null;
+  const expectedProfitPct = tpPct != null && leverage != null ? tpPct * leverage : null;
+
+  const lines: string[] = [];
+  lines.push(`SL% = ${n(slPct, 3)}`);
+  lines.push(`TP% = ${n(tpPct, 3)}`);
+  lines.push(`RISK CAPITAL (account balance) = $${n(fee.accountBalanceUsed, 2)}`);
+  lines.push(
+    `RISK PER TRADE = ${n(fee.riskPerTradePctUsed, 2)}% of RISK CAPITAL = $${n(fee.maxRiskUsdt, 4)}`,
+  );
+  lines.push(`ENTRY PRICE = ${fmt(signal.entryPrice, 4)}`);
+  lines.push(`TAKE PROFIT PRICE = ${fmt(signal.takeProfit, 4)}`);
+  lines.push(`STOP LOSS PRICE = ${fmt(signal.stopLoss, 4)}`);
+  lines.push('');
+  lines.push('EFFECTIVE LOSS% (SL% + round-trip fee% + slippage%) — leverage is solved against this:');
+  lines.push(
+    `EFFECTIVE LOSS% = ${n(slPct, 3)} + ${n(fee.roundTripFeePct, 4)} + ${n(fee.slippagePctUsed, 4)} = ${n(fee.effectiveLossPct, 4)}`,
+  );
+  lines.push('');
+  lines.push('LEVERAGE = ?');
+  lines.push(`1 = LEVERAGE × 1 × ${n(fee.effectiveLossPct, 4)}/100`);
+  lines.push(`1 / ${n((fee.effectiveLossPct ?? 0) / 100, 6)} = LEVERAGE`);
+  lines.push(`LEVERAGE = ${n(fee.idealLeverageRaw, 4)} (floor to nearest whole number)`);
+  lines.push(`LEVERAGE = ${idealLeverageFloored ?? '?'}`);
+  lines.push('');
+  const exchangeName = (signal.rawPayload?.exchange as string | undefined) ?? 'exchange';
+
+  if (fee.leverageCapped) {
+    lines.push(
+      `${idealLeverageFloored ?? '?'} exceeds ${exchangeName}'s max leverage for this symbol (${n(fee.maxSymbolLeverage, 0)}x) — capped.`,
+    );
+    lines.push(`LEVERAGE = ${n(fee.maxSymbolLeverage, 0)} (exchange max)`);
+    lines.push('MARGIN = ?');
+    lines.push(
+      `$${n(fee.maxRiskUsdt, 4)} = ${n(leverage, 0)} × MARGIN × ${n(fee.effectiveLossPct, 4)}/100`,
+    );
+    lines.push(`MARGIN = $${n(fee.maxRiskUsdt, 4)} / (${n(leverage, 0)} × ${n(fee.effectiveLossPct, 4)}/100)`);
+    lines.push(`MARGIN = $${n(fee.marginUsdt, 4)}`);
+  } else {
+    lines.push(`${idealLeverageFloored ?? '?'} is within the exchange's max leverage — not capped.`);
+    lines.push(`MARGIN = RISK PER TRADE = $${n(fee.maxRiskUsdt, 4)}`);
+  }
+  lines.push('');
+  lines.push(
+    `POSITION SIZE = LEVERAGE × MARGIN = ${n(leverage, 0)} × $${n(fee.marginUsdt, 4)} = $${n(fee.positionSizeUsdt, 2)}`,
+  );
+  lines.push('');
+  lines.push('REITERATE — expected loss/profit before fees:');
+  lines.push(`EXPECTED LOSS% = SL% × LEVERAGE = ${n(slPct, 3)} × ${n(leverage, 0)} = ${n(expectedLossPct, 3)}`);
+  lines.push(`EXPECTED PROFIT% = TP% × LEVERAGE = ${n(tpPct, 3)} × ${n(leverage, 0)} = ${n(expectedProfitPct, 3)}`);
+  lines.push('');
+  lines.push(
+    `Loss = LEVERAGE × MARGIN × SL%/100 = ${n(leverage, 0)} × $${n(fee.marginUsdt, 4)} × ${n(slPct, 3)}/100 = $${n(fee.lossUsdt, 4)}`,
+  );
+  lines.push(
+    `Profit = LEVERAGE × MARGIN × TP%/100 = ${n(leverage, 0)} × $${n(fee.marginUsdt, 4)} × ${n(tpPct, 3)}/100 = $${n(fee.profitUsdt, 4)}`,
+  );
+  lines.push('');
+  lines.push('After round-trip fees + slippage:');
+  lines.push(`Net Loss = $${n(fee.netLossUsdt, 4)}`);
+  lines.push(`Net Profit = $${n(fee.netProfitUsdt, 4)}`);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Risk calculation — step by step</DialogTitle>
+          <DialogDescription>
+            {signal.symbol} {signal.direction} · leverage solved first from SL%/TP% and fees; if it
+            exceeds the exchange&apos;s leverage limit, that limit is used instead and margin is solved so
+            loss never exceeds risk-per-trade.
+          </DialogDescription>
+        </DialogHeader>
+        <pre className="whitespace-pre-wrap break-words font-mono text-xs bg-muted rounded p-3 leading-relaxed">
+          {lines.join('\n')}
+        </pre>
+      </DialogContent>
+    </Dialog>
   );
 }
 

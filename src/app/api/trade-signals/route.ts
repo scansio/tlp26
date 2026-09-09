@@ -358,7 +358,7 @@ export async function POST(req: Request) {
       rawPayload: { exchange: context?.exchange ?? 'binance' },
       riskCalculation: riskCalculation ?? undefined,
       riskCapitalUsdt:
-        riskCalculation?.netExpectedLoss != null ? String(riskCalculation.netExpectedLoss) : null,
+        riskCalculation?.accountBalance != null ? String(riskCalculation.accountBalance) : null,
       riskCalculatedAt: riskCalculation ? new Date() : null,
       expiresAt: new Date(Date.now() + 4 * 60 * 60 * 1000),
     })

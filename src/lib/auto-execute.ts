@@ -119,7 +119,7 @@ export async function attemptSignalAutoExecution(signalId: string): Promise<Auto
       leverage: number;
       minOrderSizeUnits: number;
       belowExchangeMinimum: boolean;
-      netExpectedLoss?: number;
+      accountBalance?: number;
     };
     let calc = claimed.riskCalculation as RiskCalcResult | null;
 
@@ -171,7 +171,7 @@ export async function attemptSignalAutoExecution(signalId: string): Promise<Auto
         .update(tradeSignals)
         .set({
           riskCalculation: calc,
-          riskCapitalUsdt: calc.netExpectedLoss != null ? String(calc.netExpectedLoss) : null,
+          riskCapitalUsdt: calc.accountBalance != null ? String(calc.accountBalance) : null,
           riskCalculatedAt: new Date(),
         })
         .where(eq(tradeSignals.id, signalId));

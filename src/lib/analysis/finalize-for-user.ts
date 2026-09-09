@@ -224,7 +224,7 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
         indicators1h: analysis.indicators1h,
       }),
       riskCalculationJson: riskCalculation ? JSON.stringify(riskCalculation) : undefined,
-      riskCapitalUsdt: riskCalculation?.netExpectedLoss as number | undefined,
+      riskCapitalUsdt: riskCalculation?.accountBalance as number | undefined,
     },
     { observe: noopObserve },
   )) as { signalId: string };

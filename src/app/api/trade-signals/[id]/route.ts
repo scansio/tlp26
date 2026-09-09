@@ -51,7 +51,7 @@ type RiskCalcResult = {
   leverage: number;
   minOrderSizeUnits: number;
   belowExchangeMinimum: boolean;
-  netExpectedLoss?: number;
+  accountBalance?: number;
 };
 
 async function persistRiskCalculation(signalId: string, calc: RiskCalcResult): Promise<void> {
@@ -59,7 +59,7 @@ async function persistRiskCalculation(signalId: string, calc: RiskCalcResult): P
     .update(tradeSignals)
     .set({
       riskCalculation: calc,
-      riskCapitalUsdt: calc.netExpectedLoss != null ? String(calc.netExpectedLoss) : null,
+      riskCapitalUsdt: calc.accountBalance != null ? String(calc.accountBalance) : null,
       riskCalculatedAt: new Date(),
     })
     .where(eq(tradeSignals.id, signalId));
@@ -220,7 +220,7 @@ export async function PATCH(
       .update(tradeSignals)
       .set({
         riskCalculation: calc,
-        riskCapitalUsdt: calc.netExpectedLoss != null ? String(calc.netExpectedLoss) : null,
+        riskCapitalUsdt: calc.accountBalance != null ? String(calc.accountBalance) : null,
         riskCalculatedAt: new Date(),
         leverage: calc.leverage,
         updatedAt: new Date(),

@@ -57,7 +57,7 @@ type RiskCalcResult = {
   leverage: number;
   minOrderSizeUnits: number;
   belowExchangeMinimum: boolean;
-  netExpectedLoss?: number;
+  accountBalance?: number;
 };
 
 async function reconcileLiveSignal(signal: ApprovedSignalRow, exchangeName: ExchangeName) {
@@ -171,7 +171,7 @@ async function reconcilePaperSignal(signal: ApprovedSignalRow, exchangeName: Exc
         .update(tradeSignals)
         .set({
           riskCalculation: calc,
-          riskCapitalUsdt: calc.netExpectedLoss != null ? String(calc.netExpectedLoss) : null,
+          riskCapitalUsdt: calc.accountBalance != null ? String(calc.accountBalance) : null,
           riskCalculatedAt: new Date(),
         })
         .where(eq(tradeSignals.id, signal.id));

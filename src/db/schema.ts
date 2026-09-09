@@ -241,8 +241,10 @@ export const tradeSignals = pgTable('trade_signals', {
   // way to refresh this if the account balance has since changed.
   riskCalculation: jsonb('risk_calculation'),
   // Promoted out of riskCalculation for quick display without parsing JSON —
-  // the realistic dollar amount this trade risks if SL is hit, after fees/
-  // slippage (riskCalculation.netExpectedLoss), not the margin committed.
+  // the account balance this trade was sized against ("risk capital" in this
+  // platform's own terminology — riskCalculation.accountBalance). NOT the
+  // expected dollar loss/profit; those live in riskCalculation itself
+  // (grossExpectedLoss/netExpectedLoss etc.) and in the UI's Loss/Profit rows.
   riskCapitalUsdt: numeric('risk_capital_usdt', { precision: 20, scale: 4 }),
   riskCalculatedAt: timestamp('risk_calculated_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),

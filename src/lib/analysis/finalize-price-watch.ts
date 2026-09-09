@@ -156,7 +156,7 @@ export async function finalizePriceWatchTrade(
       marginMode: (watch.marginMode as 'cross' | 'isolated') ?? 'cross',
       rawPayloadExtraJson: JSON.stringify({ priceWatchId: watch.id }),
       riskCalculationJson: riskCalculation ? JSON.stringify(riskCalculation) : undefined,
-      riskCapitalUsdt: riskCalculation?.netExpectedLoss as number | undefined,
+      riskCapitalUsdt: riskCalculation?.accountBalance as number | undefined,
     },
     { observe: noopObserve },
   )) as { signalId: string };
