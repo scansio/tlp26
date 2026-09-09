@@ -37,7 +37,10 @@ export async function getUserActiveExchangeClient(userId: string): Promise<UserE
     .where(and(eq(userExchanges.userId, userId), eq(userExchanges.status, 'active')))
     .limit(1);
 
-  if (!row) return null;
+  if (!row) {
+    console.warn(`[exchange-account] no active exchange connection found for userId=${userId}`);
+    return null;
+  }
 
   try {
     const apiKey = decrypt(row.encryptedApiKey);
@@ -47,11 +50,18 @@ export async function getUserActiveExchangeClient(userId: string): Promise<UserE
     const ExchangeClass = (ccxt as unknown as Record<string, new (config: object) => Exchange>)[
       row.exchangeName
     ];
-    if (!ExchangeClass) return null;
+    if (!ExchangeClass) {
+      console.error(`[exchange-account] unknown ccxt exchange "${row.exchangeName}" for userId=${userId}`);
+      return null;
+    }
 
     const client = new ExchangeClass({ apiKey, secret, ...(password ? { password } : {}) });
     return { client, exchangeName: row.exchangeName };
-  } catch {
+  } catch (err) {
+    console.error(
+      `[exchange-account] failed to build exchange client for userId=${userId} exchange=${row.exchangeName}:`,
+      err instanceof Error ? err.message : err,
+    );
     return null;
   }
 }

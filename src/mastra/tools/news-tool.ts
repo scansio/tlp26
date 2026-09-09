@@ -1,6 +1,9 @@
 import { createTool } from '@mastra/core/tools';
 import { ApifyClient } from 'apify-client';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { db } from '@/db';
+import { newsCache } from '@/db/schema';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -58,33 +61,49 @@ interface ApifyNewsItem {
   };
 }
 
-// ─── Cache ────────────────────────────────────────────────────────────────────
+// ─── Cache (Postgres-backed, shared across all processes/workers) ────────────
 
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-interface CacheEntry {
-  data: NewsResult;
-  expiresAt: number;
-}
-
-const newsCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 1 day
 
 function getCacheKey(currencies: string[]): string {
   return [...currencies].sort().join(',').toUpperCase();
 }
 
-function getCached(key: string): NewsResult | null {
-  const entry = newsCache.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
-    newsCache.delete(key);
-    return null;
-  }
-  return entry.data;
+async function getCached(key: string): Promise<NewsResult | null> {
+  const [row] = await db
+    .select()
+    .from(newsCache)
+    .where(eq(newsCache.cacheKey, key))
+    .limit(1);
+
+  if (!row) return null;
+  if (Date.now() > row.expiresAt.getTime()) return null;
+
+  return {
+    items: row.items as NewsItem[],
+    overallSentiment: row.overallSentiment as Sentiment,
+  };
 }
 
-function setCache(key: string, data: NewsResult): void {
-  newsCache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+async function setCache(key: string, data: NewsResult): Promise<void> {
+  await db
+    .insert(newsCache)
+    .values({
+      cacheKey: key,
+      items: data.items,
+      overallSentiment: data.overallSentiment,
+      fetchedAt: new Date(),
+      expiresAt: new Date(Date.now() + CACHE_TTL_MS),
+    })
+    .onConflictDoUpdate({
+      target: newsCache.cacheKey,
+      set: {
+        items: data.items,
+        overallSentiment: data.overallSentiment,
+        fetchedAt: new Date(),
+        expiresAt: new Date(Date.now() + CACHE_TTL_MS),
+      },
+    });
 }
 
 // ─── Sentiment helpers ────────────────────────────────────────────────────────
@@ -226,7 +245,7 @@ async function fetchFromCoinGecko(currencies: string[]): Promise<NewsItem[]> {
 
 async function fetchNews(currencies: string[]): Promise<NewsResult> {
   const cacheKey = getCacheKey(currencies);
-  const cached = getCached(cacheKey);
+  const cached = await getCached(cacheKey);
   if (cached) return cached;
 
   let items: NewsItem[] = [];
@@ -260,7 +279,7 @@ async function fetchNews(currencies: string[]): Promise<NewsResult> {
     overallSentiment: computeOverallSentiment(top5),
   };
 
-  setCache(cacheKey, result);
+  await setCache(cacheKey, result);
   return result;
 }
 
@@ -272,7 +291,7 @@ export const newsTool = createTool({
     'Fetches top 5 real-time crypto news items with sentiment scores for given currencies. ' +
     'Primary source: Apify CryptoPanic News Scraper actor (requires APIFY_API_TOKEN). ' +
     'Fallbacks: direct CryptoPanic API (requires CRYPTOPANIC_API_TOKEN), then CoinGecko /api/v3/news. ' +
-    'Results cached for 5 minutes.',
+    'Results cached in Postgres (news_cache table) for 1 day, shared across all processes.',
   inputSchema: z.object({
     currencies: z
       .array(z.string())

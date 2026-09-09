@@ -354,6 +354,20 @@ export const ohlcvCache = pgTable('ohlcv_cache', {
 ]);
 
 // ---------------------------------------------------------------------------
+// news_cache
+// ---------------------------------------------------------------------------
+export const newsCache = pgTable('news_cache', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  cacheKey: text('cache_key').notNull(), // sorted, comma-joined, uppercased currency symbols
+  items: jsonb('items').notNull(),
+  overallSentiment: text('overall_sentiment').notNull(),
+  fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+}, (table) => [
+  uniqueIndex('nc_cache_key_idx').on(table.cacheKey),
+]);
+
+// ---------------------------------------------------------------------------
 // backtest_runs
 // ---------------------------------------------------------------------------
 export const backtestRuns = pgTable('backtest_runs', {
