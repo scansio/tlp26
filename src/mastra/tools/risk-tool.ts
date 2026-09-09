@@ -40,25 +40,23 @@ async function getSwapMarkets(exchangeId: 'binance' | 'bybit' | 'bingx'): Promis
 }
 
 /**
- * Max leverage + minimum order size the exchange allows for this symbol, from
- * CCXT's unified market.limits. Throws (fails closed, same pattern as
+ * Minimum order size the exchange allows for this symbol, from CCXT's
+ * unified market.limits/precision. Throws (fails closed, same pattern as
  * resolveAccountBalance returning null) if the market can't be loaded or the
- * symbol isn't found — margin sizing must never silently proceed against an
- * unknown leverage cap.
+ * symbol isn't found.
  *
- * CCXT's unified `limits.leverage.max` is left `undefined` by its BingX and
- * Binance adapters for every market (verified against ccxt/js/src/bingx.js
- * and binance.js) — only Bybit actually populates it. Previously that meant
- * every BingX/Binance swap signal silently collapsed to 1x leverage, which
- * commits ~98% of the account balance as margin on a single trade and can
- * drop below the exchange's minimum order size on smaller accounts. BingX's
- * real per-symbol cap is available for free in the raw (un-normalized)
- * market response as side-dependent `maxLongLeverage`/`maxShortLeverage`
- * fields, so that's checked next. Binance's real cap requires an
- * authenticated, per-user fetchLeverageTiers() call this shared/public
- * market cache has no way to make — callers pass their own
- * fallbackMaxLeverage (the user's configured defaultLeverage) instead of
- * silently defaulting to 1.
+ * This deliberately does NOT look up a leverage cap. CCXT's unified
+ * `limits.leverage.max` is left `undefined` by BingX/Binance for every
+ * market (only Bybit populates it), and BingX's raw, un-normalized
+ * `maxLongLeverage`/`maxShortLeverage` fields — tried in an earlier version
+ * of this function — turned out to reflect a public/no-auth baseline, not
+ * the real account-specific max (confirmed in production: BingX reported
+ * 20x for ADA/USDT via this field while the BingX app itself allows 300x).
+ * There is no reliable way to know an exchange's real leverage cap in
+ * advance without an authenticated, account-specific call. Instead, sizing
+ * always solves for the ideal (uncapped) leverage, and execute-trade-tool.ts
+ * discovers the real cap the only reliable way — by attempting to set it on
+ * the exchange and reacting to an actual rejection.
  *
  * minAmountUnits is the largest of limits.amount.min and precision.amount —
  * either one can independently cause CCXT's own amountToPrecision() to round
@@ -68,37 +66,19 @@ async function getSwapMarkets(exchangeId: 'binance' | 'bybit' | 'bingx'): Promis
  * always-fails-identically error into a clear "position size below exchange
  * minimum" one the retry loop can recognize and stop retrying.
  */
-async function fetchSwapMarketConstraints(
+async function fetchSwapMinAmount(
   exchangeId: 'binance' | 'bybit' | 'bingx',
   symbol: string,
   marketType: MarketType,
-  direction: 'LONG' | 'SHORT',
-  fallbackMaxLeverage?: number,
-): Promise<{ maxLeverage: number; minAmountUnits: number }> {
-  if (marketType !== 'swap') return { maxLeverage: 1, minAmountUnits: 0 };
+): Promise<{ minAmountUnits: number }> {
+  if (marketType !== 'swap') return { minAmountUnits: 0 };
 
   const markets = await getSwapMarkets(exchangeId);
   const exchangeSymbol = toExchangeSymbol(symbol, marketType);
   const market = markets[exchangeSymbol];
   if (!market) {
-    throw new Error(`Swap market '${exchangeSymbol}' not found on ${exchangeId} — cannot determine leverage cap.`);
+    throw new Error(`Swap market '${exchangeSymbol}' not found on ${exchangeId} — cannot determine order-size limits.`);
   }
-
-  let maxLev = market.limits?.leverage?.max;
-
-  if ((typeof maxLev !== 'number' || maxLev <= 0) && exchangeId === 'bingx') {
-    const info = market.info as Record<string, unknown> | undefined;
-    const raw = direction === 'LONG' ? info?.maxLongLeverage : info?.maxShortLeverage;
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed) && parsed > 0) maxLev = parsed;
-  }
-
-  if (typeof maxLev !== 'number' || maxLev <= 0) {
-    maxLev =
-      typeof fallbackMaxLeverage === 'number' && fallbackMaxLeverage > 0 ? fallbackMaxLeverage : 1;
-  }
-
-  const maxLeverage = Math.floor(maxLev);
 
   const minLimit = market.limits?.amount?.min;
   const minPrecision = market.precision?.amount;
@@ -107,7 +87,7 @@ async function fetchSwapMarketConstraints(
     typeof minPrecision === 'number' && minPrecision > 0 ? minPrecision : 0,
   );
 
-  return { maxLeverage, minAmountUnits };
+  return { minAmountUnits };
 }
 
 // ---------------------------------------------------------------------------
@@ -120,11 +100,14 @@ async function fetchSwapMarketConstraints(
 //   loss = leverage × margin × (slDistanceRate + fees + slippage)
 //   margin := riskPerTrade% of balance  =>  leverage = 1 / (slDistanceRate + fees + slippage)
 //
-// If that derived leverage exceeds what the exchange allows for this symbol,
-// leverage is capped at the exchange's max and margin is increased instead
-// (never leverage beyond the cap) so the position still uses the full
-// riskPerTrade% budget — capped again at the account balance itself as a
-// last-resort safety net so this can never ask for more margin than exists.
+// This is always the uncapped/"ideal" solve — no exchange leverage limit is
+// looked up or applied here (see fetchSwapMinAmount's comment for why). If
+// the exchange rejects this leverage at order-placement time,
+// execute-trade-tool.ts falls back to the account's own default leverage and
+// re-solves margin there — but by then positionSizeUsdt is already fixed:
+// since loss = positionSizeUsdt × effectiveLossRate = maxRiskUsdt regardless
+// of the leverage/margin split, a leverage fallback only changes how much
+// margin is committed, never the notional or the dollar risk.
 // ---------------------------------------------------------------------------
 export const riskTool = createTool({
   id: 'risk-tool',
@@ -173,16 +156,6 @@ export const riskTool = createTool({
       .describe(
         'Slippage estimate as a percentage (e.g. 0.05 = 0.05%). Defaults to 0.05% if not provided.',
       ),
-    fallbackMaxLeverage: z
-      .number()
-      .positive()
-      .optional()
-      .describe(
-        "User's configured default leverage (user_risk_profiles.defaultLeverage), used as the " +
-          "leverage cap when the exchange doesn't report one for this symbol (e.g. Binance, whose " +
-          'real per-symbol cap requires an authenticated leverage-tiers call this tool cannot make). ' +
-          'Falls back to 1 if omitted.',
-      ),
   }),
   outputSchema: z.object({
     exchange: z.string(),
@@ -199,16 +172,18 @@ export const riskTool = createTool({
     effectiveLossPct: z
       .number()
       .describe('SL% + round-trip fee% + slippage% — the rate leverage is actually solved against'),
-    idealLeverageRaw: z
+    leverageRaw: z
       .number()
-      .describe('Unfloored 1 / (effectiveLossPct/100), before capping to the exchange max'),
+      .describe('Unfloored 1 / (effectiveLossPct/100), before flooring to a whole number'),
     // Margin + leverage
     marginUsdt: z.number().describe('Capital committed as margin, in USDT'),
-    leverage: z.number().describe('Derived leverage — set on the exchange account before order placement'),
-    maxSymbolLeverage: z.number().describe("Exchange's max leverage for this symbol (1 for spot)"),
-    leverageCapped: z
-      .boolean()
-      .describe('True when the exchange leverage cap was below the ideal derived leverage'),
+    leverage: z
+      .number()
+      .describe(
+        'Derived leverage to attempt on the exchange before order placement. Not pre-capped to any ' +
+          'exchange limit — execute-trade-tool.ts falls back to the account default leverage if the ' +
+          'exchange rejects this value, and updates trade_signals with what actually got used.',
+      ),
     // Position sizing
     positionSizeUsdt: z.number().describe('Notional position size in USDT (leverage × margin)'),
     positionSizeUnits: z.number().describe('Position size in base asset units'),
@@ -252,7 +227,6 @@ export const riskTool = createTool({
       takeProfitPrice,
       direction,
       slippagePct: inputSlippage,
-      fallbackMaxLeverage,
     } = inputData as {
       exchange: 'binance' | 'bybit' | 'bingx';
       symbol: string;
@@ -264,7 +238,6 @@ export const riskTool = createTool({
       takeProfitPrice: number;
       direction: 'LONG' | 'SHORT';
       slippagePct?: number;
-      fallbackMaxLeverage?: number;
     };
 
     const takerFeeRate = TAKER_FEES[exchange] ?? TAKER_FEES['binance'];
@@ -287,47 +260,29 @@ export const riskTool = createTool({
     const maxRiskUsdt = accountBalance * (riskPerTradePct / 100);
 
     // ---------------------------------------------------------------------------
-    // Margin + leverage — derived, not rigid.
+    // Margin + leverage — always the uncapped/"ideal" solve:
     //
     //   loss = leverage × margin × effectiveLossRate = maxRiskUsdt
+    //   margin := maxRiskUsdt, leverage := 1 / effectiveLossRate (floored)
     //
-    // Ideal case: margin := maxRiskUsdt, leverage := 1 / effectiveLossRate.
-    // If that leverage exceeds the exchange's cap for this symbol, cap
-    // leverage there and solve margin upward instead, so the full risk
-    // budget is still used rather than silently under-risking — capped
-    // again at the account balance itself as a last-resort safety net.
+    // No exchange leverage cap is looked up or applied — see
+    // fetchSwapMinAmount's comment for why. maxRiskUsdt is inherently ≤ 10%
+    // of accountBalance (riskPerTradePct is schema-capped at 10), so margin
+    // never needs a balance safety clamp here.
     // ---------------------------------------------------------------------------
-    const { maxLeverage: maxSymbolLeverage, minAmountUnits } = await fetchSwapMarketConstraints(
-      exchange,
-      symbol,
-      marketType,
-      direction,
-      fallbackMaxLeverage,
-    );
+    const { minAmountUnits } = await fetchSwapMinAmount(exchange, symbol, marketType);
 
     let leverage: number;
     let marginUsdt: number;
-    let leverageCapped = false;
     // Unfloored 1/effectiveLossRate — kept for display so the "LEVERAGE = ?"
-    // solve step can be shown before it's floored/capped, same as the manual
-    // risk-management worksheet this calculation follows.
-    let idealLeverageRaw = 1;
+    // solve step can be shown before it's floored to a whole number, same as
+    // the manual risk-management worksheet this calculation follows.
+    let leverageRaw = 1;
 
     if (marketType === 'swap') {
-      idealLeverageRaw = 1 / effectiveLossRate;
-      const idealLeverage = Math.max(1, Math.floor(idealLeverageRaw));
-      leverage = Math.min(idealLeverage, maxSymbolLeverage);
-      leverageCapped = leverage < idealLeverage;
-
-      if (!leverageCapped) {
-        marginUsdt = maxRiskUsdt;
-      } else {
-        // Safety net: never require more margin than the account has. A 2%
-        // haircut leaves headroom for the entry taker fee and margin dust —
-        // committing exactly 100% of free balance as margin still bounces
-        // on the exchange.
-        marginUsdt = Math.min(maxRiskUsdt / (leverage * effectiveLossRate), accountBalance * 0.98);
-      }
+      leverageRaw = 1 / effectiveLossRate;
+      leverage = Math.max(1, Math.floor(leverageRaw));
+      marginUsdt = maxRiskUsdt;
     } else {
       leverage = 1;
       marginUsdt = maxRiskUsdt / effectiveLossRate;
@@ -400,13 +355,11 @@ export const riskTool = createTool({
       // roundTripFeePct/slippagePct below for the two components added to
       // slDistancePct to get here).
       effectiveLossPct: round(effectiveLossRate * 100, 4),
-      // Unfloored "LEVERAGE = 1 / effectiveLossRate" before flooring/capping —
-      // shown so the solve step is fully auditable, not just the final leverage.
-      idealLeverageRaw: round(idealLeverageRaw, 4),
+      // Unfloored "LEVERAGE = 1 / effectiveLossRate" before flooring — shown
+      // so the solve step is fully auditable, not just the final leverage.
+      leverageRaw: round(leverageRaw, 4),
       marginUsdt: round(marginUsdt, 4),
       leverage,
-      maxSymbolLeverage,
-      leverageCapped,
       positionSizeUsdt: round(positionSizeUsdt, 2),
       positionSizeUnits: round(positionSizeUnits, 6),
       minOrderSizeUnits: round(minAmountUnits, 6),

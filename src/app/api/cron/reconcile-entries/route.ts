@@ -163,7 +163,6 @@ async function reconcilePaperSignal(signal: ApprovedSignalRow, exchangeName: Exc
           takeProfitPrice: Number(signal.takeProfit),
           direction: signal.direction as 'LONG' | 'SHORT',
           slippagePct,
-          fallbackMaxLeverage: leverage,
         },
         { observe: noopObserve },
       )) as unknown as RiskCalcResult;

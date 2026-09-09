@@ -29,7 +29,7 @@ import ccxt, { type Exchange } from 'ccxt';
 import { db } from '@/db';
 import { tradeSignals, userExchanges } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { toExchangeSymbol, resolveHedgeMode, type MarketType } from './market-symbol';
 import {
   fetchTickerPrice,
@@ -46,6 +46,11 @@ import {
 function isAlreadySetError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return /no need to change|already.*(margin|leverage)|not modified/i.test(msg);
+}
+
+function round(n: number, dp: number): number {
+  const factor = Math.pow(10, dp);
+  return Math.round(n * factor) / factor;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +139,17 @@ export const executeTradeTool = createTool({
     marketType: z.enum(['spot', 'swap']).default('spot').describe("'swap' = USDT-M perpetual futures"),
     leverage: z.number().int().positive().optional().describe('Leverage to set before placing a swap order'),
     marginMode: z.enum(['cross', 'isolated']).optional(),
+    fallbackLeverage: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "User's configured default leverage (user_risk_profiles.defaultLeverage). risk-tool.ts never " +
+          'pre-checks an exchange leverage cap, so if the exchange rejects `leverage` when setting it ' +
+          'before order placement, this is tried once instead — the same position size is kept (the ' +
+          'notional risk is leverage-independent; only the margin the exchange reserves changes).',
+      ),
   }),
 
   outputSchema: z.object({
@@ -162,6 +178,7 @@ export const executeTradeTool = createTool({
       marketType,
       leverage,
       marginMode,
+      fallbackLeverage,
     } = inputData as {
       userId: string;
       signalId: string;
@@ -177,10 +194,13 @@ export const executeTradeTool = createTool({
       marketType: MarketType;
       leverage?: number;
       marginMode?: 'cross' | 'isolated';
+      fallbackLeverage?: number;
     };
 
     const effMarketType: MarketType = marketType ?? 'spot';
-    const effLeverage = leverage ?? 1;
+    // Mutable: falls back to fallbackLeverage if the exchange rejects this
+    // when setLeverage is attempted below (see the swap-market block).
+    let effLeverage = leverage ?? 1;
     const effMarginMode = marginMode ?? 'cross';
 
     const slippagePct = inputSlippage ?? DEFAULT_SLIPPAGE_PCT;
@@ -351,22 +371,74 @@ export const executeTradeTool = createTool({
         }
       }
 
+      // BingX uniquely requires an explicit side ('LONG'/'SHORT') for setLeverage.
+      const leverageParams = exchange === 'bingx' ? { side: direction === 'LONG' ? 'LONG' : 'SHORT' } : {};
+
       try {
-        // BingX uniquely requires an explicit side ('LONG'/'SHORT') for setLeverage.
-        const leverageParams = exchange === 'bingx' ? { side: direction === 'LONG' ? 'LONG' : 'SHORT' } : {};
         await client.setLeverage(effLeverage, exchangeSymbol, leverageParams);
       } catch (err) {
-        if (!isAlreadySetError(err)) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return {
-            success: false,
-            executionId: null,
-            exchangeOrderId: null,
-            fillPrice: null,
-            mode: 'live' as const,
-            signalStatus: 'pending',
-            message: `Failed to set leverage on ${exchange}: ${msg}`,
-          };
+        if (isAlreadySetError(err)) {
+          // fine, proceed at effLeverage
+        } else {
+          const primaryMsg = err instanceof Error ? err.message : String(err);
+
+          // risk-tool.ts never pre-checks an exchange leverage cap (public
+          // market data has proven unreliable for this — see its comment),
+          // so a rejection here is the only real signal that this leverage
+          // isn't available. Fall back to the account's own default once;
+          // the order amount stays the same regardless of which leverage
+          // ends up set (notional/risk is leverage-independent — only the
+          // margin the exchange reserves changes).
+          if (fallbackLeverage && fallbackLeverage !== effLeverage) {
+            try {
+              await client.setLeverage(fallbackLeverage, exchangeSymbol, leverageParams);
+              effLeverage = fallbackLeverage;
+            } catch (err2) {
+              if (isAlreadySetError(err2)) {
+                effLeverage = fallbackLeverage;
+              } else {
+                const fallbackMsg = err2 instanceof Error ? err2.message : String(err2);
+                return {
+                  success: false,
+                  executionId: null,
+                  exchangeOrderId: null,
+                  fillPrice: null,
+                  mode: 'live' as const,
+                  signalStatus: 'pending',
+                  message:
+                    `Leverage ${effLeverage}x rejected on ${exchange} (${primaryMsg}); fallback to ` +
+                    `${fallbackLeverage}x also failed (${fallbackMsg}). Signal left as pending.`,
+                };
+              }
+            }
+
+            // Record the leverage that actually got used — reconcile-entries
+            // reads trade_signals.leverage for a resting order's eventual
+            // fill, and the stored risk_calculation should reflect what
+            // really executed, not just what was originally attempted.
+            await db
+              .update(tradeSignals)
+              .set({
+                leverage: effLeverage,
+                riskCalculation: sql`COALESCE(${tradeSignals.riskCalculation}, '{}'::jsonb) || ${JSON.stringify({
+                  executedLeverage: effLeverage,
+                  executedMarginUsdt: round(positionSizeUsdt / effLeverage, 4),
+                  leverageFallbackReason: primaryMsg,
+                })}::jsonb`,
+                updatedAt: new Date(),
+              })
+              .where(eq(tradeSignals.id, signalId));
+          } else {
+            return {
+              success: false,
+              executionId: null,
+              exchangeOrderId: null,
+              fillPrice: null,
+              mode: 'live' as const,
+              signalStatus: 'pending',
+              message: `Failed to set leverage on ${exchange}: ${primaryMsg}`,
+            };
+          }
         }
       }
     }

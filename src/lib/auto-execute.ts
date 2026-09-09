@@ -151,7 +151,6 @@ export async function attemptSignalAutoExecution(signalId: string): Promise<Auto
             takeProfitPrice: Number(claimed.takeProfit),
             direction: claimed.direction as 'LONG' | 'SHORT',
             slippagePct: context.slippagePct,
-            fallbackMaxLeverage: leverage,
           },
           { observe: noopObserve },
         )) as unknown as RiskCalcResult;
@@ -219,6 +218,7 @@ export async function attemptSignalAutoExecution(signalId: string): Promise<Auto
           marketType,
           leverage,
           marginMode: (claimed.marginMode as 'cross' | 'isolated') ?? context.marginMode,
+          fallbackLeverage: context.leverage,
         },
         { observe: noopObserve },
       )) as { success: boolean; message: string };

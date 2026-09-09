@@ -23,8 +23,6 @@ type StoredRiskCalculation = {
   positionSizeUnits?: number;
   marginUsdt?: number;
   leverage?: number;
-  maxSymbolLeverage?: number;
-  leverageCapped?: boolean;
   takerFeePct?: number;
   slippagePct?: number;
   roundTripFeePct?: number;
@@ -34,11 +32,17 @@ type StoredRiskCalculation = {
   slDistancePct?: number;
   tpDistancePct?: number;
   effectiveLossPct?: number;
-  idealLeverageRaw?: number;
+  leverageRaw?: number;
   grossExpectedLoss?: number;
   grossExpectedProfit?: number;
   netExpectedLoss?: number;
   netExpectedProfit?: number;
+  // Appended by execute-trade-tool.ts only if the exchange rejected the
+  // solved `leverage` and it fell back to the account's default — absent
+  // otherwise, meaning the solved leverage above is what actually executed.
+  executedLeverage?: number;
+  executedMarginUsdt?: number;
+  leverageFallbackReason?: string;
 };
 
 // Pure rate math (no I/O) plus whatever risk-tool output was stored on the
@@ -96,8 +100,6 @@ function computeFeeData(
     positionSizeUnits: riskCalculation?.positionSizeUnits ?? null,
     marginUsdt: riskCalculation?.marginUsdt ?? null,
     leverage: riskCalculation?.leverage ?? null,
-    maxSymbolLeverage: riskCalculation?.maxSymbolLeverage ?? null,
-    leverageCapped: riskCalculation?.leverageCapped ?? null,
     takerFeePct: riskCalculation?.takerFeePct ?? null,
     accountBalanceUsed: riskCalculation?.accountBalance ?? null,
     riskPerTradePctUsed: riskCalculation?.riskPerTradePct ?? null,
@@ -110,7 +112,7 @@ function computeFeeData(
     calcSlDistancePct: riskCalculation?.slDistancePct ?? null,
     calcTpDistancePct: riskCalculation?.tpDistancePct ?? null,
     effectiveLossPct: riskCalculation?.effectiveLossPct ?? null,
-    idealLeverageRaw: riskCalculation?.idealLeverageRaw ?? null,
+    leverageRaw: riskCalculation?.leverageRaw ?? null,
     slippagePctUsed: riskCalculation?.slippagePct ?? null,
     roundTripFeePct: riskCalculation?.roundTripFeePct ?? null,
     // Dollar P&L at the actual position size — distinct from the %-of-notional
@@ -121,6 +123,11 @@ function computeFeeData(
     profitUsdt: riskCalculation?.grossExpectedProfit ?? null,
     netLossUsdt: riskCalculation?.netExpectedLoss ?? null,
     netProfitUsdt: riskCalculation?.netExpectedProfit ?? null,
+    // Present only if execute-trade-tool.ts had to fall back off the solved
+    // leverage above because the exchange rejected it.
+    executedLeverage: riskCalculation?.executedLeverage ?? null,
+    executedMarginUsdt: riskCalculation?.executedMarginUsdt ?? null,
+    leverageFallbackReason: riskCalculation?.leverageFallbackReason ?? null,
   };
 }
 

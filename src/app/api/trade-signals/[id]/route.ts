@@ -205,7 +205,6 @@ export async function PATCH(
           takeProfitPrice: takeProfit,
           direction: signal.direction as 'LONG' | 'SHORT',
           slippagePct: context?.slippagePct ?? 0.05,
-          fallbackMaxLeverage: signal.leverage ?? context?.leverage ?? 1,
         },
         { observe: noopObserve },
       )) as unknown as RiskCalcResult;
@@ -311,6 +310,7 @@ async function approveSignal(
       slippagePct: userRiskProfiles.slippagePct,
       paperBalanceUsd: userRiskProfiles.paperBalanceUsd,
       riskPerTradePct: userRiskProfiles.riskPerTradePct,
+      defaultLeverage: userRiskProfiles.defaultLeverage,
     })
     .from(userRiskProfiles)
     .where(eq(userRiskProfiles.userId, userId))
@@ -394,7 +394,6 @@ async function approveSignal(
             takeProfitPrice: Number(signal.takeProfit),
             direction: signal.direction as 'LONG' | 'SHORT',
             slippagePct,
-            fallbackMaxLeverage: paperLeverage,
           },
           { observe: noopObserve },
         )) as unknown as RiskCalcResult;
@@ -501,7 +500,6 @@ async function approveSignal(
           takeProfitPrice: Number(signal.takeProfit),
           direction: signal.direction as 'LONG' | 'SHORT',
           slippagePct,
-          fallbackMaxLeverage: signal.leverage ?? 1,
         },
         { observe: noopObserve },
       )) as unknown as RiskCalcResult;
@@ -548,6 +546,7 @@ async function approveSignal(
       marketType: signalMarketType,
       leverage,
       marginMode: (signal.marginMode as 'cross' | 'isolated') ?? 'cross',
+      fallbackLeverage: profile?.defaultLeverage ?? 1,
     },
     { observe: noopObserve },
   ) as {

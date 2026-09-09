@@ -146,7 +146,6 @@ export async function POST(req: Request) {
             takeProfitPrice: tp,
             direction,
             slippagePct: profile.slippagePct ? Number(profile.slippagePct) : 0.05,
-            fallbackMaxLeverage: profile.defaultLeverage ?? 1,
           },
           { observe: noopObserve },
         )) as Record<string, unknown>;

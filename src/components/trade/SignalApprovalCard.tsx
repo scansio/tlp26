@@ -35,26 +35,29 @@ export interface SignalFeeData {
   positionSizeUnits?: number | null;
   marginUsdt?: number | null;
   leverage?: number | null;
-  maxSymbolLeverage?: number | null;
-  leverageCapped?: boolean | null;
   takerFeePct?: number | null;
   accountBalanceUsed?: number | null;
   riskPerTradePctUsed?: number | null;
   riskCapitalUsdt?: number | null;
   riskCalculatedAt?: string | null;
   // Raw inputs/intermediate steps for the "Show calculation" worked-example
-  // breakdown — see risk-tool.ts's maxRiskUsdt/effectiveLossPct/idealLeverageRaw.
+  // breakdown — see risk-tool.ts's maxRiskUsdt/effectiveLossPct/leverageRaw.
   maxRiskUsdt?: number | null;
   calcSlDistancePct?: number | null;
   calcTpDistancePct?: number | null;
   effectiveLossPct?: number | null;
-  idealLeverageRaw?: number | null;
+  leverageRaw?: number | null;
   slippagePctUsed?: number | null;
   roundTripFeePct?: number | null;
   lossUsdt?: number | null;
   profitUsdt?: number | null;
   netLossUsdt?: number | null;
   netProfitUsdt?: number | null;
+  // Present only if execute-trade-tool.ts fell back off `leverage` because
+  // the exchange rejected it — absent means `leverage` above is what executed.
+  executedLeverage?: number | null;
+  executedMarginUsdt?: number | null;
+  leverageFallbackReason?: string | null;
 }
 
 export interface QueueSignal {
@@ -328,13 +331,23 @@ function RiskCalculationSection({
       value: fee.riskPerTradePctUsed != null ? `${fmt(fee.riskPerTradePctUsed, 2)}%${riskOverride != null ? ' (custom)' : ''}` : '—',
     },
     { label: 'Risk capital', value: fee.accountBalanceUsed != null ? `$${fmt(fee.accountBalanceUsed, 2)}` : '—' },
-    { label: 'Margin required', value: fee.marginUsdt != null ? `$${fmt(fee.marginUsdt, 2)}` : '—' },
+    {
+      label: 'Margin required',
+      value:
+        fee.executedMarginUsdt != null
+          ? `$${fmt(fee.executedMarginUsdt, 2)} (solved for $${fmt(fee.marginUsdt ?? 0, 2)})`
+          : fee.marginUsdt != null
+            ? `$${fmt(fee.marginUsdt, 2)}`
+            : '—',
+    },
     {
       label: 'Leverage',
       value:
-        fee.leverage != null
-          ? `${fmt(fee.leverage, 0)}x${fee.leverageCapped ? ` (capped at exchange max ${fmt(fee.maxSymbolLeverage ?? 0, 0)}x)` : ''}`
-          : '—',
+        fee.executedLeverage != null && fee.executedLeverage !== fee.leverage
+          ? `${fmt(fee.executedLeverage, 0)}x executed (${fmt(fee.leverage ?? 0, 0)}x rejected by exchange)`
+          : fee.leverage != null
+            ? `${fmt(fee.leverage, 0)}x`
+            : '—',
     },
     { label: 'Position size', value: fee.positionSizeUsdt != null ? `$${fmt(fee.positionSizeUsdt, 2)}` : '—' },
     {
@@ -407,66 +420,85 @@ function CalculationModal({
   const slPct = fee.calcSlDistancePct ?? fee.slDistancePct ?? null;
   const tpPct = fee.calcTpDistancePct ?? fee.tpDistancePct ?? null;
   const leverage = fee.leverage ?? null;
-  const idealLeverageFloored = fee.idealLeverageRaw != null ? Math.max(1, Math.floor(fee.idealLeverageRaw)) : null;
-  const expectedLossPct = slPct != null && leverage != null ? slPct * leverage : null;
-  const expectedProfitPct = tpPct != null && leverage != null ? tpPct * leverage : null;
+  const leverageFloored = fee.leverageRaw != null ? Math.max(1, Math.floor(fee.leverageRaw)) : null;
+
+  // Show only the calculation that actually happened: a fallback (present
+  // only when the exchange rejected `leverage`) means the margin-solve
+  // branch ran at the fallback leverage; otherwise only the leverage-solve
+  // branch ran, and `leverage` is what executed (or will, on Approve).
+  const fellBack = fee.executedLeverage != null && fee.executedLeverage !== leverage;
+  const finalLeverage = fellBack ? fee.executedLeverage : leverage;
+  const finalMargin = fellBack ? fee.executedMarginUsdt : fee.marginUsdt;
+  const expectedLossPct = slPct != null && finalLeverage != null ? slPct * finalLeverage : null;
+  const expectedProfitPct = tpPct != null && finalLeverage != null ? tpPct * finalLeverage : null;
 
   const lines: string[] = [];
+  lines.push('INPUTS');
   lines.push(`SL% = ${n(slPct, 3)}`);
   lines.push(`TP% = ${n(tpPct, 3)}`);
   lines.push(`RISK CAPITAL (account balance) = $${n(fee.accountBalanceUsed, 2)}`);
+  lines.push('Formula: RISK PER TRADE = RISK_PER_TRADE_PCT% × RISK CAPITAL');
   lines.push(
-    `RISK PER TRADE = ${n(fee.riskPerTradePctUsed, 2)}% of RISK CAPITAL = $${n(fee.maxRiskUsdt, 4)}`,
+    `RISK PER TRADE = ${n(fee.riskPerTradePctUsed, 2)}% × $${n(fee.accountBalanceUsed, 2)} = $${n(fee.maxRiskUsdt, 4)}`,
   );
   lines.push(`ENTRY PRICE = ${fmt(signal.entryPrice, 4)}`);
   lines.push(`TAKE PROFIT PRICE = ${fmt(signal.takeProfit, 4)}`);
   lines.push(`STOP LOSS PRICE = ${fmt(signal.stopLoss, 4)}`);
   lines.push('');
-  lines.push('EFFECTIVE LOSS% (SL% + round-trip fee% + slippage%) — leverage is solved against this:');
+  lines.push('EFFECTIVE LOSS%');
+  lines.push('Formula: EFFECTIVE LOSS% = SL% + ROUND-TRIP FEE% + SLIPPAGE%');
   lines.push(
     `EFFECTIVE LOSS% = ${n(slPct, 3)} + ${n(fee.roundTripFeePct, 4)} + ${n(fee.slippagePctUsed, 4)} = ${n(fee.effectiveLossPct, 4)}`,
   );
   lines.push('');
-  lines.push('LEVERAGE = ?');
-  lines.push(`1 = LEVERAGE × 1 × ${n(fee.effectiveLossPct, 4)}/100`);
-  lines.push(`1 / ${n((fee.effectiveLossPct ?? 0) / 100, 6)} = LEVERAGE`);
-  lines.push(`LEVERAGE = ${n(fee.idealLeverageRaw, 4)} (floor to nearest whole number)`);
-  lines.push(`LEVERAGE = ${idealLeverageFloored ?? '?'}`);
+  lines.push('SOLVE FOR LEVERAGE');
+  lines.push('Formula: LOSS = LEVERAGE × MARGIN × EFFECTIVE LOSS%/100, requiring LOSS = MARGIN = RISK PER TRADE');
+  lines.push(
+    `Substitute: $${n(fee.maxRiskUsdt, 4)} = LEVERAGE × $${n(fee.maxRiskUsdt, 4)} × ${n(fee.effectiveLossPct, 4)}/100`,
+  );
+  lines.push('Simplify (MARGIN cancels — holds for any $ amount): 1 = LEVERAGE × EFFECTIVE LOSS%/100');
+  lines.push(`LEVERAGE = 1 / (${n(fee.effectiveLossPct, 4)}/100) = ${n(fee.leverageRaw, 4)}`);
+  lines.push(`LEVERAGE = ${leverageFloored ?? '?'} (floored to a whole number)`);
   lines.push('');
-  const exchangeName = (signal.rawPayload?.exchange as string | undefined) ?? 'exchange';
 
-  if (fee.leverageCapped) {
-    lines.push(
-      `${idealLeverageFloored ?? '?'} exceeds ${exchangeName}'s max leverage for this symbol (${n(fee.maxSymbolLeverage, 0)}x) — capped.`,
-    );
-    lines.push(`LEVERAGE = ${n(fee.maxSymbolLeverage, 0)} (exchange max)`);
-    lines.push('MARGIN = ?');
-    lines.push(
-      `$${n(fee.maxRiskUsdt, 4)} = ${n(leverage, 0)} × MARGIN × ${n(fee.effectiveLossPct, 4)}/100`,
-    );
-    lines.push(`MARGIN = $${n(fee.maxRiskUsdt, 4)} / (${n(leverage, 0)} × ${n(fee.effectiveLossPct, 4)}/100)`);
-    lines.push(`MARGIN = $${n(fee.marginUsdt, 4)}`);
+  if (!fellBack) {
+    lines.push('MARGIN = RISK PER TRADE (uncapped case) = $' + n(fee.maxRiskUsdt, 4));
+    lines.push('This leverage has not been rejected by the exchange — see the execution result above.');
   } else {
-    lines.push(`${idealLeverageFloored ?? '?'} is within the exchange's max leverage — not capped.`);
-    lines.push(`MARGIN = RISK PER TRADE = $${n(fee.maxRiskUsdt, 4)}`);
+    lines.push(
+      `Exchange rejected ${leverageFloored ?? leverage}x${fee.leverageFallbackReason ? ` (${fee.leverageFallbackReason})` : ''} — fell back to the account's default leverage.`,
+    );
+    lines.push(`LEVERAGE = ${n(finalLeverage, 0)} (account default)`);
+    lines.push('');
+    lines.push('SOLVE FOR MARGIN AT THE FALLBACK LEVERAGE');
+    lines.push('Formula: MARGIN = RISK PER TRADE / (LEVERAGE × EFFECTIVE LOSS%/100)');
+    lines.push(
+      `MARGIN = $${n(fee.maxRiskUsdt, 4)} / (${n(finalLeverage, 0)} × ${n(fee.effectiveLossPct, 4)}/100) = $${n(finalMargin, 4)}`,
+    );
   }
   lines.push('');
+  lines.push('POSITION SIZE');
+  lines.push('Formula: POSITION SIZE = LEVERAGE × MARGIN');
   lines.push(
-    `POSITION SIZE = LEVERAGE × MARGIN = ${n(leverage, 0)} × $${n(fee.marginUsdt, 4)} = $${n(fee.positionSizeUsdt, 2)}`,
+    `POSITION SIZE = ${n(finalLeverage, 0)} × $${n(finalMargin, 4)} = $${n(fee.positionSizeUsdt, 2)}`,
   );
   lines.push('');
-  lines.push('REITERATE — expected loss/profit before fees:');
-  lines.push(`EXPECTED LOSS% = SL% × LEVERAGE = ${n(slPct, 3)} × ${n(leverage, 0)} = ${n(expectedLossPct, 3)}`);
-  lines.push(`EXPECTED PROFIT% = TP% × LEVERAGE = ${n(tpPct, 3)} × ${n(leverage, 0)} = ${n(expectedProfitPct, 3)}`);
+  lines.push('EXPECTED LOSS/PROFIT (before fees)');
+  lines.push('Formula: EXPECTED LOSS% = SL% × LEVERAGE');
+  lines.push(`EXPECTED LOSS% = ${n(slPct, 3)} × ${n(finalLeverage, 0)} = ${n(expectedLossPct, 3)}`);
+  lines.push('Formula: EXPECTED PROFIT% = TP% × LEVERAGE');
+  lines.push(`EXPECTED PROFIT% = ${n(tpPct, 3)} × ${n(finalLeverage, 0)} = ${n(expectedProfitPct, 3)}`);
   lines.push('');
+  lines.push('Formula: LOSS = LEVERAGE × MARGIN × SL%/100');
   lines.push(
-    `Loss = LEVERAGE × MARGIN × SL%/100 = ${n(leverage, 0)} × $${n(fee.marginUsdt, 4)} × ${n(slPct, 3)}/100 = $${n(fee.lossUsdt, 4)}`,
+    `LOSS = ${n(finalLeverage, 0)} × $${n(finalMargin, 4)} × ${n(slPct, 3)}/100 = $${n(fee.lossUsdt, 4)}`,
   );
+  lines.push('Formula: PROFIT = LEVERAGE × MARGIN × TP%/100');
   lines.push(
-    `Profit = LEVERAGE × MARGIN × TP%/100 = ${n(leverage, 0)} × $${n(fee.marginUsdt, 4)} × ${n(tpPct, 3)}/100 = $${n(fee.profitUsdt, 4)}`,
+    `PROFIT = ${n(finalLeverage, 0)} × $${n(finalMargin, 4)} × ${n(tpPct, 3)}/100 = $${n(fee.profitUsdt, 4)}`,
   );
   lines.push('');
-  lines.push('After round-trip fees + slippage:');
+  lines.push('AFTER ROUND-TRIP FEES + SLIPPAGE');
   lines.push(`Net Loss = $${n(fee.netLossUsdt, 4)}`);
   lines.push(`Net Profit = $${n(fee.netProfitUsdt, 4)}`);
 
@@ -476,9 +508,10 @@ function CalculationModal({
         <DialogHeader>
           <DialogTitle>Risk calculation — step by step</DialogTitle>
           <DialogDescription>
-            {signal.symbol} {signal.direction} · leverage solved first from SL%/TP% and fees; if it
-            exceeds the exchange&apos;s leverage limit, that limit is used instead and margin is solved so
-            loss never exceeds risk-per-trade.
+            {signal.symbol} {signal.direction} · leverage is solved from SL%/TP% and fees; the exchange&apos;s
+            real limit isn&apos;t known in advance, so if it rejects this leverage at order time, the
+            account&apos;s default leverage is used instead and margin is solved so loss never exceeds
+            risk-per-trade.
           </DialogDescription>
         </DialogHeader>
         <pre className="whitespace-pre-wrap break-words font-mono text-xs bg-muted rounded p-3 leading-relaxed">

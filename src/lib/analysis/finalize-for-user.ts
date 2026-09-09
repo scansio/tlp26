@@ -165,7 +165,6 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
           takeProfitPrice: analysis.tp,
           direction,
           slippagePct,
-          fallbackMaxLeverage: profileLeverageFallback,
         },
         {},
       )) as Record<string, unknown>;
@@ -261,6 +260,7 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
           marketType,
           leverage,
           marginMode,
+          fallbackLeverage: profileLeverageFallback,
         },
         { observe: noopObserve },
       )) as FinalizeForUserResult['executionResult'];

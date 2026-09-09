@@ -327,7 +327,6 @@ export async function POST(req: Request) {
           takeProfitPrice: takeProfit,
           direction: direction as 'LONG' | 'SHORT',
           slippagePct: context?.slippagePct ?? 0.05,
-          fallbackMaxLeverage: effLeverage,
         },
         { observe: noopObserve },
       )) as Record<string, unknown>;
