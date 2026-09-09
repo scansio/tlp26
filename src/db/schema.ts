@@ -89,6 +89,32 @@ export const userExchanges = pgTable('user_exchanges', {
 ]);
 
 // ---------------------------------------------------------------------------
+// exchange_balance_cache
+//
+// Shared cache for fetchLiveUsdtBalance (src/lib/exchange-account.ts) — the
+// queue page's 15s polling, the auto-execute retry loop, and the scheduled
+// worker tick were combining to call a live account's balance endpoint often
+// enough that BingX rate-limited it. Postgres-backed rather than in-memory
+// so it stays correct if this app is ever scaled to multiple replicas
+// (matching src/worker/lock.ts's advisory-lock approach to the same class of
+// problem), not just within one process. balanceUsdt is nullable so a failed
+// fetch (e.g. a rate limit) is also cached — otherwise every caller retries a
+// currently-blocked endpoint immediately, which is exactly what
+// causes/prolongs the block.
+// ---------------------------------------------------------------------------
+export const exchangeBalanceCache = pgTable('exchange_balance_cache', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 255 }).notNull(),
+  exchangeName: varchar('exchange_name', { length: 50 }).notNull(),
+  marketType: varchar('market_type', { length: 10 }).notNull(),
+  balanceUsdt: numeric('balance_usdt', { precision: 20, scale: 2 }), // null = last fetch failed
+  fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+}, (table) => [
+  uniqueIndex('ebc_user_exchange_market_idx').on(table.userId, table.exchangeName, table.marketType),
+]);
+
+// ---------------------------------------------------------------------------
 // user_notifications
 // ---------------------------------------------------------------------------
 export const userNotifications = pgTable('user_notifications', {

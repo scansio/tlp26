@@ -17,7 +17,7 @@ import { db } from '@/db';
 import { tradeSignals, userRiskProfiles } from '@/db/schema';
 import { attemptSignalAutoExecution } from '@/lib/auto-execute';
 
-const DEFAULT_INTERVAL_MS = 90_000;
+const DEFAULT_INTERVAL_MS = 5 * 60_000;
 
 export function startAutoExecuteRetryLoop(): void {
   const intervalMs = process.env.AUTO_EXECUTE_RETRY_INTERVAL_MS

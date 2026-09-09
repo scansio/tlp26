@@ -15,7 +15,7 @@
  * both this loop and manual Approve remain able to act on it.
  *
  * Guards against the same race a manual Approve click can hit: this loop
- * ticks every 90s and Approve can fire at any moment, so both could
+ * ticks every 5 minutes and Approve can fire at any moment, so both could
  * otherwise read status='pending' and both place an order for the same
  * signal. claimPendingSignal atomically flips 'pending' -> 'executing'
  * first; if that fails (already claimed elsewhere), this bails out

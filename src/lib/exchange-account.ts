@@ -15,7 +15,7 @@
 import ccxt, { type Exchange, type Balances } from 'ccxt';
 import { and, eq } from 'drizzle-orm';
 import { db } from '@/db';
-import { userExchanges } from '@/db/schema';
+import { exchangeBalanceCache, userExchanges } from '@/db/schema';
 import { decrypt } from '@/lib/crypto';
 import { configureMarketType, type MarketType } from '@/mastra/tools/market-symbol';
 
@@ -79,6 +79,82 @@ export function extractUsdtBalance(balance: Balances): number | null {
   return freeTotal > 0 ? freeTotal : null;
 }
 
+// ---------------------------------------------------------------------------
+// Balance cache — this account's live balance was queried often enough
+// (queue page polling every 15s, the auto-execute retry loop, the scheduled
+// worker tick, manual approvals) that BingX rate-limited the endpoint and
+// entered a "disabled period." Postgres-backed rather than in-memory so it's
+// shared across replicas if this app is ever scaled horizontally (matching
+// src/worker/lock.ts's advisory-lock approach to the same class of problem),
+// not just within one process.
+// ---------------------------------------------------------------------------
+
+const SUCCESS_CACHE_TTL_MS = 30_000;
+// A failure is cached too — otherwise every caller immediately retries a
+// currently-rate-limited endpoint, which is exactly what causes/prolongs it.
+const DEFAULT_FAILURE_CACHE_TTL_MS = 30_000;
+const MIN_RATE_LIMIT_BACKOFF_MS = 10_000;
+const MAX_RATE_LIMIT_BACKOFF_MS = 10 * 60_000;
+
+/**
+ * BingX's rate-limit error names the exact unix-ms timestamp it unblocks at
+ * (e.g. `"...disabled period and will be unblocked after 1788969792010"`).
+ * Honoring that exactly (clamped to a sane range) is the considerate thing to
+ * do — anything else keeps hitting an endpoint the exchange has explicitly
+ * asked callers to back off from. Falls back to a fixed TTL for any other
+ * error shape or exchange.
+ */
+function resolveFailureExpiry(err: unknown, now: number): Date {
+  const message = err instanceof Error ? err.message : String(err);
+  const match = message.match(/unblocked after (\d+)/);
+  if (match) {
+    const unblockAt = Number(match[1]);
+    if (Number.isFinite(unblockAt) && unblockAt > now) {
+      const backoffMs = Math.min(Math.max(unblockAt - now, MIN_RATE_LIMIT_BACKOFF_MS), MAX_RATE_LIMIT_BACKOFF_MS);
+      return new Date(now + backoffMs);
+    }
+  }
+  return new Date(now + DEFAULT_FAILURE_CACHE_TTL_MS);
+}
+
+async function readCachedBalance(
+  userId: string,
+  exchangeName: string,
+  marketType: MarketType,
+): Promise<{ hit: true; balance: number | null } | { hit: false }> {
+  const [row] = await db
+    .select({ balanceUsdt: exchangeBalanceCache.balanceUsdt, expiresAt: exchangeBalanceCache.expiresAt })
+    .from(exchangeBalanceCache)
+    .where(
+      and(
+        eq(exchangeBalanceCache.userId, userId),
+        eq(exchangeBalanceCache.exchangeName, exchangeName),
+        eq(exchangeBalanceCache.marketType, marketType),
+      ),
+    )
+    .limit(1);
+
+  if (!row || row.expiresAt.getTime() <= Date.now()) return { hit: false };
+  return { hit: true, balance: row.balanceUsdt !== null ? Number(row.balanceUsdt) : null };
+}
+
+async function writeCachedBalance(
+  userId: string,
+  exchangeName: string,
+  marketType: MarketType,
+  balance: number | null,
+  expiresAt: Date,
+): Promise<void> {
+  const balanceUsdt = balance !== null ? String(balance) : null;
+  await db
+    .insert(exchangeBalanceCache)
+    .values({ userId, exchangeName, marketType, balanceUsdt, fetchedAt: new Date(), expiresAt })
+    .onConflictDoUpdate({
+      target: [exchangeBalanceCache.userId, exchangeBalanceCache.exchangeName, exchangeBalanceCache.marketType],
+      set: { balanceUsdt, fetchedAt: new Date(), expiresAt },
+    });
+}
+
 /**
  * Fetch the user's real balance from their connected exchange, configured for
  * the given market type first — spot and swap/futures are separate wallets on
@@ -93,10 +169,15 @@ export async function fetchLiveUsdtBalance(
   const resolved = await getUserActiveExchangeClient(userId);
   if (!resolved) return null;
 
+  const cached = await readCachedBalance(userId, resolved.exchangeName, marketType);
+  if (cached.hit) return cached.balance;
+
   try {
     configureMarketType(resolved.client, resolved.exchangeName, marketType);
     const balance = await resolved.client.fetchBalance();
-    return extractUsdtBalance(balance);
+    const usdt = extractUsdtBalance(balance);
+    await writeCachedBalance(userId, resolved.exchangeName, marketType, usdt, new Date(Date.now() + SUCCESS_CACHE_TTL_MS));
+    return usdt;
   } catch (err) {
     // Previously swallowed with no trace — indistinguishable from a
     // genuinely zero balance in every caller's "could not determine live
@@ -107,6 +188,7 @@ export async function fetchLiveUsdtBalance(
       `[exchange-account] fetchLiveUsdtBalance failed for userId=${userId} exchange=${resolved.exchangeName} marketType=${marketType}:`,
       err instanceof Error ? err.message : err,
     );
+    await writeCachedBalance(userId, resolved.exchangeName, marketType, null, resolveFailureExpiry(err, Date.now()));
     return null;
   }
 }
