@@ -26,6 +26,7 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { tradeSignals, userRiskProfiles } from '@/db/schema';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
+import { claimPendingSignal, releaseSignalClaim } from '@/lib/signal-claim';
 import { fetchLiveUsdtBalance } from '@/lib/exchange-account';
 import { executeTradeTool } from '@/mastra/tools/execute-trade-tool';
 import { riskTool } from '@/mastra/tools/risk-tool';
@@ -136,17 +137,60 @@ export async function PATCH(
     );
   }
 
-  // Reject path — simple status update
+  // Reject path — atomic status update guarded on still-pending, so this
+  // can't race with the auto-retry loop claiming the signal a moment later.
   if (action === 'reject') {
-    await db
+    const [rejected] = await db
       .update(tradeSignals)
       .set({ status: 'rejected', updatedAt: new Date() })
-      .where(eq(tradeSignals.id, signalId));
+      .where(and(eq(tradeSignals.id, signalId), eq(tradeSignals.status, 'pending')))
+      .returning({ id: tradeSignals.id });
+
+    if (!rejected) {
+      return NextResponse.json(
+        { error: 'Signal is no longer pending — it may already be executing via auto-retry. Refresh and try again.' },
+        { status: 409 },
+      );
+    }
 
     return NextResponse.json({ signalId, status: 'rejected' });
   }
 
-  // Approve path — run circuit breaker first
+  // Approve path — atomically claim the signal first so this can never race
+  // with src/worker/auto-execute-retry-loop.ts (or a second concurrent
+  // Approve click) also picking up the same 'pending' signal and placing a
+  // duplicate order. Every return below this point must go through the
+  // try/finally so a failed/early-return path reliably releases the claim
+  // back to 'pending' rather than leaving the signal stuck invisible.
+  const claimed = await claimPendingSignal(signalId);
+  if (!claimed) {
+    return NextResponse.json(
+      { error: 'Signal is no longer pending — it may already be executing via auto-retry. Refresh and try again.' },
+      { status: 409 },
+    );
+  }
+
+  try {
+    return await approveSignal(signalId, userId, signal);
+  } finally {
+    // No-op once the signal has moved on to 'approved'/'executed' via
+    // finalizePaperFill/executeTradeTool's own status update — only reverts
+    // to 'pending' if still 'executing', i.e. every failure path below.
+    await releaseSignalClaim(signalId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Approve — sizing + execution, extracted so the claim/release above wraps
+// every return path uniformly instead of needing per-branch bookkeeping.
+// ---------------------------------------------------------------------------
+
+async function approveSignal(
+  signalId: string,
+  userId: string,
+  signal: typeof tradeSignals.$inferSelect,
+) {
+  // Circuit breaker
   const cb = await checkCircuitBreaker(userId, {
     signalSymbol: signal.symbol,
     signalDirection: signal.direction,
@@ -440,9 +484,19 @@ export async function DELETE(
     return NextResponse.json({ error: 'Signal not found' }, { status: 404 });
   }
 
-  if (signal.status === 'executed' || signal.status === 'cancelled') {
+  // 'executing' means an approve/auto-retry attempt currently holds the
+  // claim (see src/lib/signal-claim.ts) — cancelling underneath it would
+  // race with that attempt's own release-back-to-'pending', potentially
+  // resurrecting a signal the user just cancelled. Ask them to retry once
+  // the in-flight attempt (sub-few-seconds) resolves.
+  if (signal.status === 'executed' || signal.status === 'cancelled' || signal.status === 'executing') {
     return NextResponse.json(
-      { error: `Signal cannot be cancelled — current status: ${signal.status}` },
+      {
+        error:
+          signal.status === 'executing'
+            ? 'Signal is currently being processed — try cancelling again in a moment.'
+            : `Signal cannot be cancelled — current status: ${signal.status}`,
+      },
       { status: 422 },
     );
   }

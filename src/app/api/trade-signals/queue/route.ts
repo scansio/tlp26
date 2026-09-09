@@ -16,6 +16,7 @@ import { db } from '@/db';
 import { tradeSignals, userRiskProfiles, userExchanges } from '@/db/schema';
 import { riskTool } from '@/mastra/tools/risk-tool';
 import { noopObserve } from '@mastra/core/tools';
+import { fetchLiveUsdtBalance } from '@/lib/exchange-account';
 
 const DEFAULT_TAKER_FEE = 0.0004;
 const DEFAULT_SLIPPAGE_PCT = 0.05;
@@ -31,6 +32,7 @@ async function computeFeeData(
   exchange: 'binance' | 'bybit' | 'bingx',
   symbol: string,
   marketType: 'spot' | 'swap',
+  riskOverridePct: string | null,
 ) {
   const entry = Number(entryPrice);
   const sl = Number(stopLoss);
@@ -60,12 +62,20 @@ async function computeFeeData(
   // Position/margin/leverage sizing — delegates to risk-tool.ts (the same
   // tool finalizeForUser calls before execution) instead of re-deriving the
   // formula here, so this display figure can never drift from what actually
-  // gets executed.
+  // gets executed. Uses the signal's own risk override when set (manually-
+  // created signals may specify a per-trade risk % instead of the profile
+  // default) so the displayed calculation matches what auto-execution will
+  // actually size against.
+  const effectiveRiskPct = riskOverridePct ? Number(riskOverridePct) : riskPerTradePct;
+
   let positionSizeUsdt: number | null = null;
   let positionSizeUnits: number | null = null;
   let marginUsdt: number | null = null;
   let leverage: number | null = null;
-  if (accountBalance && accountBalance > 0 && riskPerTradePct && riskPerTradePct > 0) {
+  let maxSymbolLeverage: number | null = null;
+  let leverageCapped: boolean | null = null;
+  let takerFeePct: number | null = null;
+  if (accountBalance && accountBalance > 0 && effectiveRiskPct && effectiveRiskPct > 0) {
     try {
       const calc = (await riskTool.execute!(
         {
@@ -73,7 +83,7 @@ async function computeFeeData(
           symbol,
           marketType,
           accountBalance,
-          riskPerTradePct,
+          riskPerTradePct: effectiveRiskPct,
           entryPrice: entry,
           stopLossPrice: sl,
           takeProfitPrice: tp,
@@ -81,11 +91,22 @@ async function computeFeeData(
           slippagePct,
         },
         { observe: noopObserve },
-      )) as { positionSizeUsdt: number; positionSizeUnits: number; marginUsdt: number; leverage: number };
+      )) as {
+        positionSizeUsdt: number;
+        positionSizeUnits: number;
+        marginUsdt: number;
+        leverage: number;
+        maxSymbolLeverage: number;
+        leverageCapped: boolean;
+        takerFeePct: number;
+      };
       positionSizeUsdt = calc.positionSizeUsdt;
       positionSizeUnits = calc.positionSizeUnits;
       marginUsdt = calc.marginUsdt;
       leverage = calc.leverage;
+      maxSymbolLeverage = calc.maxSymbolLeverage;
+      leverageCapped = calc.leverageCapped;
+      takerFeePct = calc.takerFeePct;
     } catch (err) {
       console.warn('trade-signals/queue: riskTool failed', err);
     }
@@ -104,6 +125,11 @@ async function computeFeeData(
     positionSizeUnits,
     marginUsdt,
     leverage,
+    maxSymbolLeverage,
+    leverageCapped,
+    takerFeePct,
+    accountBalanceUsed: accountBalance,
+    riskPerTradePctUsed: effectiveRiskPct ?? null,
   };
 }
 
@@ -127,11 +153,25 @@ export async function GET() {
     .limit(1);
 
   const tradingMode = profile?.tradingMode ?? 'manual'; // 'auto' | 'manual'
+  const executionMode = profile?.executionMode ?? 'paper';
   const slippagePct = profile?.slippagePct
     ? Number(profile.slippagePct)
     : DEFAULT_SLIPPAGE_PCT;
   const riskPerTradePct = profile?.riskPerTradePct ? Number(profile.riskPerTradePct) : 1;
-  const accountBalance = profile?.paperBalanceUsd ? Number(profile.paperBalanceUsd) : 10_000;
+  const paperBalance = profile?.paperBalanceUsd ? Number(profile.paperBalanceUsd) : 10_000;
+
+  // In live mode, size against the real exchange balance (cached per market
+  // type — spot/swap wallets can differ) rather than the paper-balance
+  // setting, so the risk-calculation display never quietly shows a paper
+  // number to a live-mode user.
+  const liveBalanceCache = new Map<'spot' | 'swap', number | null>();
+  const resolveAccountBalanceForDisplay = async (marketType: 'spot' | 'swap'): Promise<number | null> => {
+    if (executionMode !== 'live') return paperBalance;
+    if (liveBalanceCache.has(marketType)) return liveBalanceCache.get(marketType)!;
+    const balance = await fetchLiveUsdtBalance(userId, marketType);
+    liveBalanceCache.set(marketType, balance);
+    return balance;
+  };
 
   // Signals themselves carry no exchange (only marketType) — resolve the user's
   // connected exchange once so the UI can build correct chart/TradingView links.
@@ -163,6 +203,10 @@ export async function GET() {
       rawPayload: tradeSignals.rawPayload,
       exitMode: tradeSignals.exitMode,
       marketType: tradeSignals.marketType,
+      riskOverridePct: tradeSignals.riskOverridePct,
+      lastError: tradeSignals.lastError,
+      lastErrorAt: tradeSignals.lastErrorAt,
+      executionAttempts: tradeSignals.executionAttempts,
       createdAt: tradeSignals.createdAt,
       updatedAt: tradeSignals.updatedAt,
       expiresAt: tradeSignals.expiresAt,
@@ -191,6 +235,10 @@ export async function GET() {
       exitMode: row.exitMode,
       marketType: row.marketType ?? 'spot',
       rawPayload: row.rawPayload,
+      riskOverridePct: row.riskOverridePct,
+      lastError: row.lastError,
+      lastErrorAt: row.lastErrorAt,
+      executionAttempts: row.executionAttempts ?? 0,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       expiresAt: row.expiresAt,
@@ -200,11 +248,12 @@ export async function GET() {
         row.stopLoss,
         row.takeProfit,
         slippagePct,
-        accountBalance,
+        await resolveAccountBalanceForDisplay((row.marketType as 'spot' | 'swap') ?? 'spot'),
         riskPerTradePct,
         resolvedExchange,
         row.symbol,
         (row.marketType as 'spot' | 'swap') ?? 'spot',
+        row.riskOverridePct,
       ),
     })),
   );
@@ -212,7 +261,7 @@ export async function GET() {
   return NextResponse.json({
     signals,
     tradingMode,
-    executionMode: profile?.executionMode ?? 'paper',
+    executionMode,
     connectedExchange,
   });
 }

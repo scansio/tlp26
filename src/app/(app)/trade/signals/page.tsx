@@ -16,6 +16,7 @@ import {
   SignalApprovalCard,
   type QueueSignal,
 } from '@/components/trade/SignalApprovalCard';
+import { CreateSignalDialog } from '@/components/trade/CreateSignalDialog';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -27,7 +28,10 @@ const POLL_INTERVAL_MS = 15_000; // 15 seconds
 // by explicit user action") to match the five categories requested.
 type TabKey = 'pending' | 'active' | 'executed' | 'expired' | 'cancelled';
 const TAB_STATUSES: Record<TabKey, string[]> = {
-  pending: ['pending'],
+  // 'executing' is the brief atomic-claim state (see src/lib/signal-claim.ts)
+  // while an approve/auto-retry attempt is in flight — grouped with pending
+  // so a signal doesn't flicker out of every tab during that window.
+  pending: ['pending', 'executing'],
   active: ['approved'],
   executed: ['executed'],
   expired: ['expired'],
@@ -188,15 +192,18 @@ export default function SignalQueuePage() {
           )}
         </div>
 
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void fetchQueue()}
-          disabled={loading}
-          className="h-11 w-full shrink-0 md:h-8 md:w-auto"
-        >
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </Button>
+        <div className="flex flex-col gap-2 sm:flex-row md:shrink-0">
+          <CreateSignalDialog onCreated={() => void fetchQueue()} />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void fetchQueue()}
+            disabled={loading}
+            className="h-11 w-full shrink-0 md:h-8 md:w-auto"
+          >
+            {loading ? 'Refreshing…' : 'Refresh'}
+          </Button>
+        </div>
       </div>
 
       {/* Error state */}

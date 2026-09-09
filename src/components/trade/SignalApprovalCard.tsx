@@ -28,6 +28,13 @@ export interface SignalFeeData {
   riskReward?: number;
   positionSizeUsdt?: number | null;
   positionSizeUnits?: number | null;
+  marginUsdt?: number | null;
+  leverage?: number | null;
+  maxSymbolLeverage?: number | null;
+  leverageCapped?: boolean | null;
+  takerFeePct?: number | null;
+  accountBalanceUsed?: number | null;
+  riskPerTradePctUsed?: number | null;
 }
 
 export interface QueueSignal {
@@ -46,6 +53,10 @@ export interface QueueSignal {
   exitMode: string | null;
   marketType?: string | null;
   rawPayload: Record<string, unknown> | null;
+  riskOverridePct?: string | number | null;
+  lastError?: string | null;
+  lastErrorAt?: string | Date | null;
+  executionAttempts?: number | null;
   createdAt: string | Date | null;
   updatedAt: string | Date | null;
   expiresAt: string | Date | null;
@@ -88,6 +99,8 @@ function confidenceClass(confidence: string | null): string {
 
 function statusBadge(status: string | null): { label: string; className: string } | null {
   switch (status) {
+    case 'executing':
+      return { label: 'Executing…', className: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' };
     case 'approved':
       return { label: 'Awaiting Fill', className: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' };
     case 'executed':
@@ -224,6 +237,100 @@ function ReasoningSection({ signal }: { signal: QueueSignal }) {
 }
 
 // ---------------------------------------------------------------------------
+// Expandable risk calculation section
+// ---------------------------------------------------------------------------
+
+function RiskCalculationSection({ signal }: { signal: QueueSignal }) {
+  const fee = signal.feeData;
+  const riskOverride = signal.riskOverridePct != null ? Number(signal.riskOverridePct) : null;
+
+  if (!fee || fee.positionSizeUsdt == null) {
+    return (
+      <div className="mt-3 pl-4 border-l-2 border-muted text-sm">
+        <p className="text-xs text-muted-foreground italic">
+          Could not compute a risk calculation for this signal (unknown account balance or invalid sizing).
+        </p>
+      </div>
+    );
+  }
+
+  const rows: Array<{ label: string; value: string }> = [
+    {
+      label: 'Risk per trade',
+      value: fee.riskPerTradePctUsed != null ? `${fmt(fee.riskPerTradePctUsed, 2)}%${riskOverride != null ? ' (custom)' : ''}` : '—',
+    },
+    { label: 'Account balance used', value: fee.accountBalanceUsed != null ? `$${fmt(fee.accountBalanceUsed, 2)}` : '—' },
+    { label: 'Margin required', value: fee.marginUsdt != null ? `$${fmt(fee.marginUsdt, 2)}` : '—' },
+    {
+      label: 'Leverage',
+      value:
+        fee.leverage != null
+          ? `${fmt(fee.leverage, 0)}x${fee.leverageCapped ? ` (capped at exchange max ${fmt(fee.maxSymbolLeverage ?? 0, 0)}x)` : ''}`
+          : '—',
+    },
+    { label: 'Position size', value: fee.positionSizeUsdt != null ? `$${fmt(fee.positionSizeUsdt, 2)}` : '—' },
+    {
+      label: 'Position units',
+      value: fee.positionSizeUnits != null ? fmt(fee.positionSizeUnits, fee.positionSizeUnits >= 1 ? 2 : 6) : '—',
+    },
+    { label: 'Taker fee (per side)', value: fee.takerFeePct != null ? `${fmt(fee.takerFeePct, 4)}%` : '—' },
+  ];
+
+  return (
+    <div className="mt-3 pl-4 border-l-2 border-muted text-sm">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1.5">
+        {rows.map((row) => (
+          <div key={row.label} className="flex items-center justify-between md:justify-start md:gap-2 text-xs">
+            <span className="text-muted-foreground">{row.label}</span>
+            <span className="font-medium text-foreground">{row.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Copyable signal id — short code with copy-to-clipboard, full id on hover
+// ---------------------------------------------------------------------------
+
+function CopyableSignalId({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false);
+  const shortCode = id.slice(0, 8);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(id);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // clipboard unavailable — ignore
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      title={copied ? 'Copied!' : `Click to copy signal ID: ${id}`}
+      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+    >
+      #{shortCode}
+      {copied ? (
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : (
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -241,6 +348,7 @@ export function SignalApprovalCard({
   connectedExchange,
 }: SignalApprovalCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const [showRisk, setShowRisk] = useState(false);
   const [showChart, setShowChart] = useState(false);
   const [actionLoading, setActionLoading] = useState<'approve' | 'reject' | 'cancel' | null>(null);
   const [actionResult, setActionResult] = useState<{
@@ -290,6 +398,7 @@ export function SignalApprovalCard({
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-bold text-base md:text-lg">{signal.symbol}</span>
             <span className="text-muted-foreground text-sm">{signal.timeframe}</span>
+            <CopyableSignalId id={signal.id} />
 
             {/* Direction badge */}
             <span
@@ -492,6 +601,41 @@ export function SignalApprovalCard({
 
           {expanded && <ReasoningSection signal={signal} />}
         </div>
+
+        {/* Expandable risk calculation section */}
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowRisk((v) => !v)}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 py-3 -my-3"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className={`h-3 w-3 transition-transform ${showRisk ? 'rotate-90' : ''}`}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+            {showRisk ? 'Hide' : 'Show'} risk calculation
+          </button>
+
+          {showRisk && <RiskCalculationSection signal={signal} />}
+        </div>
+
+        {/* Execution error — persists across refreshes; auto-mode signals keep
+            retrying (src/worker/auto-execute-retry-loop.ts) until this clears
+            or the signal expires. */}
+        {isPending && signal.lastError && (
+          <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
+            <p className="font-medium">
+              Last execution attempt failed{signal.executionAttempts ? ` (attempt ${signal.executionAttempts})` : ''}
+            </p>
+            <p className="mt-0.5 text-red-700 dark:text-red-400">{signal.lastError}</p>
+          </div>
+        )}
 
         {/* Action result feedback */}
         {actionResult && (

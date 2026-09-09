@@ -183,6 +183,13 @@
       "when": 1788950398724,
       "tag": "0025_low_secret_warriors",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1788963793077,
+      "tag": "0026_talented_gabe_jones",
+      "breakpoints": true
     }
   ]
 }

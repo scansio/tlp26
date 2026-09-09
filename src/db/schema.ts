@@ -189,6 +189,17 @@ export const tradeSignals = pgTable('trade_signals', {
   marketType: varchar('market_type', { length: 10 }).default('spot'),
   leverage: integer('leverage').default(1),
   marginMode: varchar('margin_mode', { length: 20 }).default('cross'),
+  // Per-signal risk-per-trade % override — set on manually-created signals that
+  // specify their own risk instead of the user's profile default; null means
+  // "use user_risk_profiles.riskPerTradePct" (the AI/TradingView/copy default).
+  riskOverridePct: numeric('risk_override_pct', { precision: 5, scale: 2 }),
+  // Populated when an execution attempt fails (auto-execute retry loop or a
+  // manual Approve click) — cleared once an attempt succeeds. Status stays
+  // 'pending' so retries/manual approval remain possible; this is purely a
+  // visible "why hasn't this filled yet" reason, not a terminal state.
+  lastError: text('last_error'),
+  lastErrorAt: timestamp('last_error_at', { withTimezone: true }),
+  executionAttempts: integer('execution_attempts').default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true }),
