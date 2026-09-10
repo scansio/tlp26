@@ -9,6 +9,7 @@ import { db } from '@/db'
 import { userRiskProfiles, userExchanges } from '@/db/schema'
 import { decrypt } from '@/lib/crypto'
 import { configureMarketType, type MarketType } from '@/mastra/tools/market-symbol'
+import { getUserTradePerformance } from '@/lib/analysis/trade-performance'
 import { NextResponse } from 'next/server'
 
 // ---------------------------------------------------------------------------
@@ -128,6 +129,53 @@ Market Type: ${profile.marketType ?? 'spot'}${profile.marketType === 'swap' ? ` 
 ===`;
 }
 
+// ---------------------------------------------------------------------------
+// Build a human-readable past-performance block injected into the agent's
+// system prompt (Phase 6 — recall of the user's own trade performance).
+// Computed on demand from trade_executions/trade_signals — no separate
+// memory store; see src/lib/analysis/trade-performance.ts.
+// ---------------------------------------------------------------------------
+
+async function buildPerformanceContext(userId: string): Promise<string> {
+  const perf = await getUserTradePerformance(userId);
+
+  if (!perf.hasEnoughData) {
+    return `=== TRADE PERFORMANCE ===
+Not enough closed trade history yet (${perf.totalClosedTrades} closed trades) to draw reliable conclusions.
+===`;
+  }
+
+  const rrLines = perf.byRRBucket
+    .filter((b) => b.trades > 0)
+    .map((b) => `- ${b.label} R:R: ${b.trades} trades, ${b.winRatePct}% win rate, expectancy ${b.expectancy >= 0 ? '+' : ''}${b.expectancy}R`)
+    .join('\n');
+
+  const strategyLines = perf.byStrategy
+    .slice(0, 5)
+    .map((s) => `- ${s.key}: ${s.trades} trades, ${s.winRatePct}% win rate`)
+    .join('\n');
+
+  const symbolLines = perf.bySymbol
+    .slice(0, 5)
+    .map((s) => `- ${s.key}: ${s.trades} trades, ${s.winRatePct}% win rate`)
+    .join('\n');
+
+  return `=== TRADE PERFORMANCE ===
+Closed trades analyzed: ${perf.totalClosedTrades}
+Overall win rate: ${perf.overallWinRatePct}%
+
+Win rate by planned Risk:Reward:
+${rrLines || '(no trades with a computable planned R:R)'}
+
+Win rate by strategy source:
+${strategyLines || '(no strategy data)'}
+
+Win rate by symbol:
+${symbolLines || '(no symbol data)'}
+${perf.suggestion ? `\nSUGGESTION: ${perf.suggestion.message}` : ''}
+===`;
+}
+
 export async function POST(req: Request) {
   const { userId } = await auth();
   if (!userId) {
@@ -138,8 +186,11 @@ export async function POST(req: Request) {
   const THREAD_ID = params.threadId ?? userId
   const RESOURCE_ID = `chat-${userId}`
 
-  // Build risk context — fetch profile + balance in parallel with the rest of request handling
-  const riskContext = await buildRiskContext(userId).catch(() => 'RISK PROFILE: unavailable');
+  // Build risk + performance context in parallel with the rest of request handling
+  const [riskContext, performanceContext] = await Promise.all([
+    buildRiskContext(userId).catch(() => 'RISK PROFILE: unavailable'),
+    buildPerformanceContext(userId).catch(() => 'TRADE PERFORMANCE: unavailable'),
+  ]);
 
   const stream = await handleChatStream({
     mastra,
@@ -158,7 +209,7 @@ export async function POST(req: Request) {
       context: [
         {
           role: 'system',
-          content: `userId:${userId}\n\n${riskContext}`,
+          content: `userId:${userId}\n\n${riskContext}\n\n${performanceContext}`,
         },
       ],
       memory: {

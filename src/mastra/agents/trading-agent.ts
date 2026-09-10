@@ -9,6 +9,28 @@ import { newsTool } from '../tools/news-tool';
 import { onchainTool } from '../tools/onchain-tool';
 import { riskTool } from '../tools/risk-tool';
 
+// ---------------------------------------------------------------------------
+// Phase 6 note — why this agent does NOT carry Mastra Memory / a
+// trade-performance recall tool:
+//
+// tradingAgent.generate() is invoked once per symbol/exchange from the
+// user-agnostic phase functions in src/lib/analysis/market-analysis.ts
+// (agentDecisionPhase), with no resourceId/threadId and no userId in its
+// prompt — see that file's module docstring: the decision is deliberately
+// computed once and shared across every user in a confluence group
+// (src/worker/tick.ts), then fanned out per-user in
+// src/lib/analysis/finalize-for-user.ts. Attaching per-user Memory here would
+// be inert (no resourceId to scope it to) unless that sharing were undone,
+// which would multiply LLM calls back up per-user.
+//
+// Recall of the user's own past trade performance is instead wired into the
+// surfaces that already are per-user: market-chat-agent (chat, resource-
+// scoped via Memory) gets both an injected performance-context block and a
+// trade-performance-tool for ad-hoc queries — see
+// src/lib/analysis/trade-performance.ts, src/mastra/tools/trade-performance-tool.ts,
+// and src/app/api/chat/route.ts (buildPerformanceContext).
+// ---------------------------------------------------------------------------
+
 export const tradingAgent = new Agent({
   id: 'trading-agent',
   name: 'Trading Decision Agent',
