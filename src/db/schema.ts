@@ -357,6 +357,94 @@ export const priceWatches = pgTable('price_watches', {
 ]);
 
 // ---------------------------------------------------------------------------
+// auto_trade_jobs
+//
+// Durable, priority-ordered replacement for the scheduled worker's old
+// in-memory fan-out (runTick used to call finalizeForUser directly per user,
+// inline, right after each group's shared analysis — if a tick was still
+// running when the next one fired, withGlobalTickLock's advisory lock made
+// that whole next tick a silent no-op, including every user in it). Now
+// runTick enqueues one row per (analysisRunId, user) instead of finalizing
+// inline, and a consumer batch-claims rows with `FOR UPDATE SKIP LOCKED`
+// (see src/worker/job-queue.ts) — so a skipped/overlapping tick just leaves
+// jobs 'pending' for the next tick's consumer pass, instead of losing them.
+// ---------------------------------------------------------------------------
+export const autoTradeJobs = pgTable('auto_trade_jobs', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 255 }).notNull(),
+  // Shared by every job produced from the same confluence-group analysis run.
+  analysisRunId: uuid('analysis_run_id').notNull(),
+  symbol: varchar('symbol', { length: 30 }).notNull(),
+  exchange: varchar('exchange', { length: 50 }).notNull(),
+  marketType: varchar('market_type', { length: 10 }).notNull().default('spot'),
+  // pending = queued for claim; processing = claimed by a consumer batch
+  // (should never be observed at rest — a crash mid-batch would strand rows
+  // here, but this worker is single-instance today, so that's a non-goal);
+  // done = finalizeForUser ran successfully; failed = terminal, either a
+  // genuine error after maxAttempts retries or a stale analysis snapshot
+  // (see STALE_JOB_MAX_AGE_MS in src/worker/job-queue.ts).
+  status: varchar('status', { length: 20 }).notNull().default('pending'),
+  // Phase 5 will set this from the user's plan tier; every job defaults to 0
+  // for now, so claiming is effectively FIFO until that lands.
+  priority: integer('priority').notNull().default(0),
+  // Snapshot of the group's MarketAnalysisResult at enqueue time — the
+  // consumer finalizes against exactly this, never a fresh recompute.
+  payload: jsonb('payload').notNull(),
+  attempts: integer('attempts').notNull().default(0),
+  lastError: text('last_error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  // Matches the consumer's claim query: WHERE status = 'pending' ORDER BY
+  // priority DESC, created_at ASC.
+  index('atj_claim_idx').on(table.status, table.priority.desc(), table.createdAt.asc()),
+  index('atj_user_id_idx').on(table.userId),
+  index('atj_analysis_run_id_idx').on(table.analysisRunId),
+]);
+
+// ---------------------------------------------------------------------------
+// deterministic_data_cache
+//
+// Read-through cache for the deterministic (non-agent, non-candle) phases of
+// market analysis — indicators, SMC structures, chart patterns, order book,
+// and on-chain signals (see src/lib/analysis/analysis-cache.ts). One row per
+// `${symbol}:${exchange}:${marketType}:${source}` key. OHLCV and news reuse
+// the existing `ohlcv_cache` / `news_cache` tables instead of this one.
+// ---------------------------------------------------------------------------
+export const deterministicDataCache = pgTable('deterministic_data_cache', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  cacheKey: text('cache_key').notNull(),
+  source: text('source').notNull(), // 'market-data' | 'indicators' | 'smc' | 'patterns' | 'orderbook' | 'onchain'
+  payload: jsonb('payload').notNull(),
+  computedAt: timestamp('computed_at', { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+}, (table) => [
+  uniqueIndex('ddc_cache_key_idx').on(table.cacheKey),
+]);
+
+// ---------------------------------------------------------------------------
+// auto_trade_supported_symbols
+//
+// Allowlist gating which (symbol, exchange, marketType) combinations the
+// scheduled worker will generate automated signals for. Seeded with common
+// majors across all three exchanges (see the Phase 1 migration) — anything
+// not present here (or present with status='disabled') is silently dropped
+// from a user's own `allowedSymbols` by src/worker/eligibility.ts, which
+// notifies the user to use the chat interface (trade-analysis-workflow.ts,
+// unconstrained by this table) instead of just dropping it with no trace.
+// ---------------------------------------------------------------------------
+export const autoTradeSupportedSymbols = pgTable('auto_trade_supported_symbols', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  symbol: varchar('symbol', { length: 30 }).notNull(),
+  exchange: varchar('exchange', { length: 50 }).notNull(),
+  marketType: varchar('market_type', { length: 10 }).notNull().default('spot'),
+  status: varchar('status', { length: 20 }).notNull().default('active'), // active | disabled
+  addedAt: timestamp('added_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('atss_symbol_exchange_market_idx').on(table.symbol, table.exchange, table.marketType),
+]);
+
+// ---------------------------------------------------------------------------
 // signal_subscriptions (copy trading — subscription flow TLP-33)
 // ---------------------------------------------------------------------------
 export const signalSubscriptions = pgTable('signal_subscriptions', {
