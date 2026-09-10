@@ -66,6 +66,7 @@ export default function AiModelsPage() {
         key: 'status',
         label: 'Status',
         type: 'select',
+        defaultValue: 'active',
         options: [
           { label: 'Active', value: 'active' },
           { label: 'Beta', value: 'beta' },

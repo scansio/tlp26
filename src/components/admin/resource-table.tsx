@@ -40,6 +40,8 @@ export interface FieldDef {
   required?: boolean;
   /** Omit this field from the edit form (e.g. immutable FK set only on create). */
   createOnly?: boolean;
+  /** Pre-filled value in the create form (e.g. a sensible enum default). */
+  defaultValue?: string | number | boolean;
 }
 
 export interface ColumnDef<T> {
@@ -66,7 +68,11 @@ type FormValues = Record<string, string | number | boolean | null>;
 function defaultFormValues(fields: FieldDef[]): FormValues {
   const values: FormValues = {};
   for (const f of fields) {
-    values[f.key] = f.type === 'boolean' ? false : '';
+    if (f.defaultValue !== undefined) {
+      values[f.key] = f.defaultValue;
+    } else {
+      values[f.key] = f.type === 'boolean' ? false : '';
+    }
   }
   return values;
 }

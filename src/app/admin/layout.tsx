@@ -14,11 +14,16 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
   return (
     <div className="max-w-4xl mx-auto py-10 px-4 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Admin</h1>
-        <p className="text-muted-foreground mt-1">
-          Platform configuration. Visible only to admins.
-        </p>
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold">Admin</h1>
+          <p className="text-muted-foreground mt-1">
+            Platform configuration. Visible only to admins.
+          </p>
+        </div>
+        <Link href="/dashboard" className="text-sm text-muted-foreground hover:text-foreground underline underline-offset-4">
+          Back to dashboard
+        </Link>
       </div>
 
       <nav className="flex gap-2 border-b pb-2 flex-wrap">
