@@ -533,6 +533,53 @@ export const trailAuditLog = pgTable('trail_audit_log', {
 ]);
 
 // ---------------------------------------------------------------------------
+// ai_providers
+// Admin-managed catalog of LLM providers available to the platform
+// (Mastra model gateway config). Feeds the ai_models allowlist below.
+// ---------------------------------------------------------------------------
+export const aiProviders = pgTable('ai_providers', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: varchar('name', { length: 100 }).notNull().unique(),
+  // Whether users can bring their own key for this provider (BYOK — built in a later phase)
+  byokEligible: boolean('byok_eligible').default(false),
+  // Whether the platform has a pooled/shared key for this provider
+  platformPooledKeyAvailable: boolean('platform_pooled_key_available').default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// ai_models
+// Admin-managed allowlist of specific models available per provider, with
+// eval results (populated by the hackathon eval harness in `eval/`, wired up
+// in a later phase) and capability metadata used to gate agent features.
+// ---------------------------------------------------------------------------
+export const aiModels = pgTable('ai_models', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  providerId: uuid('provider_id').notNull().references(() => aiProviders.id),
+  // e.g. "anthropic/claude-sonnet-4-5"
+  modelId: text('model_id').notNull(),
+  status: varchar('status', { length: 20 }).notNull().default('active'), // active | beta | deprecated
+  // "models-dev" (ModelsDevGateway) or a custom gateway id
+  gateway: text('gateway').notNull(),
+  contextMax: integer('context_max'),
+  capabilities: jsonb('capabilities').$type<{
+    toolCalling: boolean;
+    structuredOutput: boolean;
+    streaming: boolean;
+  }>().default({ toolCalling: false, structuredOutput: false, streaming: false }),
+  // Populated by the hackathon eval harness (eval/) — no live integration in this phase
+  evalScore: numeric('eval_score', { precision: 6, scale: 2 }),
+  evalRunId: text('eval_run_id'),
+  byokEligible: boolean('byok_eligible').default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index('am_provider_id_idx').on(table.providerId),
+  uniqueIndex('am_provider_model_idx').on(table.providerId, table.modelId),
+]);
+
+// ---------------------------------------------------------------------------
 // publisher_earnings
 // ---------------------------------------------------------------------------
 export const publisherEarnings = pgTable('publisher_earnings', {
