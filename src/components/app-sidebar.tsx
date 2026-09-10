@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
-import { UserButton } from '@clerk/nextjs';
+import { UserButton, useUser } from '@clerk/nextjs';
 import {
   LayoutDashboard,
   Zap,
@@ -19,6 +19,7 @@ import {
   ChevronRight,
   Activity,
   TrendingUp,
+  LockKeyhole,
 } from 'lucide-react';
 import {
   Sidebar,
@@ -148,6 +149,8 @@ function NavItem({
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const { user } = useUser();
+  const isAdmin = user?.publicMetadata?.admin === true;
 
   return (
     <Sidebar collapsible="icon">
@@ -229,6 +232,29 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {/* Admin — only visible to users with publicMetadata.admin === true */}
+        {isAdmin && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Admin</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={pathname.startsWith('/admin')}
+                    tooltip="Admin"
+                  >
+                    <Link href="/admin">
+                      <LockKeyhole className="size-4" />
+                      <span>Admin</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
 
       {/* User */}
