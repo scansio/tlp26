@@ -218,6 +218,13 @@
       "when": 1788979127529,
       "tag": "0030_stale_earthquake",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1789040961200,
+      "tag": "0031_lame_vargas",
+      "breakpoints": true
     }
   ]
 }

@@ -2,15 +2,28 @@
  * Resolves the candidate set of users the worker may generate signals for
  * on a given tick: active risk profile, kill switch off, not blocked by the
  * circuit breaker (checked silently — see src/lib/circuit-breaker.ts — so a
- * chronically blocked user doesn't get spammed with a notification every tick).
+ * chronically blocked user doesn't get spammed with a notification every tick),
+ * and restricted to symbols present and status='active' in
+ * auto_trade_supported_symbols (see src/worker/supported-symbols.ts).
+ *
+ * A symbol dropped by that last filter is never silent: if it came from the
+ * user's own `allowedSymbols` (as opposed to the WORKER_DEFAULT_SYMBOLS
+ * fallback used for users with no watchlist configured, which is an operator
+ * choice, not the user's), we notify them once per (userId, symbol,
+ * exchange, marketType) — deduped via an in-process Set, same "don't spam
+ * every tick" reasoning as the circuit-breaker check above — pointing them at
+ * the chat interface (trade-analysis-workflow.ts), which isn't constrained
+ * by this allowlist.
  */
 
 import { and, eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { userExchanges, userRiskProfiles } from '@/db/schema';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
+import { sendNotification } from '@/lib/notifications';
 import { normalizeSymbolList } from '@/lib/symbols';
 import { deriveTradingContext, type ExchangeName, type MarketType } from '@/lib/user-trading-context';
+import { buildSupportedSymbolKey, fetchActiveSupportedSymbolKeySet } from './supported-symbols';
 import { chunk } from './util';
 
 export type { ExchangeName };
@@ -29,6 +42,35 @@ function resolveDefaultSymbols(): string[] {
   return normalizeSymbolList([raw]);
 }
 
+// In-process de-dup so a user whose watchlist references an unsupported
+// symbol isn't notified again every tick (ticks fire every 15m — see
+// src/worker/schedule.ts) — reset on process restart, which is fine; the
+// point is avoiding a notification storm within one process's uptime, not a
+// durable "have we ever told them" record.
+const notifiedUnsupported = new Set<string>();
+
+async function notifyUnsupportedSymbols(
+  userId: string,
+  symbols: string[],
+  exchange: string,
+  marketType: string,
+): Promise<void> {
+  const unnotified = symbols.filter((symbol) => !notifiedUnsupported.has(`${userId}:${symbol}:${exchange}:${marketType}`));
+  if (unnotified.length === 0) return;
+
+  for (const symbol of unnotified) {
+    notifiedUnsupported.add(`${userId}:${symbol}:${exchange}:${marketType}`);
+  }
+
+  void sendNotification(userId, {
+    event: 'signal_rejected',
+    symbol: unnotified.join(', '),
+    reason:
+      `Not yet supported for automated trading on ${exchange} (${marketType}). ` +
+      `Use the chat to analyze or trade ${unnotified.length > 1 ? 'these symbols' : 'this symbol'} manually instead.`,
+  });
+}
+
 export async function fetchEligibleUsers(): Promise<EligibleUser[]> {
   const profiles = await db
     .select()
@@ -38,6 +80,7 @@ export async function fetchEligibleUsers(): Promise<EligibleUser[]> {
   if (profiles.length === 0) return [];
 
   const defaultSymbols = resolveDefaultSymbols();
+  const supportedKeys = await fetchActiveSupportedSymbolKeySet();
   let fallbackCount = 0;
 
   const candidates = await Promise.all(
@@ -50,11 +93,29 @@ export async function fetchEligibleUsers(): Promise<EligibleUser[]> {
 
       const context = deriveTradingContext(profile, exchangeRow, defaultSymbols);
       const configuredSymbols = normalizeSymbolList(profile.allowedSymbols ?? []);
-      if (configuredSymbols.length === 0 && defaultSymbols.length > 0) fallbackCount += 1;
+      const isUserConfigured = configuredSymbols.length > 0;
+      if (!isUserConfigured && defaultSymbols.length > 0) fallbackCount += 1;
+
+      const supported: string[] = [];
+      const unsupported: string[] = [];
+      for (const symbol of context.symbols) {
+        if (supportedKeys.has(buildSupportedSymbolKey(symbol, context.exchange, context.marketType))) {
+          supported.push(symbol);
+        } else {
+          unsupported.push(symbol);
+        }
+      }
+
+      // Only the user's own explicit watchlist entries are worth notifying
+      // about — a dropped WORKER_DEFAULT_SYMBOLS fallback entry is an
+      // operator configuration issue, not something the user asked for.
+      if (isUserConfigured && unsupported.length > 0) {
+        void notifyUnsupportedSymbols(context.userId, unsupported, context.exchange, context.marketType);
+      }
 
       return {
         userId: context.userId,
-        symbols: context.symbols,
+        symbols: supported,
         exchange: context.exchange,
         marketType: context.marketType,
       };

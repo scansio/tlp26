@@ -12,6 +12,16 @@
  */
 
 import { z } from 'zod';
+import { db } from '@/db';
+import { ohlcvCache } from '@/db/schema';
+import {
+  buildAnalysisCacheKey,
+  readThroughDeterministicCache,
+  readThroughNewsCache,
+  CACHE_TTL_LTF_MS,
+  CACHE_TTL_FUNDING_MS,
+  CACHE_TTL_NEWS_MS,
+} from './analysis-cache';
 
 // ---------------------------------------------------------------------------
 // Shared schemas (mirrors market-data-tool / indicators-tool / smc-tool / etc.)
@@ -244,45 +254,112 @@ export interface MarketAnalysisResult {
 // Phase 1 — fetchMarketData
 // ---------------------------------------------------------------------------
 
+type CandleSet = {
+  candles15m: z.infer<typeof candleSchema>[];
+  candles1h: z.infer<typeof candleSchema>[];
+  candles4h: z.infer<typeof candleSchema>[];
+  candles1d: z.infer<typeof candleSchema>[];
+};
+
+/**
+ * Best-effort backfill of ohlcv_cache with every *closed* candle (i.e. every
+ * candle except the last, currently-forming one per timeframe) from a fresh
+ * fetch, so the backtester (src/lib/historical-data.ts) benefits from the
+ * same CCXT calls the worker is already making. Closed candles are
+ * immutable, so onConflictDoNothing is correct here — this is a write-only
+ * side channel, never read back by fetchMarketDataPhase itself (see the
+ * read-through cache below for why: ohlcv_cache has no per-row "last written
+ * at" column, so a freshness check keyed off the forming candle's own
+ * timestamp would serve an HTF candle frozen at its opening values for the
+ * rest of its period). Never allowed to fail the analysis phase.
+ */
+async function backfillClosedCandles(symbol: string, candles: CandleSet): Promise<void> {
+  try {
+    const perTimeframe: { timeframe: string; candles: z.infer<typeof candleSchema>[] }[] = [
+      { timeframe: '15m', candles: candles.candles15m },
+      { timeframe: '1h', candles: candles.candles1h },
+      { timeframe: '4h', candles: candles.candles4h },
+      { timeframe: '1d', candles: candles.candles1d },
+    ];
+
+    for (const { timeframe, candles: series } of perTimeframe) {
+      const closed = series.slice(0, -1); // drop the last (currently-forming) candle
+      if (closed.length === 0) continue;
+
+      await db
+        .insert(ohlcvCache)
+        .values(
+          closed.map((c) => ({
+            symbol,
+            timeframe,
+            timestamp: c.timestamp,
+            open: String(c.open),
+            high: String(c.high),
+            low: String(c.low),
+            close: String(c.close),
+            volume: String(c.volume),
+          })),
+        )
+        .onConflictDoNothing();
+    }
+  } catch (err) {
+    console.warn('[market-analysis] backfillClosedCandles failed (non-fatal)', err);
+  }
+}
+
 export async function fetchMarketDataPhase<
   T extends { symbol: string; exchange: string; marketType: string },
 >(
   input: T,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any,
-): Promise<
-  T & {
-    candles15m: z.infer<typeof candleSchema>[];
-    candles1h: z.infer<typeof candleSchema>[];
-    candles4h: z.infer<typeof candleSchema>[];
-    candles1d: z.infer<typeof candleSchema>[];
-  }
-> {
+): Promise<T & CandleSet> {
   return withTimeout('fetchMarketData', async () => {
     const { symbol, exchange, marketType } = input;
-    const tool = mastra?.getTool('marketDataTool');
-    if (!tool) throw new Error('marketDataTool not found in Mastra instance');
+    const cacheKey = buildAnalysisCacheKey(symbol, exchange, marketType, 'market-data');
 
-    const [r15m, r1h, r4h, r1d] = await Promise.all([
-      tool.execute!({ symbol, timeframe: '15m', limit: 200, exchange, marketType }, {}),
-      tool.execute!({ symbol, timeframe: '1h', limit: 200, exchange, marketType }, {}),
-      tool.execute!({ symbol, timeframe: '4h', limit: 200, exchange, marketType }, {}),
-      tool.execute!({ symbol, timeframe: '1d', limit: 200, exchange, marketType }, {}),
-    ]);
+    const candles = await readThroughDeterministicCache<CandleSet>(
+      cacheKey,
+      'market-data',
+      CACHE_TTL_LTF_MS,
+      async () => {
+        const tool = mastra?.getTool('marketDataTool');
+        if (!tool) throw new Error('marketDataTool not found in Mastra instance');
 
-    return {
-      ...input,
-      candles15m: (r15m as { candles: z.infer<typeof candleSchema>[] }).candles,
-      candles1h: (r1h as { candles: z.infer<typeof candleSchema>[] }).candles,
-      candles4h: (r4h as { candles: z.infer<typeof candleSchema>[] }).candles,
-      candles1d: (r1d as { candles: z.infer<typeof candleSchema>[] }).candles,
-    };
+        const [r15m, r1h, r4h, r1d] = await Promise.all([
+          tool.execute!({ symbol, timeframe: '15m', limit: 200, exchange, marketType }, {}),
+          tool.execute!({ symbol, timeframe: '1h', limit: 200, exchange, marketType }, {}),
+          tool.execute!({ symbol, timeframe: '4h', limit: 200, exchange, marketType }, {}),
+          tool.execute!({ symbol, timeframe: '1d', limit: 200, exchange, marketType }, {}),
+        ]);
+
+        const result: CandleSet = {
+          candles15m: (r15m as { candles: z.infer<typeof candleSchema>[] }).candles,
+          candles1h: (r1h as { candles: z.infer<typeof candleSchema>[] }).candles,
+          candles4h: (r4h as { candles: z.infer<typeof candleSchema>[] }).candles,
+          candles1d: (r1d as { candles: z.infer<typeof candleSchema>[] }).candles,
+        };
+
+        void backfillClosedCandles(symbol, result);
+
+        return result;
+      },
+    );
+
+    return { ...input, ...candles };
   });
 }
 
 // ---------------------------------------------------------------------------
 // Phase 2 — computeIndicators
 // ---------------------------------------------------------------------------
+
+type IndicatorSet = {
+  indicators15m?: z.infer<typeof indicatorsResultSchema>;
+  indicators1h: z.infer<typeof indicatorsResultSchema>;
+  indicators4h: z.infer<typeof indicatorsResultSchema>;
+  indicators1d: z.infer<typeof indicatorsResultSchema>;
+};
 
 export async function computeIndicatorsPhase<
   T extends {
@@ -293,36 +370,49 @@ export async function computeIndicatorsPhase<
     candles1h: z.infer<typeof candleSchema>[];
     candles4h: z.infer<typeof candleSchema>[];
     candles1d: z.infer<typeof candleSchema>[];
+    // Optional: eval/derive-challenge.ts calls this phase directly with just
+    // candles, no symbol/exchange context. Production always has both (via
+    // fetchMarketDataPhase's output) — caching is simply skipped without them,
+    // since there'd be no meaningful cache key to build.
+    symbol?: string;
+    exchange?: string;
+    marketType?: string;
   },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
->(input: T, mastra: any): Promise<
-  T & {
-    indicators15m?: z.infer<typeof indicatorsResultSchema>;
-    indicators1h: z.infer<typeof indicatorsResultSchema>;
-    indicators4h: z.infer<typeof indicatorsResultSchema>;
-    indicators1d: z.infer<typeof indicatorsResultSchema>;
-  }
-> {
+>(input: T, mastra: any): Promise<T & IndicatorSet> {
   return withTimeout('computeIndicators', async () => {
-    const tool = mastra?.getTool('indicatorsTool');
-    if (!tool) throw new Error('indicatorsTool not found in Mastra instance');
+    const compute = async (): Promise<IndicatorSet> => {
+      const tool = mastra?.getTool('indicatorsTool');
+      if (!tool) throw new Error('indicatorsTool not found in Mastra instance');
 
-    const has15m = Array.isArray(input.candles15m) && input.candles15m.length > 0;
+      const has15m = Array.isArray(input.candles15m) && input.candles15m.length > 0;
 
-    const [ind15m, ind1h, ind4h, ind1d] = await Promise.all([
-      has15m ? tool.execute!({ candles: input.candles15m }, {}) : Promise.resolve(undefined),
-      tool.execute!({ candles: input.candles1h }, {}),
-      tool.execute!({ candles: input.candles4h }, {}),
-      tool.execute!({ candles: input.candles1d }, {}),
-    ]);
+      const [ind15m, ind1h, ind4h, ind1d] = await Promise.all([
+        has15m ? tool.execute!({ candles: input.candles15m }, {}) : Promise.resolve(undefined),
+        tool.execute!({ candles: input.candles1h }, {}),
+        tool.execute!({ candles: input.candles4h }, {}),
+        tool.execute!({ candles: input.candles1d }, {}),
+      ]);
 
-    return {
-      ...input,
-      ...(ind15m !== undefined ? { indicators15m: ind15m as z.infer<typeof indicatorsResultSchema> } : {}),
-      indicators1h: ind1h as z.infer<typeof indicatorsResultSchema>,
-      indicators4h: ind4h as z.infer<typeof indicatorsResultSchema>,
-      indicators1d: ind1d as z.infer<typeof indicatorsResultSchema>,
+      return {
+        ...(ind15m !== undefined ? { indicators15m: ind15m as z.infer<typeof indicatorsResultSchema> } : {}),
+        indicators1h: ind1h as z.infer<typeof indicatorsResultSchema>,
+        indicators4h: ind4h as z.infer<typeof indicatorsResultSchema>,
+        indicators1d: ind1d as z.infer<typeof indicatorsResultSchema>,
+      };
     };
+
+    const indicators =
+      input.symbol && input.exchange
+        ? await readThroughDeterministicCache<IndicatorSet>(
+            buildAnalysisCacheKey(input.symbol, input.exchange, input.marketType ?? 'spot', 'indicators'),
+            'indicators',
+            CACHE_TTL_LTF_MS,
+            compute,
+          )
+        : await compute();
+
+    return { ...input, ...indicators };
   });
 }
 
@@ -411,22 +501,31 @@ export function deriveTopDownBiasPhase<
 // Phase 3 — detectSMCStructures
 // ---------------------------------------------------------------------------
 
-export async function detectSMCStructuresPhase<T extends { candles1h: z.infer<typeof candleSchema>[] }>(
+export async function detectSMCStructuresPhase<
+  T extends { candles1h: z.infer<typeof candleSchema>[]; symbol: string; exchange: string; marketType?: string },
+>(
   input: T,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any,
 ): Promise<T & { smcStructures: z.infer<typeof smcResultSchema> }> {
   return withTimeout('detectSMCStructures', async () => {
-    const tool = mastra?.getTool('smcTool');
-    if (!tool) throw new Error('smcTool not found in Mastra instance');
+    const cacheKey = buildAnalysisCacheKey(input.symbol, input.exchange, input.marketType ?? 'spot', 'smc');
 
-    // Use 1h candles as the primary timeframe for SMC structures
-    const result = await tool.execute!({ candles: input.candles1h }, {});
+    const smcStructures = await readThroughDeterministicCache<z.infer<typeof smcResultSchema>>(
+      cacheKey,
+      'smc',
+      CACHE_TTL_LTF_MS,
+      async () => {
+        const tool = mastra?.getTool('smcTool');
+        if (!tool) throw new Error('smcTool not found in Mastra instance');
 
-    return {
-      ...input,
-      smcStructures: result as z.infer<typeof smcResultSchema>,
-    };
+        // Use 1h candles as the primary timeframe for SMC structures
+        const result = await tool.execute!({ candles: input.candles1h }, {});
+        return result as z.infer<typeof smcResultSchema>;
+      },
+    );
+
+    return { ...input, smcStructures };
   });
 }
 
@@ -434,21 +533,30 @@ export async function detectSMCStructuresPhase<T extends { candles1h: z.infer<ty
 // Phase 4 — detectChartPatterns
 // ---------------------------------------------------------------------------
 
-export async function detectChartPatternsPhase<T extends { candles1h: z.infer<typeof candleSchema>[] }>(
+export async function detectChartPatternsPhase<
+  T extends { candles1h: z.infer<typeof candleSchema>[]; symbol: string; exchange: string; marketType?: string },
+>(
   input: T,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any,
 ): Promise<T & { chartPatterns: z.infer<typeof patternSchema>[] }> {
   return withTimeout('detectChartPatterns', async () => {
-    const tool = mastra?.getTool('patternTool');
-    if (!tool) throw new Error('patternTool not found in Mastra instance');
+    const cacheKey = buildAnalysisCacheKey(input.symbol, input.exchange, input.marketType ?? 'spot', 'patterns');
 
-    const result = await tool.execute!({ candles: input.candles1h, sensitivity: 0.05 }, {});
+    const chartPatterns = await readThroughDeterministicCache<z.infer<typeof patternSchema>[]>(
+      cacheKey,
+      'patterns',
+      CACHE_TTL_LTF_MS,
+      async () => {
+        const tool = mastra?.getTool('patternTool');
+        if (!tool) throw new Error('patternTool not found in Mastra instance');
 
-    return {
-      ...input,
-      chartPatterns: (result as { patterns: z.infer<typeof patternSchema>[] }).patterns,
-    };
+        const result = await tool.execute!({ candles: input.candles1h, sensitivity: 0.05 }, {});
+        return (result as { patterns: z.infer<typeof patternSchema>[] }).patterns;
+      },
+    );
+
+    return { ...input, chartPatterns };
   });
 }
 
@@ -464,23 +572,30 @@ export async function analyzeOrderBookPhase<
   mastra: any,
 ): Promise<T & { orderBook: z.infer<typeof orderbookResultSchema> }> {
   return withTimeout('analyzeOrderBook', async () => {
-    const tool = mastra?.getTool('orderbookTool');
-    if (!tool) throw new Error('orderbookTool not found in Mastra instance');
+    const cacheKey = buildAnalysisCacheKey(input.symbol, input.exchange, input.marketType, 'orderbook');
 
-    const result = await tool.execute!(
-      {
-        symbol: input.symbol,
-        exchange: input.exchange,
-        marketType: input.marketType,
-        depth: 50,
+    const orderBook = await readThroughDeterministicCache<z.infer<typeof orderbookResultSchema>>(
+      cacheKey,
+      'orderbook',
+      CACHE_TTL_LTF_MS,
+      async () => {
+        const tool = mastra?.getTool('orderbookTool');
+        if (!tool) throw new Error('orderbookTool not found in Mastra instance');
+
+        const result = await tool.execute!(
+          {
+            symbol: input.symbol,
+            exchange: input.exchange,
+            marketType: input.marketType,
+            depth: 50,
+          },
+          {},
+        );
+        return result as z.infer<typeof orderbookResultSchema>;
       },
-      {},
     );
 
-    return {
-      ...input,
-      orderBook: result as z.infer<typeof orderbookResultSchema>,
-    };
+    return { ...input, orderBook };
   });
 }
 
@@ -494,17 +609,22 @@ export async function fetchNewsPhase<T extends { symbol: string }>(
   mastra: any,
 ): Promise<T & { news: z.infer<typeof newsResultSchema> }> {
   return withTimeout('fetchNews', async () => {
-    const tool = mastra?.getTool('newsTool');
-    if (!tool) throw new Error('newsTool not found in Mastra instance');
-
     // Extract base currency from symbol, e.g. "BTC/USDT" → "BTC"
-    const baseCurrency = input.symbol.split('/')[0] ?? input.symbol;
-    const result = await tool.execute!({ currencies: [baseCurrency] }, {});
+    const baseCurrency = (input.symbol.split('/')[0] ?? input.symbol).toUpperCase();
 
-    return {
-      ...input,
-      news: result as z.infer<typeof newsResultSchema>,
-    };
+    const news = await readThroughNewsCache<z.infer<typeof newsResultSchema>>(
+      baseCurrency,
+      CACHE_TTL_NEWS_MS,
+      async () => {
+        const tool = mastra?.getTool('newsTool');
+        if (!tool) throw new Error('newsTool not found in Mastra instance');
+
+        const result = await tool.execute!({ currencies: [baseCurrency] }, {});
+        return result as z.infer<typeof newsResultSchema>;
+      },
+    );
+
+    return { ...input, news };
   });
 }
 
@@ -512,28 +632,42 @@ export async function fetchNewsPhase<T extends { symbol: string }>(
 // Phase 6b — fetchOnchainSignals (run concurrently with 6a)
 // ---------------------------------------------------------------------------
 
-export async function fetchOnchainSignalsPhase<T extends { symbol: string }>(
+export async function fetchOnchainSignalsPhase<T extends { symbol: string; exchange: string; marketType: string }>(
   input: T,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any,
 ): Promise<T & { onchain: z.infer<typeof onchainResultSchema> }> {
   return withTimeout('fetchOnchainSignals', async () => {
-    const tool = mastra?.getTool('onchainTool');
-    if (!tool) throw new Error('onchainTool not found in Mastra instance');
+    // onchain-tool returns funding rate + netflow + open interest + liquidation
+    // levels from a single Coinglass/Santiment call — it isn't split by field,
+    // so there's no way to give netflow its own (longer, daily) TTL without
+    // either a second live call or caching a stale netflow value alongside a
+    // fresh funding rate. We cache the whole result under one key at the
+    // funding-rate (hourly) TTL — stricter than the requested daily TTL for
+    // netflow specifically, but never staler than what was asked for.
+    const cacheKey = buildAnalysisCacheKey(input.symbol, input.exchange, input.marketType, 'onchain');
 
-    const baseCurrency = input.symbol.split('/')[0] ?? input.symbol;
-    const result = await tool.execute!(
-      {
-        symbol: input.symbol,
-        baseCurrency,
+    const onchain = await readThroughDeterministicCache<z.infer<typeof onchainResultSchema>>(
+      cacheKey,
+      'onchain',
+      CACHE_TTL_FUNDING_MS,
+      async () => {
+        const tool = mastra?.getTool('onchainTool');
+        if (!tool) throw new Error('onchainTool not found in Mastra instance');
+
+        const baseCurrency = input.symbol.split('/')[0] ?? input.symbol;
+        const result = await tool.execute!(
+          {
+            symbol: input.symbol,
+            baseCurrency,
+          },
+          {},
+        );
+        return result as z.infer<typeof onchainResultSchema>;
       },
-      {},
     );
 
-    return {
-      ...input,
-      onchain: result as z.infer<typeof onchainResultSchema>,
-    };
+    return { ...input, onchain };
   });
 }
 
