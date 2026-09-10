@@ -505,7 +505,7 @@ function CalculationModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="fixed inset-0 h-screen w-screen max-w-none rounded-none overflow-y-auto">
+      <DialogContent className="fixed inset-0 top-0 left-0 h-screen w-screen max-w-none translate-x-0 translate-y-0 rounded-none sm:max-w-none overflow-y-auto">
         <DialogClose asChild>
           <Button
             type="button"
