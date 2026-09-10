@@ -239,6 +239,13 @@
       "when": 1789049935252,
       "tag": "0033_lively_tenebrous",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1789053604102,
+      "tag": "0034_special_marvel_boy",
+      "breakpoints": true
     }
   ]
 }

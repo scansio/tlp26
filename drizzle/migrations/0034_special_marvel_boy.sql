@@ -1,0 +1,1 @@
+ALTER TABLE "subscription_payments" ALTER COLUMN "provider_reference" DROP NOT NULL;

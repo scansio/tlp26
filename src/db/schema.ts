@@ -706,12 +706,14 @@ export const usageCounters = pgTable('usage_counters', {
 // subscription_payments
 //
 // Append-only payment/webhook history — one row per checkout attempt or
-// renewal cycle. providerReference is set at checkout-creation time (OxaPay
-// track_id / Stripe session id / Paystack reference we generate ourselves)
-// so the webhook can look the row up idempotently instead of trusting
-// provider metadata. checkoutUrl surfaces the pay link for the OxaPay
-// renewal-emulation job (no redirect flow there — it's a background job,
-// not a live checkout).
+// renewal cycle. The row is inserted 'pending' first (so its own id can be
+// handed to the provider as order_id/client_reference_id/reference), then
+// updated with providerReference once the provider call returns it (OxaPay
+// track_id / Stripe session id / Paystack reference we generate ourselves) —
+// nullable for that brief window, and so the webhook can look the row up
+// idempotently instead of trusting provider metadata. checkoutUrl surfaces
+// the pay link for the OxaPay renewal-emulation job (no redirect flow there
+// — it's a background job, not a live checkout).
 // ---------------------------------------------------------------------------
 export const subscriptionPayments = pgTable('subscription_payments', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -720,7 +722,7 @@ export const subscriptionPayments = pgTable('subscription_payments', {
   billingInterval: varchar('billing_interval', { length: 20 }),
   promoCodeId: uuid('promo_code_id').references(() => promoCodes.id),
   provider: varchar('provider', { length: 20 }).notNull(), // oxapay | stripe | paystack
-  providerReference: text('provider_reference').notNull(), // track_id / session-or-invoice id / reference
+  providerReference: text('provider_reference'), // track_id / session-or-invoice id / reference
   amount: numeric('amount', { precision: 20, scale: 2 }).notNull(),
   discountApplied: numeric('discount_applied', { precision: 20, scale: 2 }).notNull().default('0'),
   currency: varchar('currency', { length: 10 }).notNull().default('USD'),
