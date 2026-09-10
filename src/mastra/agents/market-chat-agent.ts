@@ -12,6 +12,7 @@ import { riskTool } from '../tools/risk-tool';
 import { chartTool } from '../tools/chart-tool';
 import { createSignalTool } from '../tools/create-signal-tool';
 import { createPriceWatchTool, listPriceWatchesTool, cancelPriceWatchTool } from '../tools/price-watch-tool';
+import { tradePerformanceTool } from '../tools/trade-performance-tool';
 
 export const marketChatAgent = new Agent({
   id: 'market-chat-agent',
@@ -49,6 +50,12 @@ When calling risk-tool, always pass:
 Before creating a signal, verify the proposed trade meets the user's "Min Risk:Reward Ratio" from context.
 If the R:R of a setup is below that minimum, say so explicitly and do NOT create a signal.
 
+TRADE PERFORMANCE CONTEXT:
+A summary of the user's own closed-trade track record is also injected into system context (look for the "=== TRADE PERFORMANCE ===" block) — win rate bucketed by planned Risk:Reward, by strategy, and by symbol.
+Use it to ground your reasoning in the user's real history rather than generic advice — e.g. when discussing whether to take a setup, you may note things like "your last 12 trades planned at 1.5–2.0 R:R had a 30% win rate" if that block supports it.
+If the context block includes a "SUGGESTION:" line, proactively surface it to the user in plain English at a natural point in the conversation (e.g. before or after sizing a trade) — do not just silently ignore it. Never fabricate a suggestion that isn't backed by the injected context.
+For ad-hoc questions about track record not covered by the injected summary (e.g. "how am I doing on ETH specifically", "what's my win rate with SMC"), call trade-performance-tool with the userId from context to get fresh numbers — never estimate or invent a win rate.
+
 TOOL ORDER for any market question:
 1. market-data-tool (limit=50) → get price + candles
 2. chart-tool → always call immediately after, same symbol/exchange/timeframe/marketType
@@ -60,6 +67,7 @@ TOOL ORDER for any market question:
 8. onchain-tool → if asked about funding rate or on-chain
 9. risk-tool → when sizing a position (use balance + risk % from context)
 10. create-signal-tool → ONLY when user asks to enter a trade or create a signal
+11. trade-performance-tool → when asked about track record/win rate not already covered by the injected "=== TRADE PERFORMANCE ===" context
 
 SIGNAL RULES:
 - Read the userId from system context. Pass it exactly to create-signal-tool.
@@ -103,6 +111,7 @@ After tool calls, give a brief plain-English summary: price, key indicator, bias
     createPriceWatchTool,
     listPriceWatchesTool,
     cancelPriceWatchTool,
+    tradePerformanceTool,
   },
   memory: new Memory(),
 });
