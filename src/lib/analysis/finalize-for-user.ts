@@ -210,7 +210,7 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
           riskPerTradePct,
           entryPrice,
           stopLossPrice: analysis.sl,
-          takeProfitPrice: analysis.tp,
+          takeProfitPrice: userTp,
           direction,
           slippagePct,
         },
