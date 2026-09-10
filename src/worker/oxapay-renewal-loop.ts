@@ -28,9 +28,17 @@ import { createOxapayInvoice } from '@/lib/billing/providers/oxapay';
 import { addBillingInterval, type BillingInterval } from '@/lib/billing/period';
 
 const DEFAULT_INTERVAL_MS = 60 * 60_000; // hourly
-/** Create the next invoice this far ahead of current_period_end. */
-const RENEWAL_LEAD_DAYS = 3;
+/**
+ * Create the next invoice this far ahead of current_period_end. Matched to
+ * OxaPay's documented invoice `lifetime` cap (2880 minutes = 2 days) below —
+ * if this were longer than the invoice's own lifetime, the invoice would
+ * expire *before* the period it's meant to cover even starts, and the
+ * existingPending guard would then block a replacement until the current
+ * period actually lapses.
+ */
+const RENEWAL_LEAD_DAYS = 2;
 const RENEWAL_LEAD_MS = RENEWAL_LEAD_DAYS * 24 * 60 * 60_000;
+const OXAPAY_INVOICE_LIFETIME_CAP_MINUTES = 2880;
 
 function appBaseUrl(): string {
   return process.env.APP_BASE_URL ?? 'http://localhost:3000';
@@ -117,9 +125,10 @@ async function createUpcomingRenewalInvoices(): Promise<void> {
         callbackUrl: `${appBaseUrl()}/api/webhooks/oxapay`,
         description: `Renewal — plan ${sub.planId} (${sub.billingInterval})`,
         // OxaPay invoices default to a 60-minute lifetime — give renewal
-        // invoices the full lead window so a slow-to-pay user isn't
-        // penalized for the job running earlier in the window.
-        lifetimeMinutes: Math.min(RENEWAL_LEAD_DAYS * 24 * 60, 2880),
+        // invoices the full lead window (capped at OxaPay's documented
+        // maximum) so a slow-to-pay user isn't penalized for the job
+        // running earlier in the window.
+        lifetimeMinutes: Math.min(RENEWAL_LEAD_DAYS * 24 * 60, OXAPAY_INVOICE_LIFETIME_CAP_MINUTES),
       });
 
       await db

@@ -13,12 +13,17 @@
  *  - Callback signature: HTTP header `HMAC`, HMAC-SHA512 of the raw request
  *    body, keyed by the merchant API key.
  *  - Payment status values include (at least) "Paying" (awaiting
- *    confirmation) and "Paid" (confirmed/credited) — this codebase also
- *    treats "Expired"/"Failed" as terminal-non-paid since OxaPay invoices
- *    expire after `lifetime` minutes; that specific enum member could not
- *    be independently re-verified against a live sandbox in this
- *    environment — treat any status other than "Paid" as not-yet-paid
- *    rather than silently activating a subscription on an unrecognized value.
+ *    confirmation) and "Paid" (confirmed/credited), verified from docs.
+ *    "Expired"/"Failed" are ASSUMED terminal-non-paid status strings (OxaPay
+ *    invoices expire after `lifetime` minutes) — this codebase's webhook
+ *    handler flips a pending payment row to 'expired'/'failed' on seeing
+ *    those exact strings and treats any other non-"Paid" status (e.g. still
+ *    "Paying") as in-progress with no state change. The exact spelling of
+ *    the expired/failed enum members could not be independently
+ *    re-verified against a live sandbox in this environment — if OxaPay
+ *    uses different strings, those callbacks just fall through as
+ *    no-ops (safe) rather than crashing, but a pending row could then sit
+ *    stuck instead of clearing.
  *
  * NOT live-tested — no sandbox credentials in this environment. Built
  * strictly against the documented request/response shape above.

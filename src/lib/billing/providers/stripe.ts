@@ -20,6 +20,14 @@ import crypto from 'node:crypto';
 
 const STRIPE_API_BASE = 'https://api.stripe.com/v1';
 
+// Pinned explicitly rather than left to the account's dashboard default —
+// Stripe API versions from 2025-03-31 ("basil") onward moved
+// current_period_start/end off the Subscription object onto
+// items.data[].current_period_* and restructured Invoice's subscription
+// reference, which would silently break getStripeSubscription's shape below.
+// This code is written against the pre-basil shape.
+const STRIPE_API_VERSION = '2024-06-20';
+
 function requireSecretKey(): string {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) throw new Error('STRIPE_SECRET_KEY is not configured');
@@ -40,6 +48,7 @@ async function stripeRequest<T>(path: string, params: Record<string, string | nu
     headers: {
       Authorization: `Bearer ${requireSecretKey()}`,
       'Content-Type': 'application/x-www-form-urlencoded',
+      'Stripe-Version': STRIPE_API_VERSION,
     },
     body: toFormBody(params),
   });
@@ -52,7 +61,7 @@ async function stripeRequest<T>(path: string, params: Record<string, string | nu
 
 async function stripeGet<T>(path: string): Promise<T> {
   const res = await fetch(`${STRIPE_API_BASE}${path}`, {
-    headers: { Authorization: `Bearer ${requireSecretKey()}` },
+    headers: { Authorization: `Bearer ${requireSecretKey()}`, 'Stripe-Version': STRIPE_API_VERSION },
   });
   const json = await res.json();
   if (!res.ok) {

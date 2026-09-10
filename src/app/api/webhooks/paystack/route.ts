@@ -12,7 +12,12 @@
  *    normal pending->paid path) and a plan-driven renewal charge Paystack
  *    initiates on its own (no matching pending row — a fresh 'paid' row is
  *    inserted directly, keyed idempotently on (provider, provider_reference)
- *    == the charge's own reference).
+ *    == the charge's own reference). Renewal charges are matched to a user
+ *    via `data.customer.customer_code` against user_subscriptions
+ *    .providerCustomerId — NOT `data.subscription_code`, which
+ *    charge.success does not reliably carry (that field lives on
+ *    subscription and invoice events instead); customer_code is stored on
+ *    providerCustomerId from the very first successful charge.
  *
  * Deferred (not implemented — see PR description): Paystack's dedicated
  * subscription lifecycle events (subscription.create/disable/not_renew) for
@@ -21,7 +26,7 @@
  * doesn't capture every subscription-status nuance those events would.
  */
 
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { subscriptionPayments, userSubscriptions } from '@/db/schema';
 import { verifyPaystackSignature, type PaystackChargeSuccessEvent } from '@/lib/billing/providers/paystack';
@@ -71,21 +76,23 @@ export async function POST(req: Request) {
     }
 
     // No pending row for this reference — a plan-driven renewal charge
-    // Paystack initiated on its own. Look the subscription up by the plan
-    // code Paystack reports, matched against our stored user_subscriptions.
-    const subscriptionCode = event.data.subscription_code;
-    if (!subscriptionCode) {
-      console.warn(`[webhooks/paystack] charge.success with unknown reference=${reference} and no subscription_code`);
+    // Paystack initiated on its own. charge.success does not reliably carry
+    // subscription_code (that's a subscription.*/invoice.* event field), so
+    // match on the customer_code stored on user_subscriptions
+    // .providerCustomerId from the very first successful charge instead.
+    const customerCode = event.data.customer?.customer_code;
+    if (!customerCode) {
+      console.warn(`[webhooks/paystack] charge.success with unknown reference=${reference} and no customer_code`);
       return Response.json({ ok: true });
     }
 
     const [existingSub] = await db
       .select()
       .from(userSubscriptions)
-      .where(eq(userSubscriptions.providerSubscriptionId, subscriptionCode))
+      .where(and(eq(userSubscriptions.providerCustomerId, customerCode), eq(userSubscriptions.paymentProvider, 'paystack')))
       .limit(1);
     if (!existingSub) {
-      console.warn(`[webhooks/paystack] charge.success for unknown subscription_code=${subscriptionCode}`);
+      console.warn(`[webhooks/paystack] charge.success for unknown customer_code=${customerCode}`);
       return Response.json({ ok: true });
     }
 

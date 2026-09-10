@@ -92,6 +92,18 @@ export async function POST(req: Request) {
     promoDiscountScope = validation.promo.discountScope as 'first_period' | 'recurring';
   }
 
+  // Paystack recurring subscriptions are driven entirely by the plan code's
+  // own configured amount — /transaction/initialize ignores a custom
+  // `amount` whenever `plan` is also set, so an ad-hoc discount can never
+  // actually apply to a Paystack recurring plan. Reject rather than silently
+  // recording a discounted amount while the customer is charged full price.
+  if (provider === 'paystack' && price.providerPriceId?.paystack && discountApplied > 0) {
+    return NextResponse.json(
+      { error: 'Promo codes are not supported for this plan on Paystack — its recurring billing uses a fixed plan-code amount.' },
+      { status: 400 },
+    );
+  }
+
   const finalAmount = Math.max(0, Math.round((baseAmount - discountApplied) * 100) / 100);
 
   const now = new Date();

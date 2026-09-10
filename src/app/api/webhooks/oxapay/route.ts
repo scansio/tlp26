@@ -11,7 +11,7 @@
  * set at checkout time), not by trusting any other field in the payload.
  */
 
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { subscriptionPayments } from '@/db/schema';
 import { verifyOxapayCallbackSignature, isOxapayPaid, type OxapayCallbackPayload } from '@/lib/billing/providers/oxapay';
@@ -44,8 +44,20 @@ export async function POST(req: Request) {
   }
 
   if (!isOxapayPaid(payload)) {
-    // Not a terminal-paid status yet (e.g. still "Paying") — acknowledge,
-    // no state change. A later callback with status "Paid" will activate it.
+    // Terminal non-paid statuses ("Expired", "Failed") flip a still-pending
+    // row so it stops looking "pending" forever — this matters for
+    // src/worker/oxapay-renewal-loop.ts's existingPending guard, which
+    // otherwise treats a dead invoice as still outstanding and never issues
+    // a replacement. Anything else (e.g. "Paying") is a genuine in-progress
+    // state — acknowledge with no state change; a later "Paid"/terminal
+    // callback will resolve it.
+    const terminalNonPaid = payload.status === 'Expired' || payload.status === 'Failed';
+    if (terminalNonPaid) {
+      await db
+        .update(subscriptionPayments)
+        .set({ status: payload.status === 'Expired' ? 'expired' : 'failed' })
+        .where(and(eq(subscriptionPayments.id, orderId), eq(subscriptionPayments.status, 'pending')));
+    }
     return Response.json({ ok: true });
   }
 

@@ -5,6 +5,11 @@
  * STRIPE_WEBHOOK_SECRET, ±5min tolerance) before ever touching the DB.
  * See src/lib/billing/providers/stripe.ts for the documented shapes this
  * was built against; NOT live-tested (no Stripe test credentials here).
+ * NOTE: incoming webhook event payload shape is governed by the webhook
+ * endpoint's own configured API version (a Dashboard setting) — independent
+ * of the version providers/stripe.ts pins on its own outgoing calls — so
+ * invoice.paid reads the subscription reference defensively (old- and
+ * new-shape) rather than assuming one.
  *
  * Handled events:
  *  - checkout.session.completed — initial subscription purchase. Looks up
@@ -86,23 +91,39 @@ export async function POST(req: Request) {
           id: string;
           customer: string;
           subscription: string | null;
+          billing_reason?: string;
           amount_paid: number;
           currency: string;
           lines?: { data?: { period?: { start: number; end: number } }[] };
+          // Newer Stripe API versions ("basil", 2025-03-31+) move the
+          // subscription reference here instead of the top-level field above
+          // — the outgoing API calls in providers/stripe.ts pin an older
+          // version, but this *incoming* webhook payload's shape is governed
+          // by the endpoint's own configured API version (a Dashboard
+          // setting), which this code can't control — so both shapes are
+          // checked defensively rather than assumed.
+          parent?: { subscription_details?: { subscription?: string | null } };
         };
-        if (!invoice.subscription) break; // one-off invoice, not a subscription renewal
+        // The first invoice for a new subscription (billing_reason ===
+        // 'subscription_create') is already handled by
+        // checkout.session.completed above — processing it again here would
+        // insert a second paid row for the same charge.
+        if (invoice.billing_reason === 'subscription_create') break;
+
+        const subscriptionId = invoice.subscription ?? invoice.parent?.subscription_details?.subscription ?? null;
+        if (!subscriptionId) break; // one-off invoice, not a subscription renewal
 
         const [existingSub] = await db
           .select()
           .from(userSubscriptions)
-          .where(eq(userSubscriptions.providerSubscriptionId, invoice.subscription))
+          .where(eq(userSubscriptions.providerSubscriptionId, subscriptionId))
           .limit(1);
         if (!existingSub) {
           // The *first* invoice for a subscription is covered by
           // checkout.session.completed above (arrives first in normal
           // ordering) — an invoice.paid with no matching subscription yet is
           // logged and skipped rather than guessed at.
-          console.warn(`[webhooks/stripe] invoice.paid for unknown subscription=${invoice.subscription}`);
+          console.warn(`[webhooks/stripe] invoice.paid for unknown subscription=${subscriptionId}`);
           break;
         }
 
