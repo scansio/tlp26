@@ -20,6 +20,7 @@ import crypto from 'node:crypto';
 import { db } from '@/db';
 import { autoTradeJobs } from '@/db/schema';
 import { runMarketAnalysis } from '@/lib/analysis/market-analysis';
+import { resolvePlansForUsers } from '@/lib/billing/plan';
 import { fetchEligibleUsers } from './eligibility';
 import { groupIntoConfluenceGroups } from './grouping';
 import { processAutoTradeJobs } from './job-queue';
@@ -32,6 +33,12 @@ export async function runTick(mastra: any): Promise<void> {
     if (eligibleUsers.length === 0) {
       console.log('[worker] tick: no eligible users');
     } else {
+      // Resolve every eligible user's plan tier once per tick (batched, not
+      // per-job) — job_priority (see subscription_plans) feeds
+      // auto_trade_jobs.priority below, replacing the old hardcoded default
+      // so paid/BYOK users' jobs are claimed ahead of free-tier ones (see
+      // job-queue.ts's claim query: ORDER BY priority DESC, created_at ASC).
+      const plansByUser = await resolvePlansForUsers(eligibleUsers.map((u) => u.userId));
       const groups = groupIntoConfluenceGroups(eligibleUsers);
       console.log(
         `[worker] tick: ${eligibleUsers.length} eligible user(s) -> ${groups.length} confluence group(s)`,
@@ -63,6 +70,7 @@ export async function runTick(mastra: any): Promise<void> {
             exchange: user.exchange,
             marketType: group.referenceMarketType,
             status: 'pending' as const,
+            priority: plansByUser.get(user.userId)?.jobPriority ?? 0,
             payload: analysis,
           }));
 

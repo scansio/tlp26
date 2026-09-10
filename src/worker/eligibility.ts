@@ -23,6 +23,8 @@ import { checkCircuitBreaker } from '@/lib/circuit-breaker';
 import { sendNotification } from '@/lib/notifications';
 import { normalizeSymbolList } from '@/lib/symbols';
 import { deriveTradingContext, type ExchangeName, type MarketType } from '@/lib/user-trading-context';
+import { resolvePlansForUsers } from '@/lib/billing/plan';
+import { getUsageForUsersToday, hasAutoTradeQuota } from '@/lib/billing/usage';
 import { buildSupportedSymbolKey, fetchActiveSupportedSymbolKeySet } from './supported-symbols';
 import { chunk } from './util';
 
@@ -137,10 +139,35 @@ export async function fetchEligibleUsers(): Promise<EligibleUser[]> {
 
   const withSymbols = candidates.filter((c) => c.symbols.length > 0);
 
+  // --- Auto-trade run quota (Phase 5) ---
+  // Filters out users who have already used up their plan's daily auto-trade
+  // run allowance (UTC calendar day boundary — see src/lib/billing/usage.ts).
+  // This is a first pass, not the only enforcement point: jobs already
+  // enqueued before a user hit their cap still drain from the durable queue
+  // later in the same tick or a subsequent one, so src/worker/job-queue.ts's
+  // processJob re-checks the same quota right before finalizing each job.
+  const withSymbolsUserIds = withSymbols.map((c) => c.userId);
+  const [plansByUser, usageByUser] = await Promise.all([
+    resolvePlansForUsers(withSymbolsUserIds),
+    getUsageForUsersToday(withSymbolsUserIds),
+  ]);
+  const withQuota = withSymbols.filter((candidate) => {
+    const plan = plansByUser.get(candidate.userId);
+    if (!plan) return true; // fail open — resolvePlansForUsers always returns an entry per requested id
+    const usage = usageByUser.get(candidate.userId) ?? { autoTradeRunsUsed: 0, chatMessagesUsed: 0 };
+    const allowed = hasAutoTradeQuota(usage, plan);
+    if (!allowed) {
+      console.log(
+        `[worker] userId=${candidate.userId} at daily auto-trade quota (${usage.autoTradeRunsUsed}/${plan.autoTradeRunsPerDay}, plan=${plan.name}) — skipping this tick`,
+      );
+    }
+    return allowed;
+  });
+
   // Bounded eligibility check — batched, not one unbounded Promise.all, so a
   // large user base doesn't starve the shared pg.Pool.
   const eligible: EligibleUser[] = [];
-  for (const batch of chunk(withSymbols, 5)) {
+  for (const batch of chunk(withQuota, 5)) {
     const results = await Promise.all(
       batch.map(async (candidate) => {
         const cb = await checkCircuitBreaker(candidate.userId, { silent: true });

@@ -10,6 +10,8 @@ import { userRiskProfiles, userExchanges } from '@/db/schema'
 import { decrypt } from '@/lib/crypto'
 import { configureMarketType, type MarketType } from '@/mastra/tools/market-symbol'
 import { getUserTradePerformance } from '@/lib/analysis/trade-performance'
+import { resolvePlanForUser } from '@/lib/billing/plan'
+import { getUsageToday, hasChatQuota, incrementChatMessageUsage } from '@/lib/billing/usage'
 import { NextResponse } from 'next/server'
 
 // ---------------------------------------------------------------------------
@@ -182,9 +184,29 @@ export async function POST(req: Request) {
     return new NextResponse('Unauthorized', { status: 401 });
   }
 
+  // --- Chat message quota (Phase 5 usage metering, UTC calendar day) ---
+  const plan = await resolvePlanForUser(userId)
+  const usage = await getUsageToday(userId)
+  if (!hasChatQuota(usage, plan)) {
+    return NextResponse.json(
+      {
+        error: 'Daily chat message limit reached',
+        limit: plan.chatMessagesPerDay,
+        used: usage.chatMessagesUsed,
+        plan: plan.name,
+      },
+      { status: 429 },
+    )
+  }
+
   const params = await req.json()
   const THREAD_ID = params.threadId ?? userId
   const RESOURCE_ID = `chat-${userId}`
+
+  // Counts this message as "used" now that quota is confirmed available —
+  // one POST is one message, regardless of how long the resulting stream
+  // takes or whether the client disconnects mid-stream.
+  await incrementChatMessageUsage(userId)
 
   // Build risk + performance context in parallel with the rest of request handling
   const [riskContext, performanceContext] = await Promise.all([
