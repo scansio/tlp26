@@ -218,6 +218,13 @@
       "when": 1788979127529,
       "tag": "0030_stale_earthquake",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1789046001468,
+      "tag": "0031_foamy_malice",
+      "breakpoints": true
     }
   ]
 }
