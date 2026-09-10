@@ -2,6 +2,7 @@ import { handleChatStream } from '@mastra/ai-sdk'
 import { toAISdkV5Messages } from '@mastra/ai-sdk/ui'
 import { createUIMessageStreamResponse } from 'ai'
 import { auth } from '@clerk/nextjs/server'
+import { RequestContext } from '@mastra/core/request-context'
 import ccxt, { type Exchange } from 'ccxt'
 import { and, eq } from 'drizzle-orm'
 import { mastra } from '@/mastra'
@@ -10,6 +11,7 @@ import { userRiskProfiles, userExchanges } from '@/db/schema'
 import { decrypt } from '@/lib/crypto'
 import { configureMarketType, type MarketType } from '@/mastra/tools/market-symbol'
 import { getUserTradePerformance } from '@/lib/analysis/trade-performance'
+import { BYOK_USER_ID_CONTEXT_KEY } from '@/lib/byok/resolve-model'
 import { NextResponse } from 'next/server'
 
 // ---------------------------------------------------------------------------
@@ -217,6 +219,10 @@ export async function POST(req: Request) {
         thread: THREAD_ID,
         resource: RESOURCE_ID,
       },
+      // Server-derived only — never take this from client-supplied `params`.
+      // Read by market-chat-agent's dynamic model resolver (BYOK) to look up
+      // this user's connected LLM key, if any. See src/lib/byok/resolve-model.ts.
+      requestContext: new RequestContext([[BYOK_USER_ID_CONTEXT_KEY, userId]]),
     },
   })
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
