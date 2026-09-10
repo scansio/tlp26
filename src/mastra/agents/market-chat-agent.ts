@@ -1,6 +1,8 @@
 import { Agent } from '@mastra/core/agent';
+import type { RequestContext } from '@mastra/core/request-context';
 import { Memory } from '@mastra/memory';
 import { defaultModel } from '../model';
+import { resolveByokModel, BYOK_USER_ID_CONTEXT_KEY } from '@/lib/byok/resolve-model';
 import { marketDataTool } from '../tools/market-data-tool';
 import { indicatorsTool } from '../tools/indicators-tool';
 import { newsTool } from '../tools/news-tool';
@@ -12,6 +14,40 @@ import { riskTool } from '../tools/risk-tool';
 import { chartTool } from '../tools/chart-tool';
 import { createSignalTool } from '../tools/create-signal-tool';
 import { createPriceWatchTool, listPriceWatchesTool, cancelPriceWatchTool } from '../tools/price-watch-tool';
+import { tradePerformanceTool } from '../tools/trade-performance-tool';
+
+// ---------------------------------------------------------------------------
+// Phase 4 note — BYOK (bring your own model key) integration point.
+//
+// This is the correct place to plug in a per-user model/key: unlike
+// trading-agent (shared confluence-group decision, no per-user context —
+// see that file's Phase 6 note), market-chat-agent is already the per-user,
+// resource-scoped conversational surface (Memory keyed by resourceId, invoked
+// from src/app/api/chat/route.ts which has the requesting userId).
+//
+// `model` is a single Mastra "dynamic argument" function shared by every
+// caller — it does NOT create one Agent instance per user/provider. Per
+// current @mastra/core (v1.50.1, confirmed by reading
+// node_modules/@mastra/core/dist/types/dynamic-argument.d.ts and the
+// resolveModelConfig/resolveModelSelection implementation in
+// dist/chunk-AR6WPTSV.js + dist/chunk-OE4IEL7C.js) it's invoked per request
+// as `({ requestContext, mastra }) => MastraModelConfig`, where
+// requestContext is populated from AgentExecutionOptions.requestContext
+// passed into handleChatStream()/agent.stream() for that call. Returning
+// `{ id: "provider/model", apiKey }` (an OpenAICompatibleConfig) routes that
+// one request through Mastra's built-in model router using the given
+// apiKey instead of the gateway's own configured key — no custom Gateway
+// registration needed since ai_models.modelId already stores the full
+// "provider/model" router id.
+// ---------------------------------------------------------------------------
+async function resolveMarketChatModel({ requestContext }: { requestContext: RequestContext }) {
+  const userId = requestContext.get(BYOK_USER_ID_CONTEXT_KEY) as string | undefined;
+  const byok = await resolveByokModel(userId).catch((err) => {
+    console.error('[market-chat-agent] BYOK model resolution failed, falling back to default:', err);
+    return null;
+  });
+  return byok ?? defaultModel;
+}
 
 export const marketChatAgent = new Agent({
   id: 'market-chat-agent',
@@ -49,6 +85,12 @@ When calling risk-tool, always pass:
 Before creating a signal, verify the proposed trade meets the user's "Min Risk:Reward Ratio" from context.
 If the R:R of a setup is below that minimum, say so explicitly and do NOT create a signal.
 
+TRADE PERFORMANCE CONTEXT:
+A summary of the user's own closed-trade track record is also injected into system context (look for the "=== TRADE PERFORMANCE ===" block) — win rate bucketed by planned Risk:Reward, by strategy, and by symbol.
+Use it to ground your reasoning in the user's real history rather than generic advice — e.g. when discussing whether to take a setup, you may note things like "your last 12 trades planned at 1.5–2.0 R:R had a 30% win rate" if that block supports it.
+If the context block includes a "SUGGESTION:" line, proactively surface it to the user in plain English at a natural point in the conversation (e.g. before or after sizing a trade) — do not just silently ignore it. Never fabricate a suggestion that isn't backed by the injected context.
+For ad-hoc questions about track record not covered by the injected summary (e.g. "how am I doing on ETH specifically", "what's my win rate with SMC"), call trade-performance-tool with the userId from context to get fresh numbers — never estimate or invent a win rate.
+
 TOOL ORDER for any market question:
 1. market-data-tool (limit=50) → get price + candles
 2. chart-tool → always call immediately after, same symbol/exchange/timeframe/marketType
@@ -60,6 +102,7 @@ TOOL ORDER for any market question:
 8. onchain-tool → if asked about funding rate or on-chain
 9. risk-tool → when sizing a position (use balance + risk % from context)
 10. create-signal-tool → ONLY when user asks to enter a trade or create a signal
+11. trade-performance-tool → when asked about track record/win rate not already covered by the injected "=== TRADE PERFORMANCE ===" context
 
 SIGNAL RULES:
 - Read the userId from system context. Pass it exactly to create-signal-tool.
@@ -88,7 +131,7 @@ WATCH RULES (create-price-watch-tool / list-price-watches-tool / cancel-price-wa
 ERROR RECOVERY: If a tool returns an error, do NOT stop silently. Write a plain-English message explaining what went wrong and what the user can do. For symbol-not-found errors, correct the format yourself (e.g. BEATUSDT → BEA/USDT) and retry the tool before responding. Always end every response with at least one text message — never finish on a bare tool call.
 
 After tool calls, give a brief plain-English summary: price, key indicator, bias, confidence.`,
-  model: defaultModel,
+  model: resolveMarketChatModel,
   tools: {
     marketDataTool,
     chartTool,
@@ -103,6 +146,7 @@ After tool calls, give a brief plain-English summary: price, key indicator, bias
     createPriceWatchTool,
     listPriceWatchesTool,
     cancelPriceWatchTool,
+    tradePerformanceTool,
   },
   memory: new Memory(),
 });

@@ -33,6 +33,8 @@ export interface UserTradingContext {
   executionMode: string; // 'paper' | 'live'
   tradingMode: string; // 'auto' | 'manual'
   paperBalanceUsd: string | null;
+  /** User's minimum acceptable R:R for a trade — used to derive this user's own TP (see finalizeForUser). */
+  minRiskRewardRatio: number;
 }
 
 type RiskProfileRow = typeof userRiskProfiles.$inferSelect;
@@ -60,6 +62,7 @@ export function deriveTradingContext(
     executionMode: profile.executionMode ?? 'paper',
     tradingMode: profile.tradingMode ?? 'manual',
     paperBalanceUsd: profile.paperBalanceUsd ?? null,
+    minRiskRewardRatio: profile.minRiskRewardRatio ? parseFloat(profile.minRiskRewardRatio) : 1.5,
   };
 }
 

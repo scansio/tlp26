@@ -1,88 +1,10 @@
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { userRiskProfiles } from '@/db/schema';
 import { normalizeSymbolList } from '@/lib/symbols';
-
-// ---------------------------------------------------------------------------
-// Validation schema
-// ---------------------------------------------------------------------------
-const riskProfileSchema = z.object({
-  strategies: z
-    .array(z.string())
-    .min(1, 'At least one strategy is required'),
-  maxTradesPerDay: z
-    .number()
-    .int()
-    .min(1)
-    .max(20, 'maxTradesPerDay cannot exceed 20'),
-  riskPerTradePct: z
-    .number()
-    .positive()
-    .max(10, 'riskPerTradePct cannot exceed 10%'),
-  maxDailyLossPct: z
-    .number()
-    .positive()
-    .max(20, 'maxDailyLossPct cannot exceed 20%'),
-  executionMode: z.enum(['auto', 'manual']),
-  preferredTimeframes: z.array(z.string()).optional().default([]),
-  allowedSymbols: z.array(z.string()).optional().default([]),
-  // Slippage estimate as a percentage of notional (default 0.05%)
-  slippagePct: z
-    .number()
-    .min(0)
-    .max(1, 'slippagePct cannot exceed 1%')
-    .optional()
-    .default(0.05),
-  // Virtual paper balance (user-configurable starting equity, default $10,000)
-  paperBalanceUsd: z
-    .number()
-    .positive()
-    .max(10_000_000, 'paperBalanceUsd cannot exceed $10M')
-    .optional()
-    .default(10_000),
-  // Minimum R:R ratio required to take a trade (default 1.5)
-  minRiskRewardRatio: z
-    .number()
-    .min(1, 'minRiskRewardRatio must be at least 1')
-    .max(10, 'minRiskRewardRatio cannot exceed 10')
-    .optional()
-    .default(1.5),
-  marketType: z.enum(['spot', 'swap']).optional().default('spot'),
-  defaultLeverage: z.number().int().min(1).max(125).optional().default(1),
-  marginMode: z.enum(['cross', 'isolated']).optional().default('cross'),
-  // Trailing-position profit lock: periodically materialize the software-ratcheted
-  // trailing SL as a real resting exchange order once a trailing live position is
-  // in profit — see src/lib/position-monitor.ts. No effect on fixed-mode positions.
-  profitLockEnabled: z.boolean().optional().default(false),
-  // Exit mode default for new signals: 'fixed' = SL/TP stay at their opening
-  // levels; 'trailing' = SL (and, after the initial TP is hit, TP too) trails
-  // price by the percentages below. A signal can still override this per-trade
-  // (see src/lib/exit-config.ts) — this is only the account-level default.
-  exitMode: z.enum(['fixed', 'trailing']).optional().default('fixed'),
-  trailSlPct: z
-    .number()
-    .positive()
-    .max(20, 'trailSlPct cannot exceed 20%')
-    .optional()
-    .default(1.0),
-  trailTpPct: z
-    .number()
-    .positive()
-    .max(50, 'trailTpPct cannot exceed 50%')
-    .optional()
-    .default(2.0),
-  trailActivationPct: z
-    .number()
-    .min(0)
-    .max(50, 'trailActivationPct cannot exceed 50%')
-    .optional()
-    .default(0.0),
-});
-
-type RiskProfileInput = z.infer<typeof riskProfileSchema>;
+import { riskProfileSchema, toResponse, type RiskProfileInput } from './shared';
 
 // ---------------------------------------------------------------------------
 // GET /api/risk-profile
@@ -149,6 +71,12 @@ export async function POST(req: Request) {
     typeof body === 'object' && body !== null ? Object.keys(body) : [],
   );
   const provided = (key: string) => bodyKeys.has(key);
+  // Phase 5 stretch goal (deferred — not enforced here): the free plan is
+  // meant to cap allowedSymbols to 1 entry. That's a UI/API-level policy,
+  // not a DB constraint — the hook point is here, gated on
+  // `(await resolvePlanForUser(userId)).name === 'free'` (see
+  // src/lib/billing/plan.ts), truncating/rejecting `data.allowedSymbols`
+  // beyond the cap before normalizeSymbolList runs.
   const allowedSymbols = normalizeSymbolList(data.allowedSymbols);
 
   const [upserted] = await db
@@ -242,36 +170,3 @@ export async function DELETE() {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-type ProfileRow = typeof userRiskProfiles.$inferSelect;
-
-function toResponse(profile: ProfileRow) {
-  return {
-    id: profile.id,
-    userId: profile.userId,
-    strategies: profile.strategies,
-    maxTradesPerDay: profile.maxTradesPerDay,
-    riskPerTradePct: Number(profile.riskPerTradePct),
-    maxDailyLossPct: Number(profile.maxDailyLossPct),
-    executionMode: profile.tradingMode, // auto | manual
-    preferredTimeframes: profile.preferredTimeframes,
-    allowedSymbols: profile.allowedSymbols,
-    slippagePct: Number(profile.slippagePct ?? '0.05'),
-    minRiskRewardRatio: Number(profile.minRiskRewardRatio ?? '1.50'),
-    marketType: profile.marketType ?? 'spot',
-    defaultLeverage: profile.defaultLeverage ?? 1,
-    marginMode: profile.marginMode ?? 'cross',
-    profitLockEnabled: profile.profitLockEnabled ?? false,
-    exitMode: profile.exitMode ?? 'fixed',
-    trailSlPct: Number(profile.trailSlPct ?? '1.000'),
-    trailTpPct: Number(profile.trailTpPct ?? '2.000'),
-    trailActivationPct: Number(profile.trailActivationPct ?? '0.000'),
-    // Paper trading mode fields
-    paperMode: (profile.executionMode ?? 'paper') === 'paper', // true = paper, false = live
-    paperBalanceUsd: Number(profile.paperBalanceUsd ?? '10000.00'),
-    isActive: profile.isActive,
-    updatedAt: profile.updatedAt,
-  };
-}

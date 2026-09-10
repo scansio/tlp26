@@ -10,6 +10,12 @@
  * `strategies`/`preferredTimeframes` on user_risk_profiles don't currently
  * affect the analysis output at all (the agent prompt never includes them),
  * so they cannot fragment groups.
+ *
+ * Every symbol reaching this function has already been checked against
+ * `auto_trade_supported_symbols` by src/worker/eligibility.ts (upstream of
+ * this call in tick.ts) — grouping doesn't re-check the allowlist itself,
+ * since doing so here would just repeat a query eligibility.ts already ran
+ * once for the whole batch.
  */
 
 import type { EligibleUser, ExchangeName } from './eligibility';

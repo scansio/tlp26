@@ -43,6 +43,7 @@ export async function register() {
   const { startSignalExpiryLoop } = await import('@/worker/signal-expiry-loop');
   const { startAutoExecuteRetryLoop } = await import('@/worker/auto-execute-retry-loop');
   const { startEntryReconcileLoop } = await import('@/worker/entry-reconcile-loop');
+  const { startOxapayRenewalLoop } = await import('@/worker/oxapay-renewal-loop');
 
   console.log('[worker] starting — confluence-group trading worker (in-process)');
   scheduleWorkerTicks(mastra);
@@ -51,6 +52,7 @@ export async function register() {
   startSignalExpiryLoop();
   startAutoExecuteRetryLoop();
   startEntryReconcileLoop();
+  startOxapayRenewalLoop();
 
   if (process.env.WORKER_RUN_ON_BOOT === 'true') {
     console.log('[worker] WORKER_RUN_ON_BOOT=true — running one tick immediately');

@@ -30,6 +30,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { NotificationsSection } from './_components/notifications-section';
+import { LlmKeySection } from './_components/llm-key-section';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -729,6 +730,13 @@ export default function ExchangesPage() {
       {/* Notifications section                                               */}
       {/* ------------------------------------------------------------------ */}
       <NotificationsSection />
+
+      <Separator />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* BYOK (bring your own model key) section                             */}
+      {/* ------------------------------------------------------------------ */}
+      <LlmKeySection />
     </div>
   );
 }
