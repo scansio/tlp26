@@ -580,6 +580,35 @@ export const aiModels = pgTable('ai_models', {
 ]);
 
 // ---------------------------------------------------------------------------
+// user_llm_keys
+// BYOK (bring your own model key) — lets a user connect their own LLM
+// provider/model + API key for the personalized, per-user market-chat-agent
+// surface (src/mastra/agents/market-chat-agent.ts, invoked from
+// src/app/api/chat/route.ts). Optional: with no row here, the platform's
+// own configured model (src/mastra/model.ts's defaultModel) is used.
+// Deliberately NOT wired into trading-agent — that agent runs once per
+// confluence group shared across every user with no per-user context at
+// all, so a personal key has no sensible owner there (see trading-agent.ts's
+// "Phase 6 note").
+// One connected key per user (unique userId, upsert-on-connect — same
+// single-row-per-user shape as user_notifications) — connecting a new
+// provider/model replaces the previous one. The key is encrypted with the
+// same AES-256-GCM helper used for user_exchanges (src/lib/crypto.ts) and is
+// only decrypted at the point of use inside the model-resolution path.
+// ---------------------------------------------------------------------------
+export const userLlmKeys = pgTable('user_llm_keys', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 255 }).notNull().unique(),
+  providerId: uuid('provider_id').notNull().references(() => aiProviders.id),
+  modelId: uuid('model_id').notNull().references(() => aiModels.id),
+  encryptedKey: text('encrypted_key').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index('ulk_user_id_idx').on(table.userId),
+]);
+
+// ---------------------------------------------------------------------------
 // publisher_earnings
 // ---------------------------------------------------------------------------
 export const publisherEarnings = pgTable('publisher_earnings', {

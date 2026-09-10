@@ -1,6 +1,8 @@
 import { Agent } from '@mastra/core/agent';
+import type { RequestContext } from '@mastra/core/request-context';
 import { Memory } from '@mastra/memory';
 import { defaultModel } from '../model';
+import { resolveByokModel, BYOK_USER_ID_CONTEXT_KEY } from '@/lib/byok/resolve-model';
 import { marketDataTool } from '../tools/market-data-tool';
 import { indicatorsTool } from '../tools/indicators-tool';
 import { newsTool } from '../tools/news-tool';
@@ -13,6 +15,39 @@ import { chartTool } from '../tools/chart-tool';
 import { createSignalTool } from '../tools/create-signal-tool';
 import { createPriceWatchTool, listPriceWatchesTool, cancelPriceWatchTool } from '../tools/price-watch-tool';
 import { tradePerformanceTool } from '../tools/trade-performance-tool';
+
+// ---------------------------------------------------------------------------
+// Phase 4 note — BYOK (bring your own model key) integration point.
+//
+// This is the correct place to plug in a per-user model/key: unlike
+// trading-agent (shared confluence-group decision, no per-user context —
+// see that file's Phase 6 note), market-chat-agent is already the per-user,
+// resource-scoped conversational surface (Memory keyed by resourceId, invoked
+// from src/app/api/chat/route.ts which has the requesting userId).
+//
+// `model` is a single Mastra "dynamic argument" function shared by every
+// caller — it does NOT create one Agent instance per user/provider. Per
+// current @mastra/core (v1.50.1, confirmed by reading
+// node_modules/@mastra/core/dist/types/dynamic-argument.d.ts and the
+// resolveModelConfig/resolveModelSelection implementation in
+// dist/chunk-AR6WPTSV.js + dist/chunk-OE4IEL7C.js) it's invoked per request
+// as `({ requestContext, mastra }) => MastraModelConfig`, where
+// requestContext is populated from AgentExecutionOptions.requestContext
+// passed into handleChatStream()/agent.stream() for that call. Returning
+// `{ id: "provider/model", apiKey }` (an OpenAICompatibleConfig) routes that
+// one request through Mastra's built-in model router using the given
+// apiKey instead of the gateway's own configured key — no custom Gateway
+// registration needed since ai_models.modelId already stores the full
+// "provider/model" router id.
+// ---------------------------------------------------------------------------
+async function resolveMarketChatModel({ requestContext }: { requestContext: RequestContext }) {
+  const userId = requestContext.get(BYOK_USER_ID_CONTEXT_KEY) as string | undefined;
+  const byok = await resolveByokModel(userId).catch((err) => {
+    console.error('[market-chat-agent] BYOK model resolution failed, falling back to default:', err);
+    return null;
+  });
+  return byok ?? defaultModel;
+}
 
 export const marketChatAgent = new Agent({
   id: 'market-chat-agent',
@@ -96,7 +131,7 @@ WATCH RULES (create-price-watch-tool / list-price-watches-tool / cancel-price-wa
 ERROR RECOVERY: If a tool returns an error, do NOT stop silently. Write a plain-English message explaining what went wrong and what the user can do. For symbol-not-found errors, correct the format yourself (e.g. BEATUSDT → BEA/USDT) and retry the tool before responding. Always end every response with at least one text message — never finish on a bare tool call.
 
 After tool calls, give a brief plain-English summary: price, key indicator, bias, confidence.`,
-  model: defaultModel,
+  model: resolveMarketChatModel,
   tools: {
     marketDataTool,
     chartTool,
