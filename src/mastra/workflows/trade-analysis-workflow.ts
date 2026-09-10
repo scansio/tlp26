@@ -283,6 +283,7 @@ const finalizeSignalOutputSchema = z.object({
       message: z.string(),
     })
     .nullable(),
+  skippedReason: z.enum(['rr_exceeds_structure']).optional(),
 });
 
 const finalizeSignal = createStep({

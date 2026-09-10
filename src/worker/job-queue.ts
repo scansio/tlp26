@@ -115,8 +115,18 @@ async function claimBatch(limit: number): Promise<ClaimedJob[]> {
   }));
 }
 
-async function markDone(id: string): Promise<void> {
-  await db.update(autoTradeJobs).set({ status: 'done', updatedAt: new Date() }).where(eq(autoTradeJobs.id, id));
+/**
+ * `note` surfaces a successful-but-no-op outcome (e.g. finalizeForUser
+ * skipped signal creation because this user's minRiskRewardRatio couldn't be
+ * satisfied within real market structure) for debugging visibility, reusing
+ * the existing lastError column rather than adding a new status value or
+ * table for what is still a 'done' job, not a failure/retry candidate.
+ */
+async function markDone(id: string, note?: string): Promise<void> {
+  await db
+    .update(autoTradeJobs)
+    .set(note ? { status: 'done', updatedAt: new Date(), lastError: note } : { status: 'done', updatedAt: new Date() })
+    .where(eq(autoTradeJobs.id, id));
 }
 
 async function markFailed(id: string, attempts: number, lastError: string, terminal: boolean): Promise<void> {
@@ -143,14 +153,14 @@ async function processJob(job: ClaimedJob, mastra: unknown): Promise<void> {
   }
 
   try {
-    await finalizeForUser({
+    const result = await finalizeForUser({
       userId: job.userId,
       analysis: job.payload,
       analysisRunId: job.analysisRunId,
       executionExchange: job.exchange,
       mastra,
     });
-    await markDone(job.id);
+    await markDone(job.id, result.skippedReason ? `skipped: ${result.skippedReason}` : undefined);
   } catch (err) {
     const attempts = job.attempts + 1;
     const terminal = attempts >= MAX_ATTEMPTS;

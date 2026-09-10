@@ -380,9 +380,10 @@ export const autoTradeJobs = pgTable('auto_trade_jobs', {
   // pending = queued for claim; processing = claimed by a consumer batch
   // (should never be observed at rest — a crash mid-batch would strand rows
   // here, but this worker is single-instance today, so that's a non-goal);
-  // done = finalizeForUser ran successfully; failed = terminal, either a
-  // genuine error after maxAttempts retries or a stale analysis snapshot
-  // (see STALE_JOB_MAX_AGE_MS in src/worker/job-queue.ts).
+  // done = finalizeForUser ran successfully (or intentionally skipped signal
+  // creation for this user only — e.g. rr_exceeds_structure; see lastError);
+  // failed = terminal, either a genuine error after maxAttempts retries or a
+  // stale analysis snapshot (see STALE_JOB_MAX_AGE_MS in src/worker/job-queue.ts).
   status: varchar('status', { length: 20 }).notNull().default('pending'),
   // Phase 5 will set this from the user's plan tier; every job defaults to 0
   // for now, so claiming is effectively FIFO until that lands.

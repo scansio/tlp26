@@ -249,6 +249,91 @@ export interface MarketAnalysisResult {
 }
 
 // ---------------------------------------------------------------------------
+// Structural target bound — per-user R:R enforcement (finalizeForUser)
+// ---------------------------------------------------------------------------
+
+/**
+ * Finds the furthest take-profit level the current market structure actually
+ * supports for a trade in `direction`, so per-user R:R enforcement never asks
+ * for a TP beyond what real structure can reach.
+ *
+ * Source-of-truth priority (deliberate, not an open question): SMC structures
+ * first — specifically order blocks and liquidity sweeps ahead of price in
+ * the trade's favorable direction, since those are actual supply/demand
+ * levels a move is expected to react to. FVGs are excluded as targets: they
+ * are mitigation/entry zones, not levels a move stalls at, so they're a poor
+ * proxy for "how far can this realistically go." Chart-pattern measured-move
+ * targets (targetPrice) are used only as a fallback when no SMC structure
+ * qualifies, since they're a coarser statistical projection rather than an
+ * observed structural level.
+ *
+ * SMC polarity note: smc-tool.ts's `direction` on an order block/liquidity
+ * sweep tags the zone's own polarity (BULLISH = demand/support, BEARISH =
+ * supply/resistance), not the trade direction it caps. Because these are
+ * detected only after price has already moved away from them, a BULLISH
+ * (demand) zone sits below current price and a BEARISH (supply) zone sits
+ * above it — so the level actually capping a LONG's upside is a BEARISH
+ * (supply) structure, and the level capping a SHORT's downside is a BULLISH
+ * (demand) structure. This is the opposite of matching the trade's own
+ * direction — deliberately: chart-pattern targetPrice below is the projected
+ * *move* direction (matches the trade), whereas SMC direction here is the
+ * opposing zone's polarity (caps the trade).
+ *
+ * Returns null when neither source yields a usable bound — callers should
+ * treat that as "no structural constraint to enforce" rather than blocking
+ * the signal on missing data.
+ */
+export function deriveStructuralTargetBound(
+  analysis: Pick<MarketAnalysisResult, 'smcStructures' | 'chartPatterns'>,
+  direction: 'LONG' | 'SHORT',
+): number | null {
+  // Capping zone polarity is the opposite of the trade direction — see the
+  // SMC polarity note above. Pattern targetPrice uses the trade's own
+  // direction instead (see wantMoveDirection below).
+  const wantCapDirection = direction === 'LONG' ? 'BEARISH' : 'BULLISH';
+  const wantMoveDirection = direction === 'LONG' ? 'BULLISH' : 'BEARISH';
+  const { smcStructures, chartPatterns } = analysis;
+  const currentPrice = smcStructures.currentPrice;
+
+  // "Ahead of price" in the trade's favorable direction: above current price
+  // for LONG (positive distanceFromCurrentPrice), below for SHORT (negative).
+  const isAheadOfPrice = (distanceFromCurrentPrice: number): boolean =>
+    direction === 'LONG' ? distanceFromCurrentPrice > 0 : distanceFromCurrentPrice < 0;
+
+  const smcCandidates = [...smcStructures.orderBlocks, ...smcStructures.liquiditySweeps].filter(
+    (s) => s.direction === wantCapDirection && isAheadOfPrice(s.distanceFromCurrentPrice),
+  );
+
+  if (smcCandidates.length > 0) {
+    const furthest = smcCandidates.reduce((best, s) =>
+      Math.abs(s.distanceFromCurrentPrice) > Math.abs(best.distanceFromCurrentPrice) ? s : best,
+    );
+    return furthest.priceLevel;
+  }
+
+  // Fallback: pattern-tool's measured-move target — same direction as the
+  // trade (targetPrice is the projected move itself, not a capping zone) +
+  // ahead-of-price filter.
+  const patternCandidates = chartPatterns.filter(
+    (p) =>
+      p.direction === wantMoveDirection &&
+      typeof p.targetPrice === 'number' &&
+      isAheadOfPrice(((p.targetPrice - currentPrice) / currentPrice) * 100),
+  );
+
+  if (patternCandidates.length > 0) {
+    const furthest = patternCandidates.reduce((best, p) =>
+      Math.abs((p.targetPrice as number) - currentPrice) > Math.abs((best.targetPrice as number) - currentPrice)
+        ? p
+        : best,
+    );
+    return furthest.targetPrice as number;
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Phase 1 — fetchMarketData
 // ---------------------------------------------------------------------------
 

@@ -21,6 +21,7 @@ import { createSignalTool } from '@/mastra/tools/create-signal-tool';
 import { executeTradeTool } from '@/mastra/tools/execute-trade-tool';
 import type { MarketType } from '@/mastra/tools/market-symbol';
 import { noopObserve } from '@mastra/core/tools';
+import { deriveStructuralTargetBound } from './market-analysis';
 import type { MarketAnalysisResult } from './market-analysis';
 
 export interface FinalizeForUserInput {
@@ -49,6 +50,8 @@ export interface FinalizeForUserResult {
     signalStatus: string;
     message: string;
   } | null;
+  /** Set when this user's signal was intentionally not created — a successful no-op, not a failure. */
+  skippedReason?: 'rr_exceeds_structure';
 }
 
 /**
@@ -112,6 +115,8 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
   // *some* leverage value to persist.
   let profileLeverageFallback = 1;
   let marginMode: 'cross' | 'isolated' = 'cross';
+  // Matches the user_risk_profiles.min_risk_reward_ratio column default.
+  let minRiskRewardRatio = 1.5;
   try {
     const context = await resolveUserTradingContext(userId);
     if (context) {
@@ -123,10 +128,53 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
       marketType = context.marketType;
       profileLeverageFallback = context.leverage;
       marginMode = context.marginMode;
+      minRiskRewardRatio = context.minRiskRewardRatio;
     }
   } catch (err) {
     console.warn('finalizeForUser: could not load risk profile, using defaults', err);
   }
+
+  // --- Per-user R:R enforcement ---------------------------------------------
+  // SL never moves per user — it stays exactly at the agent's structural
+  // invalidation point. Only TP is recomputed per this user's
+  // minRiskRewardRatio, capped by whatever real market structure actually
+  // supports (see deriveStructuralTargetBound's SMC-first/pattern-fallback
+  // priority). If this user's required R:R would need a TP beyond that
+  // structural bound, we skip signal creation for this user only — every
+  // other user in the same confluence group is finalized independently (see
+  // src/worker/job-queue.ts) and is unaffected.
+  const slDistance = Math.abs(entryPrice - analysis.sl);
+  const requiredTp =
+    direction === 'LONG'
+      ? entryPrice + slDistance * minRiskRewardRatio
+      : entryPrice - slDistance * minRiskRewardRatio;
+  const structuralBound = deriveStructuralTargetBound(analysis, direction);
+  const rrExceedsStructure =
+    requiredTp <= 0 ||
+    (structuralBound !== null && (direction === 'LONG' ? requiredTp > structuralBound : requiredTp < structuralBound));
+
+  if (rrExceedsStructure) {
+    console.warn(
+      `finalizeForUser: userId=${userId}'s minRiskRewardRatio=${minRiskRewardRatio} requires tp=${requiredTp} for ` +
+        `${direction} ${symbol} (structural bound=${structuralBound}) — skipping signal creation for this user.`,
+    );
+    return {
+      signalId: null,
+      action,
+      symbol,
+      userId,
+      executionMode: 'n/a',
+      executionResult: null,
+      skippedReason: 'rr_exceeds_structure',
+    };
+  }
+
+  // This user's actual TP — replaces the shared analysis.tp everywhere below
+  // (signal persistence + auto-execution), computed once here, never
+  // recomputed downstream. riskTool's own inputs below are intentionally
+  // left on analysis.sl/analysis.tp — this phase only changes SL/TP/R:R
+  // persisted to the signal and used at execution, not position sizing.
+  const userTp = requiredTp;
 
   if (analysis.marketType !== marketType) {
     // Expected on the TradingView auto-mode path: a ".P"/".PERP" alert
@@ -199,7 +247,7 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
       direction,
       entryPrice,
       sl: analysis.sl,
-      tp: analysis.tp,
+      tp: userTp,
       confidence,
       reasoning,
       strategySource: strategiesTriggered.join(', '),
@@ -254,7 +302,7 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
           entryPrice,
           positionSizeUsdt,
           sl: analysis.sl,
-          tp: analysis.tp,
+          tp: userTp,
           mode: toolMode,
           slippagePct,
           marketType,
