@@ -6,6 +6,7 @@ import {
   boolean,
   numeric,
   timestamp,
+  date,
   bigint,
   jsonb,
   uuid,
@@ -577,6 +578,162 @@ export const aiModels = pgTable('ai_models', {
 }, (table) => [
   index('am_provider_id_idx').on(table.providerId),
   uniqueIndex('am_provider_model_idx').on(table.providerId, table.modelId),
+]);
+
+// ---------------------------------------------------------------------------
+// subscription_plans
+//
+// Admin-managed catalog of plan tiers ('free' | 'pro' | 'byok' or similar).
+// `active` is a soft-disable flag — a plan real subscribers reference is
+// never deleted, only deactivated (hidden from new checkout, existing
+// subscribers keep their entitlements). `jobPriority` feeds
+// auto_trade_jobs.priority at enqueue time (src/worker/tick.ts) instead of a
+// hardcoded paid-vs-free constant — higher wins the claim-query's
+// `ORDER BY priority DESC`.
+// ---------------------------------------------------------------------------
+export const subscriptionPlans = pgTable('subscription_plans', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: varchar('name', { length: 50 }).notNull().unique(),
+  autoTradeRunsPerDay: integer('auto_trade_runs_per_day').notNull().default(3),
+  chatMessagesPerDay: integer('chat_messages_per_day').notNull().default(15),
+  allowsByok: boolean('allows_byok').notNull().default(false),
+  allowsPersonalizedMemory: boolean('allows_personalized_memory').notNull().default(false),
+  jobPriority: integer('job_priority').notNull().default(0),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// ---------------------------------------------------------------------------
+// subscription_plan_prices
+//
+// One row per (plan, billing interval, currency). providerPriceId carries
+// the provider-side recurring Price/Plan object id per rail
+// (`{ stripe, paystack }`) — OxaPay has no recurring-price object, it's
+// priced inline per invoice from `price` at checkout time.
+// ---------------------------------------------------------------------------
+export const subscriptionPlanPrices = pgTable('subscription_plan_prices', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  planId: uuid('plan_id').notNull().references(() => subscriptionPlans.id),
+  billingInterval: varchar('billing_interval', { length: 20 }).notNull(), // monthly | biannual | yearly
+  price: numeric('price', { precision: 20, scale: 2 }).notNull(),
+  currency: varchar('currency', { length: 10 }).notNull().default('USD'),
+  providerPriceId: jsonb('provider_price_id').$type<{ stripe?: string; paystack?: string }>().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index('spp_plan_id_idx').on(table.planId),
+  uniqueIndex('spp_plan_interval_currency_idx').on(table.planId, table.billingInterval, table.currency),
+]);
+
+// ---------------------------------------------------------------------------
+// promo_codes
+//
+// discountScope: 'first_period' discounts only the first billing period;
+// 'recurring' discounts every renewal — both are supported (see the discount
+// application logic in the checkout/renewal routes, which is provider-
+// specific: Stripe/Paystack recurring discounts need a provider-side coupon
+// object, OxaPay just recomputes the invoice amount per period).
+// applicablePlanIds: null = all plans.
+// ---------------------------------------------------------------------------
+export const promoCodes = pgTable('promo_codes', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  code: varchar('code', { length: 50 }).notNull().unique(),
+  discountType: varchar('discount_type', { length: 10 }).notNull(), // percent | fixed
+  discountValue: numeric('discount_value', { precision: 10, scale: 2 }).notNull(),
+  discountScope: varchar('discount_scope', { length: 20 }).notNull().default('first_period'), // first_period | recurring
+  applicablePlanIds: jsonb('applicable_plan_ids').$type<string[] | null>().default(null),
+  maxRedemptions: integer('max_redemptions'),
+  redemptionsUsed: integer('redemptions_used').notNull().default(0),
+  startsAt: timestamp('starts_at', { withTimezone: true }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// ---------------------------------------------------------------------------
+// user_subscriptions
+//
+// One row per user (unique on userId — updated in place across renewals/
+// upgrades rather than a history table; subscription_payments is the
+// append-only history). providerSubscriptionId is null for OxaPay (no
+// native recurring-subscription object — see the OxaPay renewal-emulation
+// job in src/worker/oxapay-renewal-loop.ts).
+// ---------------------------------------------------------------------------
+export const userSubscriptions = pgTable('user_subscriptions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 255 }).notNull().unique(),
+  planId: uuid('plan_id').notNull().references(() => subscriptionPlans.id),
+  billingInterval: varchar('billing_interval', { length: 20 }).notNull(),
+  status: varchar('status', { length: 20 }).notNull().default('active'), // active | past_due | canceled
+  currentPeriodStart: timestamp('current_period_start', { withTimezone: true }),
+  currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
+  nextBillingAt: timestamp('next_billing_at', { withTimezone: true }),
+  paymentProvider: varchar('payment_provider', { length: 20 }).notNull(), // oxapay | stripe | paystack
+  providerCustomerId: text('provider_customer_id'),
+  providerSubscriptionId: text('provider_subscription_id'), // null for oxapay
+  promoCodeId: uuid('promo_code_id').references(() => promoCodes.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index('us_status_idx').on(table.status),
+  index('us_current_period_end_idx').on(table.currentPeriodEnd),
+]);
+
+// ---------------------------------------------------------------------------
+// usage_counters
+//
+// Two independent daily counters, reset on a calendar-day (UTC) boundary —
+// periodStart is the UTC date (YYYY-MM-DD) the counters apply to, one row
+// per (user, day). Checked/incremented from src/worker/eligibility.ts +
+// src/worker/job-queue.ts (auto-trade runs) and src/app/api/chat/route.ts
+// (chat messages) via src/lib/billing/usage.ts.
+// ---------------------------------------------------------------------------
+export const usageCounters = pgTable('usage_counters', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 255 }).notNull(),
+  periodStart: date('period_start', { mode: 'string' }).notNull(),
+  autoTradeRunsUsed: integer('auto_trade_runs_used').notNull().default(0),
+  chatMessagesUsed: integer('chat_messages_used').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('uc_user_period_idx').on(table.userId, table.periodStart),
+]);
+
+// ---------------------------------------------------------------------------
+// subscription_payments
+//
+// Append-only payment/webhook history — one row per checkout attempt or
+// renewal cycle. providerReference is set at checkout-creation time (OxaPay
+// track_id / Stripe session id / Paystack reference we generate ourselves)
+// so the webhook can look the row up idempotently instead of trusting
+// provider metadata. checkoutUrl surfaces the pay link for the OxaPay
+// renewal-emulation job (no redirect flow there — it's a background job,
+// not a live checkout).
+// ---------------------------------------------------------------------------
+export const subscriptionPayments = pgTable('subscription_payments', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 255 }).notNull(),
+  planId: uuid('plan_id').references(() => subscriptionPlans.id),
+  billingInterval: varchar('billing_interval', { length: 20 }),
+  promoCodeId: uuid('promo_code_id').references(() => promoCodes.id),
+  provider: varchar('provider', { length: 20 }).notNull(), // oxapay | stripe | paystack
+  providerReference: text('provider_reference').notNull(), // track_id / session-or-invoice id / reference
+  amount: numeric('amount', { precision: 20, scale: 2 }).notNull(),
+  discountApplied: numeric('discount_applied', { precision: 20, scale: 2 }).notNull().default('0'),
+  currency: varchar('currency', { length: 10 }).notNull().default('USD'),
+  status: varchar('status', { length: 20 }).notNull().default('pending'), // pending | paid | failed | expired
+  periodCoveredStart: timestamp('period_covered_start', { withTimezone: true }),
+  periodCoveredEnd: timestamp('period_covered_end', { withTimezone: true }),
+  rawWebhookPayload: jsonb('raw_webhook_payload'),
+  checkoutUrl: text('checkout_url'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index('sp_user_id_idx').on(table.userId),
+  index('sp_status_idx').on(table.status),
+  uniqueIndex('sp_provider_reference_idx').on(table.provider, table.providerReference),
 ]);
 
 // ---------------------------------------------------------------------------
