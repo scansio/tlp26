@@ -101,6 +101,14 @@ function fmt(value: string | number | null | undefined, decimals = 2): string {
   });
 }
 
+// Full-precision price display — no rounding, trailing zeros trimmed.
+function fmtPrice(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '—';
+  const n = Number(value);
+  if (isNaN(n)) return '—';
+  return n.toLocaleString('en-US', { maximumFractionDigits: 8 });
+}
+
 function directionClass(direction: string): string {
   return direction === 'LONG'
     ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
@@ -577,6 +585,46 @@ function CopyableSignalId({ id }: { id: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Copyable price — full precision, click to copy the exact value
+// ---------------------------------------------------------------------------
+
+function CopyablePrice({
+  value,
+  className = '',
+}: {
+  value: string | number | null | undefined;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const n = value === null || value === undefined || value === '' ? NaN : Number(value);
+  const display = isNaN(n) ? '—' : fmtPrice(value);
+  const copyValue = isNaN(n) ? null : n.toString();
+
+  async function handleCopy() {
+    if (!copyValue) return;
+    try {
+      await navigator.clipboard.writeText(copyValue);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // clipboard unavailable — ignore
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      disabled={!copyValue}
+      title={copied ? 'Copied!' : copyValue ? `Click to copy: ${copyValue}` : undefined}
+      className={`truncate text-left disabled:cursor-default ${copyValue ? 'hover:underline' : ''} ${className}`}
+    >
+      {display === '—' ? display : `$${display}`}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -745,15 +793,16 @@ export function SignalApprovalCard({
           {/* Entry zone */}
           <div className="min-w-0">
             <p className="text-muted-foreground text-xs">Entry</p>
-            <p className="font-medium truncate">${fmt(signal.entryPrice)}</p>
+            <CopyablePrice value={signal.entryPrice} className="font-medium" />
           </div>
 
           {/* Stop-loss + distance */}
           <div className="min-w-0">
             <p className="text-muted-foreground text-xs">Stop Loss</p>
-            <p className="font-medium text-red-600 dark:text-red-400 truncate">
-              ${fmt(signal.stopLoss)}
-            </p>
+            <CopyablePrice
+              value={signal.stopLoss}
+              className="font-medium text-red-600 dark:text-red-400"
+            />
             {feeData?.slDistancePct != null && (
               <p className="text-[10px] text-muted-foreground">
                 {feeData.slDistancePct}% from entry
@@ -764,9 +813,10 @@ export function SignalApprovalCard({
           {/* Take-profit + R:R */}
           <div className="min-w-0">
             <p className="text-muted-foreground text-xs">Take Profit</p>
-            <p className="font-medium text-green-600 dark:text-green-400 truncate">
-              ${fmt(signal.takeProfit)}
-            </p>
+            <CopyablePrice
+              value={signal.takeProfit}
+              className="font-medium text-green-600 dark:text-green-400"
+            />
             {feeData?.riskReward != null && (
               <p className="text-[10px] text-muted-foreground">
                 {feeData.riskReward}:1 R:R
