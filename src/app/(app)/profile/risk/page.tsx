@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { DefaultChatTransport, ToolUIPart } from 'ai';
 import { useChat } from '@ai-sdk/react';
 
@@ -1050,6 +1050,149 @@ function TradingModePanel({
 }
 
 // ---------------------------------------------------------------------------
+// Import / Export panel
+// ---------------------------------------------------------------------------
+
+function ImportExportPanel({
+  hasProfile,
+  onImported,
+}: {
+  hasProfile: boolean;
+  onImported: (p: RiskProfile) => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [message, setMessage] = useState('');
+  const [isError, setIsError] = useState(false);
+
+  async function handleExport() {
+    setExporting(true);
+    setMessage('');
+    setIsError(false);
+    try {
+      const res = await fetch('/api/risk-profile/export');
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as Record<string, string>;
+        setMessage(err?.error ?? 'Failed to export risk profile.');
+        setIsError(true);
+        return;
+      }
+      const doc = await res.json();
+      const blob = new Blob([JSON.stringify(doc, null, 2)], {
+        type: 'application/json;charset=utf-8;',
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `risk-profile-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setMessage('Risk profile exported.');
+      setIsError(false);
+    } catch {
+      setMessage('Network error. Please try again.');
+      setIsError(true);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function handleImportClick() {
+    fileInputRef.current?.click();
+  }
+
+  async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setImporting(true);
+    setMessage('');
+    setIsError(false);
+
+    try {
+      const text = await file.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        setMessage('That file is not valid JSON.');
+        setIsError(true);
+        return;
+      }
+
+      const res = await fetch('/api/risk-profile/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(parsed),
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        setMessage('Risk profile imported successfully.');
+        setIsError(false);
+        onImported(json.profile as RiskProfile);
+      } else {
+        const err = await res.json().catch(() => ({})) as Record<string, unknown>;
+        const detail =
+          typeof err?.error === 'string' ? err.error : 'Failed to import risk profile.';
+        setMessage(detail);
+        setIsError(true);
+      }
+    } catch {
+      setMessage('Network error. Please try again.');
+      setIsError(true);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <Card className="p-4 sm:p-5 space-y-3">
+      <div>
+        <p className="text-sm font-semibold">Backup &amp; Restore</p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          Export your risk profile to a JSON file, or import a previously exported file.
+        </p>
+      </div>
+      <div className="flex flex-col sm:flex-row gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => void handleExport()}
+          disabled={exporting || !hasProfile}
+          className="w-full sm:w-auto"
+        >
+          {exporting ? 'Exporting…' : 'Export Risk Profile'}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleImportClick}
+          disabled={importing}
+          className="w-full sm:w-auto"
+        >
+          {importing ? 'Importing…' : 'Import Risk Profile'}
+        </Button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(e) => void handleFileSelected(e)}
+        />
+      </div>
+      {message && (
+        <p className={`text-sm ${isError ? 'text-red-600' : 'text-green-600'}`}>{message}</p>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -1108,6 +1251,9 @@ export default function RiskProfilePage() {
       {profile && (
         <TradingModePanel profile={profile} onModeChanged={handleModeChanged} />
       )}
+
+      {/* Import / export */}
+      <ImportExportPanel hasProfile={!!profile} onImported={handleSaved} />
 
       {/* Mode toggle */}
       <div className="flex items-center gap-4">
