@@ -13,6 +13,9 @@ const isPublicRoute = createRouteMatcher([
   '/api/copy/leaderboard',
   '/api/webhooks/tradingview',
   '/api/webhooks/telegram',
+  '/api/webhooks/oxapay',
+  '/api/webhooks/stripe',
+  '/api/webhooks/paystack',
   '/api/auth/webhook',
   // Public API for publisher profiles (no auth needed for read)
   '/api/copy/publishers/(.*)',

@@ -46,6 +46,8 @@ import { db } from '@/db';
 import { autoTradeJobs } from '@/db/schema';
 import { finalizeForUser } from '@/lib/analysis/finalize-for-user';
 import type { MarketAnalysisResult } from '@/lib/analysis/market-analysis';
+import { resolvePlanForUser } from '@/lib/billing/plan';
+import { getUsageToday, hasAutoTradeQuota, incrementAutoTradeRunUsage } from '@/lib/billing/usage';
 import { chunk } from './util';
 
 const BATCH_SIZE = Number(process.env.WORKER_JOB_BATCH_SIZE ?? 10);
@@ -152,6 +154,21 @@ async function processJob(job: ClaimedJob, mastra: unknown): Promise<void> {
     return;
   }
 
+  // Re-check the daily auto-trade run quota right before finalizing — the
+  // durable queue means a job can sit pending long enough that the user hits
+  // their cap (via another job) between enqueue and claim. eligibility.ts's
+  // check at enqueue time alone isn't enough for that race.
+  const plan = await resolvePlanForUser(job.userId);
+  const usage = await getUsageToday(job.userId);
+  if (!hasAutoTradeQuota(usage, plan)) {
+    console.log(
+      `[worker] job ${job.id} (userId=${job.userId}) skipped — daily auto-trade quota reached ` +
+        `(${usage.autoTradeRunsUsed}/${plan.autoTradeRunsPerDay}, plan=${plan.name})`,
+    );
+    await markFailed(job.id, job.attempts, 'daily auto-trade quota reached', true);
+    return;
+  }
+
   try {
     const result = await finalizeForUser({
       userId: job.userId,
@@ -160,6 +177,12 @@ async function processJob(job: ClaimedJob, mastra: unknown): Promise<void> {
       executionExchange: job.exchange,
       mastra,
     });
+    // Only counts as a "run" once a signal was actually produced — a HOLD
+    // (no signal), an aborted finalize (missing SL/TP), or an R:R-vs-
+    // structure skip never increments.
+    if (result.signalId) {
+      await incrementAutoTradeRunUsage(job.userId);
+    }
     await markDone(job.id, result.skippedReason ? `skipped: ${result.skippedReason}` : undefined);
   } catch (err) {
     const attempts = job.attempts + 1;

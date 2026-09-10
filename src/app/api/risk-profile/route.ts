@@ -71,6 +71,12 @@ export async function POST(req: Request) {
     typeof body === 'object' && body !== null ? Object.keys(body) : [],
   );
   const provided = (key: string) => bodyKeys.has(key);
+  // Phase 5 stretch goal (deferred — not enforced here): the free plan is
+  // meant to cap allowedSymbols to 1 entry. That's a UI/API-level policy,
+  // not a DB constraint — the hook point is here, gated on
+  // `(await resolvePlanForUser(userId)).name === 'free'` (see
+  // src/lib/billing/plan.ts), truncating/rejecting `data.allowedSymbols`
+  // beyond the cap before normalizeSymbolList runs.
   const allowedSymbols = normalizeSymbolList(data.allowedSymbols);
 
   const [upserted] = await db

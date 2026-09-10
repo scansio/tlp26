@@ -239,6 +239,13 @@
       "when": 1789051996164,
       "tag": "0033_nice_deathstrike",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1789060829098,
+      "tag": "0034_wakeful_mysterio",
+      "breakpoints": true
     }
   ]
 }

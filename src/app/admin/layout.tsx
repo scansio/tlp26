@@ -39,6 +39,24 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         >
           AI Models
         </Link>
+        <Link
+          href="/admin/subscription-plans"
+          className="rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent"
+        >
+          Subscription Plans
+        </Link>
+        <Link
+          href="/admin/subscription-plan-prices"
+          className="rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent"
+        >
+          Plan Prices
+        </Link>
+        <Link
+          href="/admin/promo-codes"
+          className="rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent"
+        >
+          Promo Codes
+        </Link>
       </nav>
 
       {children}
