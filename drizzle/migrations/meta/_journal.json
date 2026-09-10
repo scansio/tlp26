@@ -225,6 +225,13 @@
       "when": 1789040961200,
       "tag": "0031_lame_vargas",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1789048110678,
+      "tag": "0032_wonderful_newton_destine",
+      "breakpoints": true
     }
   ]
 }
