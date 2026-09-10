@@ -22,9 +22,13 @@
  * Retry/backoff: a failed job goes back to 'pending' with attempts
  * incremented and last_error set. The claim query only reclaims a
  * previously-attempted job once `attempts` minutes have passed since its
- * last update (attempt 1 → wait 1m, attempt 2 → wait 2m, ...) — with ticks
- * ~15 minutes apart (src/worker/schedule.ts), this means a failing job is
- * effectively retried on a later tick, not hot-looped within the same one.
+ * last update (attempt 1 → wait 1m, attempt 2 → wait 2m, ...). This is a
+ * lower bound, not a guarantee of which tick reclaims it — a batch's
+ * finalizeForUser calls run with FINALIZE_CONCURRENCY-way concurrency and
+ * can individually take longer than a minute, so a job could in principle be
+ * reclaimed later in the *same* processAutoTradeJobs call. In practice, with
+ * ticks ~15 minutes apart (src/worker/schedule.ts), a failing job is usually
+ * retried on a later tick rather than hot-looped within the same one.
  * After MAX_ATTEMPTS failures it's left 'failed' for good (never retried
  * again automatically).
  *

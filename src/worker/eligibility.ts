@@ -108,9 +108,16 @@ export async function fetchEligibleUsers(): Promise<EligibleUser[]> {
 
       // Only the user's own explicit watchlist entries are worth notifying
       // about — a dropped WORKER_DEFAULT_SYMBOLS fallback entry is an
-      // operator configuration issue, not something the user asked for.
+      // operator configuration issue, not something the user asked for, but
+      // still worth a log line so it's visible instead of just quietly
+      // shrinking the fallback watchlist.
       if (isUserConfigured && unsupported.length > 0) {
         void notifyUnsupportedSymbols(context.userId, unsupported, context.exchange, context.marketType);
+      } else if (!isUserConfigured && unsupported.length > 0) {
+        console.warn(
+          `[worker] WORKER_DEFAULT_SYMBOLS entries not in auto_trade_supported_symbols for ` +
+            `exchange=${context.exchange} marketType=${context.marketType}: [${unsupported.join(', ')}]`,
+        );
       }
 
       return {

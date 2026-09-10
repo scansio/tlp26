@@ -17,10 +17,8 @@ import { ohlcvCache } from '@/db/schema';
 import {
   buildAnalysisCacheKey,
   readThroughDeterministicCache,
-  readThroughNewsCache,
   CACHE_TTL_LTF_MS,
   CACHE_TTL_FUNDING_MS,
-  CACHE_TTL_NEWS_MS,
 } from './analysis-cache';
 
 // ---------------------------------------------------------------------------
@@ -272,8 +270,24 @@ type CandleSet = {
  * at" column, so a freshness check keyed off the forming candle's own
  * timestamp would serve an HTF candle frozen at its opening values for the
  * rest of its period). Never allowed to fail the analysis phase.
+ *
+ * Gated to marketType='spot' on the 'binance' exchange (historical-data.ts's
+ * own default exchange) only: ohlcv_cache has no exchange/marketType column,
+ * so it's keyed by (symbol, timeframe, timestamp) alone across every
+ * exchange and market. Writing swap/perpetual candles (different basis,
+ * volume profile) or non-Binance spot candles into the same rows under
+ * onConflictDoNothing would let whichever confluence group happens to fetch
+ * a timestamp first silently win, corrupting the backtester's spot data with
+ * no way to tell which source a given row came from.
  */
-async function backfillClosedCandles(symbol: string, candles: CandleSet): Promise<void> {
+async function backfillClosedCandles(
+  symbol: string,
+  exchange: string,
+  marketType: string,
+  candles: CandleSet,
+): Promise<void> {
+  if (marketType !== 'spot' || exchange !== 'binance') return;
+
   try {
     const perTimeframe: { timeframe: string; candles: z.infer<typeof candleSchema>[] }[] = [
       { timeframe: '15m', candles: candles.candles15m },
@@ -340,7 +354,7 @@ export async function fetchMarketDataPhase<
           candles1d: (r1d as { candles: z.infer<typeof candleSchema>[] }).candles,
         };
 
-        void backfillClosedCandles(symbol, result);
+        void backfillClosedCandles(symbol, exchange, marketType, result);
 
         return result;
       },
@@ -609,22 +623,25 @@ export async function fetchNewsPhase<T extends { symbol: string }>(
   mastra: any,
 ): Promise<T & { news: z.infer<typeof newsResultSchema> }> {
   return withTimeout('fetchNews', async () => {
+    // newsTool (src/mastra/tools/news-tool.ts) already reads/writes the
+    // news_cache table itself (1-day TTL, keyed by the same sorted/uppercased
+    // currency list this phase passes in) — no extra caching needed here.
+    // An earlier version of this phase wrapped the call in its own 5-minute
+    // cache using the exact same cache key, which just clobbered the tool's
+    // 1-day expiresAt down to 5 minutes on every round trip and forced a real
+    // external fetch far more often than intended. Do not re-add a wrapper
+    // here without changing the key so the two layers don't collide.
+    const tool = mastra?.getTool('newsTool');
+    if (!tool) throw new Error('newsTool not found in Mastra instance');
+
     // Extract base currency from symbol, e.g. "BTC/USDT" → "BTC"
-    const baseCurrency = (input.symbol.split('/')[0] ?? input.symbol).toUpperCase();
+    const baseCurrency = input.symbol.split('/')[0] ?? input.symbol;
+    const result = await tool.execute!({ currencies: [baseCurrency] }, {});
 
-    const news = await readThroughNewsCache<z.infer<typeof newsResultSchema>>(
-      baseCurrency,
-      CACHE_TTL_NEWS_MS,
-      async () => {
-        const tool = mastra?.getTool('newsTool');
-        if (!tool) throw new Error('newsTool not found in Mastra instance');
-
-        const result = await tool.execute!({ currencies: [baseCurrency] }, {});
-        return result as z.infer<typeof newsResultSchema>;
-      },
-    );
-
-    return { ...input, news };
+    return {
+      ...input,
+      news: result as z.infer<typeof newsResultSchema>,
+    };
   });
 }
 
