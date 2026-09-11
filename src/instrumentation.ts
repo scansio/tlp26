@@ -36,6 +36,7 @@ export async function register() {
   globalThis.__tradingWorkerStarted = true;
 
   const { mastra } = await import('@/mastra');
+  const { mastraStorage } = await import('@/mastra/storage');
   const { scheduleWorkerTicks } = await import('@/worker/schedule');
   const { runTick } = await import('@/worker/tick');
   const { startPositionMonitorLoop } = await import('@/worker/position-monitor-loop');
@@ -44,6 +45,12 @@ export async function register() {
   const { startAutoExecuteRetryLoop } = await import('@/worker/auto-execute-retry-loop');
   const { startEntryReconcileLoop } = await import('@/worker/entry-reconcile-loop');
   const { startOxapayRenewalLoop } = await import('@/worker/oxapay-renewal-loop');
+
+  // Await storage init here, before any loop's first tick fires, so Mastra's
+  // pinned-client init runs alone instead of racing the loops' own first
+  // connections for a spot in the pool at the exact moment the process boots.
+  console.log('[worker] initializing Mastra storage...');
+  await mastraStorage.init();
 
   console.log('[worker] starting — confluence-group trading worker (in-process)');
   scheduleWorkerTicks(mastra);
