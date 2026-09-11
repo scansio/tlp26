@@ -61,6 +61,19 @@ export interface SignalFeeData {
   leverageFallbackReason?: string | null;
 }
 
+export interface SignalExecutionLiveData {
+  status: string | null; // 'open' | 'closed' | 'cancelled'
+  fillType: string | null; // 'sl_hit' | 'tp_hit' | 'manual' | 'liquidation'
+  mode: string | null; // 'paper' | 'live'
+  leverage: number;
+  entryPrice: number | null;
+  currentPrice: number | null;
+  exitPrice: number | null;
+  pnlPct: number | null; // % of notional
+  pnlPctLeveraged: number | null; // ROI on margin (pnlPct × leverage)
+  outcome: 'playingOut' | 'losingOut' | 'playedOut' | 'lostOut' | null;
+}
+
 export interface QueueSignal {
   id: string;
   symbol: string;
@@ -85,6 +98,7 @@ export interface QueueSignal {
   updatedAt: string | Date | null;
   expiresAt: string | Date | null;
   feeData?: SignalFeeData | null;
+  execution?: SignalExecutionLiveData | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +160,29 @@ function statusBadge(status: string | null): { label: string; className: string 
     default:
       return null; // 'pending' — no badge, actions speak for themselves
   }
+}
+
+function outcomeBadge(
+  outcome: SignalExecutionLiveData['outcome'],
+): { label: string; className: string } | null {
+  switch (outcome) {
+    case 'playingOut':
+      return { label: 'Playing Out', className: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' };
+    case 'losingOut':
+      return { label: 'Losing Out', className: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400' };
+    case 'playedOut':
+      return { label: 'Played Out', className: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' };
+    case 'lostOut':
+      return { label: 'Lost Out', className: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' };
+    default:
+      return null;
+  }
+}
+
+function fmtSignedPct(value: number | null | undefined, decimals = 2): string {
+  if (value === null || value === undefined) return '—';
+  const sign = value >= 0 ? '+' : '';
+  return `${sign}${value.toFixed(decimals)}%`;
 }
 
 function sourceLabel(source: string | null): { label: string; title: string } {
@@ -276,6 +313,70 @@ function ReasoningSection({ signal }: { signal: QueueSignal }) {
           No detailed reasoning available for this signal.
         </p>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Live / final P&L for an executed signal — the ROI-on-margin % (leveraged)
+// exchanges show as the headline number, plus whether the position is
+// currently playing out well/badly or, once closed, how it resolved.
+// ---------------------------------------------------------------------------
+
+function ExecutionPnlSection({ execution }: { execution: SignalExecutionLiveData }) {
+  const isOpen = execution.status === 'open';
+  const pnlKnown = execution.pnlPct !== null;
+  const pnlPositive = (execution.pnlPct ?? 0) >= 0;
+  const badge = outcomeBadge(execution.outcome);
+
+  return (
+    <div
+      className={`rounded-lg border p-3 space-y-2 ${
+        !pnlKnown
+          ? 'border-dashed'
+          : pnlPositive
+            ? 'border-green-500/30 bg-green-500/5'
+            : 'border-red-500/30 bg-red-500/5'
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+          {isOpen ? 'Live P&L' : 'Final P&L'}
+        </p>
+        {badge && (
+          <span
+            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${badge.className}`}
+          >
+            {badge.label}
+          </span>
+        )}
+      </div>
+      <div className="flex items-end justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-muted-foreground text-xs">{isOpen ? 'Current Price' : 'Exit Price'}</p>
+          <p className="font-medium tabular-nums truncate">
+            {isOpen
+              ? execution.currentPrice != null
+                ? `$${fmtPrice(execution.currentPrice)}`
+                : '—'
+              : execution.exitPrice != null
+                ? `$${fmtPrice(execution.exitPrice)}`
+                : '—'}
+          </p>
+        </div>
+        <div className="text-right shrink-0">
+          <p
+            className={`text-lg font-bold tabular-nums ${
+              !pnlKnown ? 'text-muted-foreground' : pnlPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+            }`}
+          >
+            {fmtSignedPct(execution.pnlPctLeveraged)}
+          </p>
+          <p className="text-[10px] text-muted-foreground tabular-nums">
+            {fmtSignedPct(execution.pnlPct)} of notional · {execution.leverage}x
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -746,6 +847,18 @@ export function SignalApprovalCard({
               </span>
             )}
 
+            {/* Outcome badge — only present once an execution has been linked */}
+            {signal.execution?.outcome && (() => {
+              const badge = outcomeBadge(signal.execution.outcome);
+              return badge ? (
+                <span
+                  className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${badge.className}`}
+                >
+                  {badge.label}
+                </span>
+              ) : null;
+            })()}
+
             {signal.exitMode === 'trailing' && (
               <Badge
                 variant="outline"
@@ -839,6 +952,9 @@ export function SignalApprovalCard({
             </span>
           </div>
         )}
+
+        {/* Live/final P&L — only present once execution data has loaded */}
+        {signal.execution && <ExecutionPnlSection execution={signal.execution} />}
 
         {/* Expected P&L net of fees */}
         {feeData && (

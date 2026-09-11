@@ -155,9 +155,10 @@ export default function OpenPositionsPage() {
                       </p>
                     </div>
                     <div className="min-w-0">
-                      <p className="text-xs text-muted-foreground">P&L (%)</p>
+                      <p className="text-xs text-muted-foreground">ROI (%)</p>
                       <p className={cn('tabular-nums truncate', pos.unrealizedPnlPct === null ? 'text-muted-foreground' : pnlPos ? 'text-green-500' : 'text-red-500')}>
-                        {fmtPct(pos.unrealizedPnlPct)}
+                        {fmtPct(pos.unrealizedPnlPctLeveraged ?? pos.unrealizedPnlPct)}
+                        {pos.leverage ? <span className="text-muted-foreground/70"> ({pos.leverage}x)</span> : null}
                       </p>
                     </div>
                     <div className="min-w-0">
@@ -184,7 +185,7 @@ export default function OpenPositionsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/30">
-                  {['Symbol', 'Side', 'Entry', 'Current', 'P&L ($)', 'P&L (%)', 'SL', 'TP', 'Mode'].map((h) => (
+                  {['Symbol', 'Side', 'Entry', 'Current', 'P&L ($)', 'ROI (%)', 'SL', 'TP', 'Mode'].map((h) => (
                     <th
                       key={h}
                       className="py-3 px-4 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider"
@@ -226,7 +227,8 @@ export default function OpenPositionsPage() {
                         {fmtPnl(pos.unrealizedPnlUsd)}
                       </td>
                       <td className={cn('py-3 px-4 tabular-nums', pos.unrealizedPnlPct === null ? 'text-muted-foreground' : pnlPos ? 'text-green-500' : 'text-red-500')}>
-                        {fmtPct(pos.unrealizedPnlPct)}
+                        {fmtPct(pos.unrealizedPnlPctLeveraged ?? pos.unrealizedPnlPct)}
+                        {pos.leverage ? <span className="text-muted-foreground/70 text-xs"> ({pos.leverage}x)</span> : null}
                       </td>
                       <td className="py-3 px-4 tabular-nums text-red-400 text-muted-foreground">
                         {pos.stopLoss ? `$${fmt(pos.stopLoss)}` : '—'}

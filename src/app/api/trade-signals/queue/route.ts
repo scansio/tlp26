@@ -11,9 +11,12 @@
 
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, inArray } from 'drizzle-orm';
 import { db } from '@/db';
-import { tradeSignals, userRiskProfiles, userExchanges } from '@/db/schema';
+import { tradeSignals, userRiskProfiles, userExchanges, tradeExecutions } from '@/db/schema';
+import { computePnlPct, computeLeveragedPnlPct, computeSignalOutcome, type SignalOutcome } from '@/lib/pnl';
+import { fetchLiveTickerPrices } from '@/lib/live-price';
+import { toExchangeSymbol, type MarketType } from '@/mastra/tools/market-symbol';
 
 const DEFAULT_TAKER_FEE = 0.0004;
 const DEFAULT_SLIPPAGE_PCT = 0.05;
@@ -131,6 +134,123 @@ function computeFeeData(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Live execution status for 'executed' signals — is the position currently
+// working out (playingOut/losingOut) or, once closed, how did it resolve
+// (playedOut/lostOut) — plus the leveraged (ROI-on-margin) % move exchanges
+// show, vs. feeData's static %-of-notional projection computed at signal
+// creation time above.
+// ---------------------------------------------------------------------------
+
+export interface SignalExecutionLiveData {
+  status: string | null; // 'open' | 'closed' | 'cancelled'
+  fillType: string | null; // 'sl_hit' | 'tp_hit' | 'manual' | 'liquidation'
+  mode: string | null; // 'paper' | 'live'
+  leverage: number;
+  entryPrice: number | null;
+  currentPrice: number | null; // live ticker price — only set while status='open'
+  exitPrice: number | null; // only set while status='closed'
+  pnlPct: number | null; // % of notional (unrealized while open, realized once closed)
+  pnlPctLeveraged: number | null; // pnlPct × leverage — ROI on margin
+  outcome: SignalOutcome | null;
+}
+
+async function fetchExecutionLiveDataBySignalId(
+  userId: string,
+  executedSignalIds: string[],
+): Promise<Map<string, SignalExecutionLiveData>> {
+  const result = new Map<string, SignalExecutionLiveData>();
+  if (executedSignalIds.length === 0) return result;
+
+  const execRows = await db
+    .select({
+      signalId: tradeExecutions.signalId,
+      symbol: tradeExecutions.symbol,
+      exchangeName: tradeExecutions.exchangeName,
+      marketType: tradeExecutions.marketType,
+      mode: tradeExecutions.mode,
+      status: tradeExecutions.status,
+      fillType: tradeExecutions.fillType,
+      leverage: tradeExecutions.leverage,
+      entryPrice: tradeExecutions.entryPrice,
+      exitPrice: tradeExecutions.exitPrice,
+      positionSize: tradeExecutions.positionSize,
+      realizedPnl: tradeExecutions.realizedPnl,
+      entryAt: tradeExecutions.entryAt,
+      direction: tradeSignals.direction,
+    })
+    .from(tradeExecutions)
+    .leftJoin(tradeSignals, eq(tradeExecutions.signalId, tradeSignals.id))
+    .where(
+      and(eq(tradeExecutions.userId, userId), inArray(tradeExecutions.signalId, executedSignalIds)),
+    )
+    .orderBy(desc(tradeExecutions.entryAt));
+
+  // A signal can in principle have more than one execution row (retries) —
+  // keep only the latest (rows already ordered desc by entryAt above).
+  const latestBySignal = new Map<string, (typeof execRows)[number]>();
+  for (const row of execRows) {
+    if (row.signalId && !latestBySignal.has(row.signalId)) {
+      latestBySignal.set(row.signalId, row);
+    }
+  }
+
+  const openRows = [...latestBySignal.values()].filter((r) => r.status === 'open');
+  const uniqueExchangeSymbols = [
+    ...new Set(
+      openRows
+        .filter((r) => r.symbol)
+        .map((r) => toExchangeSymbol(r.symbol, (r.marketType as MarketType) ?? 'spot')),
+    ),
+  ];
+  const tickerMap = await fetchLiveTickerPrices(userId, uniqueExchangeSymbols, {
+    isPaper: openRows.every((r) => r.mode === 'paper'),
+    fallbackExchangeName: openRows[0]?.exchangeName ?? null,
+  });
+
+  for (const [signalId, r] of latestBySignal) {
+    const direction = (r.direction ?? 'LONG') as 'LONG' | 'SHORT';
+    const leverage = r.leverage && r.leverage > 0 ? r.leverage : 1;
+    const entryPrice = r.entryPrice ? Number(r.entryPrice) : null;
+    const positionSize = r.positionSize ? Number(r.positionSize) : null;
+    const exitPrice = r.exitPrice ? Number(r.exitPrice) : null;
+    const marketType = (r.marketType as MarketType) ?? 'spot';
+
+    let currentPrice: number | null = null;
+    let pnlPct: number | null = null;
+
+    if (r.status === 'open') {
+      currentPrice = r.symbol ? (tickerMap.get(toExchangeSymbol(r.symbol, marketType)) ?? null) : null;
+      if (entryPrice && positionSize && currentPrice) {
+        pnlPct = computePnlPct(entryPrice, currentPrice, positionSize, direction);
+      }
+    } else if (r.status === 'closed') {
+      if (entryPrice && positionSize && exitPrice) {
+        pnlPct = computePnlPct(entryPrice, exitPrice, positionSize, direction);
+      } else if (r.realizedPnl != null && entryPrice && positionSize && entryPrice > 0) {
+        pnlPct = (Number(r.realizedPnl) / (entryPrice * positionSize)) * 100;
+      }
+    }
+
+    const round = (n: number | null) => (n != null ? Math.round(n * 100) / 100 : null);
+
+    result.set(signalId, {
+      status: r.status,
+      fillType: r.fillType,
+      mode: r.mode,
+      leverage,
+      entryPrice,
+      currentPrice,
+      exitPrice,
+      pnlPct: round(pnlPct),
+      pnlPctLeveraged: round(computeLeveragedPnlPct(pnlPct, leverage)),
+      outcome: computeSignalOutcome({ executionStatus: r.status, fillType: r.fillType, pnl: pnlPct }),
+    });
+  }
+
+  return result;
+}
+
 export async function GET() {
   const { userId } = await auth();
   if (!userId) {
@@ -202,6 +322,11 @@ export async function GET() {
     .orderBy(desc(tradeSignals.createdAt))
     .limit(100);
 
+  const executionBySignalId = await fetchExecutionLiveDataBySignalId(
+    userId,
+    rows.filter((r) => r.status === 'executed').map((r) => r.id),
+  );
+
   const signals = rows.map((row) => ({
     id: row.id,
     symbol: row.symbol,
@@ -235,6 +360,7 @@ export async function GET() {
       row.riskCapitalUsdt,
       row.riskCalculatedAt,
     ),
+    execution: executionBySignalId.get(row.id) ?? null,
   }));
 
   return NextResponse.json({

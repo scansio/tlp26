@@ -20,6 +20,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { and, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { tradeExecutions, tradeSignals, publisherEarnings } from '@/db/schema';
+import { computeLeveragedPnlPct } from '@/lib/pnl';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -146,6 +147,7 @@ export async function GET(req: NextRequest) {
         status: tradeExecutions.status,
         mode: tradeExecutions.mode,
         fillType: tradeExecutions.fillType,
+        leverage: tradeExecutions.leverage,
         entryAt: tradeExecutions.entryAt,
         exitAt: tradeExecutions.exitAt,
         // From signal (nullable)
@@ -303,6 +305,10 @@ export async function GET(req: NextRequest) {
       positionSize,
       realizedPnl,
       realizedPnlPct,
+      // ROI on margin (% of notional × leverage) — matches the headline
+      // percentage exchanges show, vs. realizedPnlPct above (% of notional).
+      realizedPnlPctLeveraged: computeLeveragedPnlPct(realizedPnlPct, r.leverage),
+      leverage: r.leverage ?? 1,
       // Expose the fee deduction so the UI can display it separately
       performanceFeeDeducted,
       status: r.status,

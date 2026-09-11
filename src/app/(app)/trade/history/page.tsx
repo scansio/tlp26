@@ -44,6 +44,8 @@ interface Trade {
   positionSize: number | null;
   realizedPnl: number | null;
   realizedPnlPct: number | null;
+  realizedPnlPctLeveraged: number | null;
+  leverage: number | null;
   status: string | null;
   fillType: string | null;
   mode: string;
@@ -157,7 +159,9 @@ function exportToCsv(trades: Trade[]): void {
     'Entry Price',
     'Exit Price',
     'P&L ($)',
-    'P&L (%)',
+    'P&L (% of notional)',
+    'ROI (% leveraged)',
+    'Leverage',
     'Status',
     'Fill Type',
     'Mode',
@@ -174,6 +178,8 @@ function exportToCsv(trades: Trade[]): void {
     t.exitPrice?.toString() ?? '',
     t.realizedPnl?.toFixed(4) ?? '',
     t.realizedPnlPct?.toFixed(4) ?? '',
+    t.realizedPnlPctLeveraged?.toFixed(4) ?? '',
+    t.leverage?.toString() ?? '',
     t.status ?? '',
     t.fillType ?? '',
     t.mode,
@@ -344,7 +350,7 @@ function TradeRow({ trade }: { trade: Trade }) {
   const [expanded, setExpanded] = useState(false);
 
   const pnlVal = trade.realizedPnl;
-  const pnlPctVal = trade.realizedPnlPct;
+  const pnlPctVal = trade.realizedPnlPctLeveraged ?? trade.realizedPnlPct;
 
   return (
     <>
@@ -378,6 +384,9 @@ function TradeRow({ trade }: { trade: Trade }) {
         </td>
         <td className={`py-3 px-4 text-sm tabular-nums ${pnlClass(pnlPctVal)}`}>
           {formatPct(pnlPctVal)}
+          {trade.leverage && trade.leverage > 1 && (
+            <span className="text-muted-foreground/70 text-xs"> ({trade.leverage}x)</span>
+          )}
         </td>
         <td className="py-3 px-4">
           <div className="flex items-center gap-1 flex-wrap">
@@ -413,7 +422,7 @@ function TradeRow({ trade }: { trade: Trade }) {
 function TradeCard({ trade }: { trade: Trade }) {
   const [expanded, setExpanded] = useState(false);
   const pnlVal = trade.realizedPnl;
-  const pnlPctVal = trade.realizedPnlPct;
+  const pnlPctVal = trade.realizedPnlPctLeveraged ?? trade.realizedPnlPct;
 
   return (
     <Card className="p-4 min-w-0">
@@ -478,8 +487,13 @@ function TradeCard({ trade }: { trade: Trade }) {
             <p className={`tabular-nums font-medium ${pnlClass(pnlVal)}`}>{formatPnl(pnlVal)}</p>
           </div>
           <div className="min-w-0">
-            <p className="text-xs text-muted-foreground">P&amp;L (%)</p>
-            <p className={`tabular-nums ${pnlClass(pnlPctVal)}`}>{formatPct(pnlPctVal)}</p>
+            <p className="text-xs text-muted-foreground">ROI (%)</p>
+            <p className={`tabular-nums ${pnlClass(pnlPctVal)}`}>
+              {formatPct(pnlPctVal)}
+              {trade.leverage && trade.leverage > 1 && (
+                <span className="text-muted-foreground/70 text-xs"> ({trade.leverage}x)</span>
+              )}
+            </p>
           </div>
         </div>
 
@@ -861,7 +875,7 @@ export default function TradeHistoryPage() {
                     <th className="py-3 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Entry</th>
                     <th className="py-3 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Exit</th>
                     <th className="py-3 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">P&amp;L ($)</th>
-                    <th className="py-3 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">P&amp;L (%)</th>
+                    <th className="py-3 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">ROI (%)</th>
                     <th className="py-3 px-4 text-left font-medium text-muted-foreground">Status</th>
                   </tr>
                 </thead>

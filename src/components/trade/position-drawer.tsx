@@ -43,6 +43,7 @@ export type OpenPosition = {
   leverage?: number | null
   unrealizedPnlUsd: number | null
   unrealizedPnlPct: number | null
+  unrealizedPnlPctLeveraged?: number | null
   stopLoss: number | null
   takeProfit: number | null
   entryAt: string | null
@@ -399,12 +400,22 @@ export function PositionDrawer({
                 {fmtPnl(position.unrealizedPnlUsd)}
               </p>
             </div>
-            <p className={cn(
-              'text-lg font-semibold tabular-nums shrink-0',
-              pnlPos ? 'text-green-500/80' : 'text-red-500/80'
-            )}>
-              {fmtPct(position.unrealizedPnlPct)}
-            </p>
+            <div className="text-right shrink-0">
+              {/* ROI on margin (price move % × leverage) — the headline
+                  percentage exchanges show on an open position. */}
+              <p className={cn(
+                'text-lg font-semibold tabular-nums',
+                pnlPos ? 'text-green-500/80' : 'text-red-500/80'
+              )}>
+                {fmtPct(position.unrealizedPnlPctLeveraged ?? position.unrealizedPnlPct)}
+              </p>
+              {position.unrealizedPnlPctLeveraged != null && (
+                <p className="text-[10px] text-muted-foreground tabular-nums">
+                  {fmtPct(position.unrealizedPnlPct)} of notional
+                  {position.leverage ? ` · ${position.leverage}x` : ''}
+                </p>
+              )}
+            </div>
           </div>
         </div>
 
