@@ -42,7 +42,11 @@ export default function RootLayout({
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <NextTopLoader color="var(--primary)" showSpinner={false} />
-          <ClerkProvider appearance={{ theme: shadcn }}>
+          <ClerkProvider
+            appearance={{ theme: shadcn }}
+            signInFallbackRedirectUrl="/dashboard"
+            signUpFallbackRedirectUrl="/dashboard"
+          >
             <TooltipProvider>{children}</TooltipProvider>
           </ClerkProvider>
         </ThemeProvider>

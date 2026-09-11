@@ -1,5 +1,7 @@
 import { SignInButton, SignUpButton, SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
 import Link from "next/link";
+import { listActivePlansWithPrices } from "@/lib/billing/plans";
+import { INTERVAL_LABEL, formatPlanPrice } from "@/lib/billing/format";
 
 // ─── PLACEHOLDER DATA — replace with real metrics before launch ───────────────
 const STATS = [
@@ -108,7 +110,7 @@ const FAQS = [
   },
   {
     q: "What does it cost?",
-    a: "Paper trading is completely free — no credit card required. Live trading pricing is coming soon. Sign up now to lock in early-access rates.",
+    a: "Paper trading is completely free on the free plan — no credit card required. Paid plans unlock higher daily limits, BYOK, and personalized memory — see the Pricing section above for current rates.",
   },
 ];
 // ──────────────────────────────────────────────────────────────────────────────
@@ -121,7 +123,9 @@ const SIGNAL_REASONS = [
   "Liquidation wall at $65,800 acting as support",
 ];
 
-export default function Home() {
+export default async function Home() {
+  const plans = await listActivePlansWithPrices();
+
   return (
     <div className="min-h-screen bg-black text-white antialiased">
       {/* ── Nav ─────────────────────────────────────────────────────────────── */}
@@ -130,6 +134,7 @@ export default function Home() {
         <nav className="hidden md:flex items-center gap-6 text-sm text-zinc-400">
           <a href="#features" className="hover:text-white transition-colors">Features</a>
           <a href="#how-it-works" className="hover:text-white transition-colors">How it works</a>
+          <a href="#pricing" className="hover:text-white transition-colors">Pricing</a>
           <a href="#testimonials" className="hover:text-white transition-colors">Testimonials</a>
           <a href="#faq" className="hover:text-white transition-colors">FAQ</a>
           <a href="/docs" className="hover:text-white transition-colors">Docs</a>
@@ -357,6 +362,71 @@ export default function Home() {
         </div>
       </section>
 
+      {/* ── Pricing ─────────────────────────────────────────────────────────── */}
+      <section id="pricing" className="py-14 md:py-20 px-6 border-t border-white/5">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-center mb-10 md:mb-16">
+            <h2 className="text-2xl md:text-3xl lg:text-4xl font-bold mb-4">Simple, transparent pricing.</h2>
+            <p className="text-zinc-400 text-base md:text-lg">Start free. Upgrade when you need more.</p>
+          </div>
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-5xl mx-auto">
+            {plans.map((plan) => {
+              const monthly = plan.prices.find((p) => p.billingInterval === "monthly") ?? plan.prices[0];
+              const features = [
+                `${plan.autoTradeRunsPerDay} auto-trade runs / day`,
+                `${plan.chatMessagesPerDay} chat messages / day`,
+                plan.allowsByok ? "Bring your own API keys" : null,
+                plan.allowsPersonalizedMemory ? "Personalized memory" : null,
+              ].filter(Boolean) as string[];
+
+              return (
+                <div
+                  key={plan.id}
+                  className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 flex flex-col"
+                >
+                  <h3 className="font-semibold text-white capitalize mb-1">{plan.name}</h3>
+                  <div className="mb-4">
+                    {monthly ? (
+                      <>
+                        <span className="text-3xl font-bold text-white">
+                          {formatPlanPrice(monthly.price, monthly.currency)}
+                        </span>
+                        <span className="text-sm text-zinc-500">/{INTERVAL_LABEL[monthly.billingInterval]}</span>
+                      </>
+                    ) : (
+                      <span className="text-3xl font-bold text-white">Free</span>
+                    )}
+                  </div>
+                  <ul className="space-y-2 text-sm text-zinc-400 mb-6 flex-1">
+                    {features.map((f) => (
+                      <li key={f} className="flex items-start gap-2">
+                        <span className="text-emerald-400 mt-0.5 shrink-0">✓</span>
+                        {f}
+                      </li>
+                    ))}
+                  </ul>
+                  <SignedOut>
+                    <SignUpButton fallbackRedirectUrl="/billing">
+                      <button className="w-full text-center rounded-full border border-zinc-700 hover:border-zinc-500 px-5 py-2.5 text-sm font-medium transition-colors">
+                        Get started
+                      </button>
+                    </SignUpButton>
+                  </SignedOut>
+                  <SignedIn>
+                    <Link
+                      href="/billing"
+                      className="w-full text-center rounded-full border border-zinc-700 hover:border-zinc-500 px-5 py-2.5 text-sm font-medium transition-colors"
+                    >
+                      View plan
+                    </Link>
+                  </SignedIn>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
       {/* ── Testimonials ────────────────────────────────────────────────────── */}
       <section id="testimonials" className="py-14 md:py-20 px-6 border-t border-white/5">
         <div className="max-w-6xl mx-auto">
@@ -450,6 +520,7 @@ export default function Home() {
             <nav className="flex flex-wrap gap-x-6 gap-y-3 text-sm text-zinc-500">
               <a href="#features" className="hover:text-zinc-300 transition-colors">Features</a>
               <a href="#how-it-works" className="hover:text-zinc-300 transition-colors">How it works</a>
+              <a href="#pricing" className="hover:text-zinc-300 transition-colors">Pricing</a>
               <a href="#faq" className="hover:text-zinc-300 transition-colors">FAQ</a>
               <SignedOut>
                 <SignUpButton>

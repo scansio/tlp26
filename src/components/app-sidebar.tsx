@@ -16,6 +16,7 @@ import {
   Star,
   Shield,
   Link2,
+  CreditCard,
   ChevronRight,
   Activity,
   TrendingUp,
@@ -89,6 +90,7 @@ const navCopy = [
 ];
 
 const navProfile = [
+  { title: 'Billing', href: '/billing', icon: CreditCard },
   { title: 'Risk Profile', href: '/profile/risk', icon: Shield },
   { title: 'Exchanges', href: '/profile/exchanges', icon: Link2 },
 ];
