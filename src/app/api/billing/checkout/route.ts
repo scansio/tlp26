@@ -15,7 +15,7 @@
  */
 
 import { and, eq } from 'drizzle-orm';
-import { auth } from '@clerk/nextjs/server';
+import { auth, clerkClient } from '@clerk/nextjs/server';
 import { z } from 'zod';
 import { NextResponse } from 'next/server';
 import { db } from '@/db';
@@ -39,6 +39,28 @@ const checkoutSchema = z.object({
 
 function appBaseUrl(req: Request): string {
   return process.env.APP_BASE_URL ?? new URL(req.url).origin;
+}
+
+// The users table (src/db/schema.ts) is only populated by the Clerk
+// `user.created` webhook — if that webhook never reached this deployment
+// (misconfigured CLERK_WEBHOOK_SECRET, endpoint added after the account was
+// created, etc.) the mirror row never exists at all, regardless of whether
+// the account actually has a real email. Clerk itself is always the source
+// of truth, so ask it first; the local mirror is only a fallback in case the
+// Clerk API call itself fails transiently.
+async function resolveUserEmail(userId: string): Promise<string | undefined> {
+  try {
+    const client = await clerkClient();
+    const clerkUser = await client.users.getUser(userId);
+    const clerkEmail =
+      clerkUser.primaryEmailAddress?.emailAddress || clerkUser.emailAddresses[0]?.emailAddress;
+    if (clerkEmail) return clerkEmail;
+  } catch (err) {
+    console.error('[billing/checkout] clerkClient.users.getUser failed', err);
+  }
+
+  const [userRow] = await db.select({ email: users.email }).from(users).where(eq(users.clerkUserId, userId)).limit(1);
+  return userRow?.email || undefined;
 }
 
 export async function POST(req: Request) {
@@ -109,12 +131,7 @@ export async function POST(req: Request) {
   const now = new Date();
   const periodEnd = addBillingInterval(now, billingInterval as BillingInterval);
 
-  const [userRow] = await db.select({ email: users.email }).from(users).where(eq(users.clerkUserId, userId)).limit(1);
-  // `||`, not `??` — a phone-only Clerk account has no email, and the
-  // users.email column (NOT NULL) stores that as '' rather than null (see
-  // src/app/api/auth/webhook/route.ts), which `??` would let straight
-  // through to Paystack/Stripe as an empty string.
-  const email = userRow?.email || undefined;
+  const email = await resolveUserEmail(userId);
 
   const [paymentRow] = await db
     .insert(subscriptionPayments)
@@ -193,7 +210,11 @@ export async function POST(req: Request) {
     const paystackPlanCode = price.providerPriceId?.paystack;
     const reference = paymentRow.id;
     const transaction = await initializePaystackTransaction({
-      email: email ?? `${userId}@unknown.local`,
+      // example.com is IANA/RFC 2606 reserved specifically for placeholder
+      // use — always passes format+domain validation. `.local` (the previous
+      // fallback) is a reserved special-use TLD (RFC 6762, mDNS) that
+      // Paystack's own email validation rejects outright.
+      email: email ?? `${userId}@example.com`,
       amountSubunits: Math.round(finalAmount * 100),
       reference,
       callbackUrl,
