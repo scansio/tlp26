@@ -37,8 +37,24 @@ const checkoutSchema = z.object({
   cancelUrl: z.string().optional(),
 });
 
+// `req.url`'s origin is the address Next.js's own HTTP server sees — behind
+// a reverse proxy (Dokploy/Traefik, any CDN) that's the internal
+// container/upstream address, not the public domain, which is exactly what
+// broke Paystack's callback_url. APP_BASE_URL (set explicitly, see
+// .env.example) is authoritative when present; behind a proxy that forgot
+// to set it, prefer the standard X-Forwarded-* headers the proxy itself
+// sets over the internal origin — only fall all the way back to `req.url`
+// when there's truly no proxy in front of this at all (e.g. local dev).
 function appBaseUrl(req: Request): string {
-  return process.env.APP_BASE_URL ?? new URL(req.url).origin;
+  if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL;
+
+  const forwardedHost = req.headers.get('x-forwarded-host');
+  if (forwardedHost) {
+    const forwardedProto = req.headers.get('x-forwarded-proto') ?? 'https';
+    return `${forwardedProto}://${forwardedHost}`;
+  }
+
+  return new URL(req.url).origin;
 }
 
 // The users table (src/db/schema.ts) is only populated by the Clerk
