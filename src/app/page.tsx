@@ -123,6 +123,12 @@ const SIGNAL_REASONS = [
   "Liquidation wall at $65,800 acting as support",
 ];
 
+// Pricing is read from the DB below — must always be fetched fresh at
+// request time, never baked in from whatever it was at build time (when
+// there's no DB connection to hit anyway, which is what broke the Docker
+// build: `next build` tries to statically prerender `/` by default).
+export const dynamic = 'force-dynamic';
+
 export default async function Home() {
   const plans = await listActivePlansWithPrices();
 
