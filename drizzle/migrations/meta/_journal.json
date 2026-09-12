@@ -246,6 +246,13 @@
       "when": 1789060829098,
       "tag": "0034_wakeful_mysterio",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1789203429286,
+      "tag": "0035_seed_subscription_plans",
+      "breakpoints": true
     }
   ]
 }
