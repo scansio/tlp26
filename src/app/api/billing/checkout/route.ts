@@ -110,7 +110,11 @@ export async function POST(req: Request) {
   const periodEnd = addBillingInterval(now, billingInterval as BillingInterval);
 
   const [userRow] = await db.select({ email: users.email }).from(users).where(eq(users.clerkUserId, userId)).limit(1);
-  const email = userRow?.email ?? undefined;
+  // `||`, not `??` — a phone-only Clerk account has no email, and the
+  // users.email column (NOT NULL) stores that as '' rather than null (see
+  // src/app/api/auth/webhook/route.ts), which `??` would let straight
+  // through to Paystack/Stripe as an empty string.
+  const email = userRow?.email || undefined;
 
   const [paymentRow] = await db
     .insert(subscriptionPayments)
