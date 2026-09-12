@@ -253,6 +253,13 @@
       "when": 1789203429286,
       "tag": "0035_seed_subscription_plans",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1789217567999,
+      "tag": "0036_seed_ngn_plan_prices",
+      "breakpoints": true
     }
   ]
 }

@@ -90,13 +90,32 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Plan not found or inactive' }, { status: 404 });
   }
 
+  // Which currency to charge is a property of the *provider*, not a free
+  // choice — Paystack's Nigerian card rails need NGN (that's the whole
+  // reason "Card (NGN)" is its own option in the UI; many Nigerian issuers
+  // decline non-NGN Paystack charges), Stripe/OxaPay bill in USD. Filtering
+  // here (rather than grabbing whatever row exists for the plan/interval)
+  // is what actually enforces that — previously this ignored currency
+  // entirely, so a Paystack checkout silently got the USD row's raw number
+  // charged as NGN (e.g. an intended $19 charge became ₦19).
+  const targetCurrency = provider === 'paystack' ? 'NGN' : 'USD';
+
   const [price] = await db
     .select()
     .from(subscriptionPlanPrices)
-    .where(and(eq(subscriptionPlanPrices.planId, planId), eq(subscriptionPlanPrices.billingInterval, billingInterval)))
+    .where(
+      and(
+        eq(subscriptionPlanPrices.planId, planId),
+        eq(subscriptionPlanPrices.billingInterval, billingInterval),
+        eq(subscriptionPlanPrices.currency, targetCurrency),
+      ),
+    )
     .limit(1);
   if (!price) {
-    return NextResponse.json({ error: 'No price configured for this plan/interval' }, { status: 404 });
+    return NextResponse.json(
+      { error: `No ${targetCurrency} price configured for this plan/interval` },
+      { status: 404 },
+    );
   }
 
   const baseAmount = Number(price.price);
@@ -216,6 +235,7 @@ export async function POST(req: Request) {
       // Paystack's own email validation rejects outright.
       email: email ?? `${userId}@example.com`,
       amountSubunits: Math.round(finalAmount * 100),
+      currency: price.currency,
       reference,
       callbackUrl,
       metadata: { subscription_payment_id: paymentRow.id, user_id: userId, plan_id: planId },

@@ -42,10 +42,16 @@ export async function listActivePlansWithPrices(): Promise<PlanWithPrices[]> {
     db.select().from(subscriptionPlanPrices),
   ]);
 
+  // A (plan, interval) can now have more than one currency row (e.g. USD for
+  // Stripe/OxaPay, NGN for Paystack — see src/app/api/billing/checkout's
+  // per-provider currency selection). This headline display price always
+  // prefers USD regardless of row order, so adding another currency here
+  // never flips what price the pricing page shows.
   const firstPriceByPlanInterval = new Map<string, (typeof prices)[number]>();
   for (const price of prices) {
     const key = `${price.planId}:${price.billingInterval}`;
-    if (!firstPriceByPlanInterval.has(key)) {
+    const existing = firstPriceByPlanInterval.get(key);
+    if (!existing || (existing.currency !== 'USD' && price.currency === 'USD')) {
       firstPriceByPlanInterval.set(key, price);
     }
   }

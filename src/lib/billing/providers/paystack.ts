@@ -31,6 +31,14 @@ function requireSecretKey(): string {
 export interface InitializePaystackTransactionInput {
   email: string;
   amountSubunits: number;
+  /**
+   * Required — Paystack otherwise defaults to whatever currency the account
+   * itself is configured for and interprets `amount` as subunits of THAT
+   * currency, silently charging the wrong amount if it doesn't match what
+   * `amount` was actually computed in (e.g. a USD amount charged as if it
+   * were already NGN kobo).
+   */
+  currency: string;
   reference: string;
   callbackUrl: string;
   metadata?: Record<string, unknown>;
@@ -54,6 +62,7 @@ export async function initializePaystackTransaction(input: InitializePaystackTra
     body: JSON.stringify({
       email: input.email,
       amount: input.amountSubunits,
+      currency: input.currency,
       reference: input.reference,
       callback_url: input.callbackUrl,
       metadata: input.metadata,
