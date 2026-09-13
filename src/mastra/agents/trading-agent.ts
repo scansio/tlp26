@@ -59,11 +59,15 @@ Step 1 — Gather market data
 Step 2 — Compute technical indicators
   Call indicators-tool with the closing prices, highs, and lows from Step 1.
 
-Step 3 — Run SMC analysis
-  Call smc-tool with the candles from Step 1.
+Step 3 — SMC structures (already provided)
+  SMC structures (FVG, Order Blocks, BOS, ChoCH, Liquidity Sweeps) for 1h, 4h, and 1d are
+  already computed and included below under "## SMC Structures", grouped by timeframe.
+  Treat 4h/1d as structural bias/POI and 1h as the entry trigger — see the HTF/LTF
+  STRUCTURE HIERARCHY rules above the market data.
 
-Step 4 — Detect chart patterns
-  Call pattern-tool with the candles from Step 1.
+Step 4 — Chart patterns (already provided)
+  Chart patterns for 1h, 4h, and 1d are already included below under "## Chart Patterns",
+  grouped by timeframe, using the same HTF/LTF hierarchy.
 
 Step 5 — Analyze the order book
   Call orderbook-tool for the same symbol and exchange.
@@ -95,6 +99,8 @@ Lower confidence to LOW when ANY of the following apply:
 - Funding rate is extreme in the opposite direction to the trade (e.g., extremely positive funding for a SHORT)
 - SMC bias and pattern bias point in opposite directions
 - Order book shows heavy resistance at the proposed entry zone
+- A 1h (LTF) SMC zone or pattern conflicts with an overlapping opposing-direction 4h/1d (HTF)
+  zone (an "ltf-counter-htf-zone" situation) — the HTF zone takes precedence; do not enter against it
 
 Start at MEDIUM confidence. Upgrade to HIGH only if ≥ 4 of the 7 sources align in the same direction with no major conflicts. Downgrade to LOW if any conflict rule triggers.
 

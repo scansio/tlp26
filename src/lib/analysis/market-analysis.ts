@@ -87,6 +87,7 @@ export const smcDetectionSchema = z.object({
   direction: z.enum(['BULLISH', 'BEARISH']),
   strengthScore: z.number(),
   distanceFromCurrentPrice: z.number(),
+  timeframe: z.string().optional().describe('Source candle timeframe: "1h", "4h", or "1d"'),
 });
 
 export const smcResultSchema = z.object({
@@ -99,16 +100,20 @@ export const smcResultSchema = z.object({
   candleCount: z.number(),
 });
 
+// Mirrors pattern-tool.ts's detectedPatternSchema — the actual shape returned by
+// patternTool.execute(). This schema previously declared different field names
+// (type/stopLossPrice/patternStartIndex/patternEndIndex/description) that the tool
+// never produced; that mismatch was masked by a blind `as` cast in
+// detectChartPatternsPhase and only became load-bearing once step-input validation
+// started parsing this shape for real (see market-analysis.ts's phase widening).
 export const patternSchema = z.object({
-  type: z.string(),
+  patternType: z.string(),
   direction: z.enum(['BULLISH', 'BEARISH', 'NEUTRAL']),
   confidenceScore: z.number(),
   necklinePrice: z.number().optional(),
   targetPrice: z.number().optional(),
-  stopLossPrice: z.number().optional(),
-  patternStartIndex: z.number(),
-  patternEndIndex: z.number(),
-  description: z.string(),
+  invalidationLevel: z.number().optional(),
+  timeframe: z.string().optional().describe('Source candle timeframe: "1h", "4h", or "1d"'),
 });
 
 export const wallSchema = z.object({
@@ -300,8 +305,16 @@ export function deriveStructuralTargetBound(
   const isAheadOfPrice = (distanceFromCurrentPrice: number): boolean =>
     direction === 'LONG' ? distanceFromCurrentPrice > 0 : distanceFromCurrentPrice < 0;
 
+  // Restricted to 1h (the pre-existing single-timeframe behavior) even though
+  // smcStructures/chartPatterns now carry 4h/1d structures too — widening this
+  // R:R gate to weight HTF zones as stronger caps is a real behavior change to
+  // live risk gating and deserves its own deliberate follow-up, not a side
+  // effect of adding timeframe tags.
+  const isOnBoundTimeframe = (timeframe: string | undefined): boolean =>
+    timeframe === '1h' || timeframe === undefined;
+
   const smcCandidates = [...smcStructures.orderBlocks, ...smcStructures.liquiditySweeps].filter(
-    (s) => s.direction === wantCapDirection && isAheadOfPrice(s.distanceFromCurrentPrice),
+    (s) => s.direction === wantCapDirection && isAheadOfPrice(s.distanceFromCurrentPrice) && isOnBoundTimeframe(s.timeframe),
   );
 
   if (smcCandidates.length > 0) {
@@ -318,7 +331,8 @@ export function deriveStructuralTargetBound(
     (p) =>
       p.direction === wantMoveDirection &&
       typeof p.targetPrice === 'number' &&
-      isAheadOfPrice(((p.targetPrice - currentPrice) / currentPrice) * 100),
+      isAheadOfPrice(((p.targetPrice - currentPrice) / currentPrice) * 100) &&
+      isOnBoundTimeframe(p.timeframe),
   );
 
   if (patternCandidates.length > 0) {
@@ -600,15 +614,42 @@ export function deriveTopDownBiasPhase<
 // Phase 3 — detectSMCStructures
 // ---------------------------------------------------------------------------
 
+// Timeframes SMC/pattern detection runs on. 15m is deliberately excluded — it
+// stays scoped to indicator entry-timing only (see agentDecisionPhase's LTF
+// section); structure detection on 15m would be mostly noise and would push
+// prompt growth to 4x instead of 3x.
+const STRUCTURE_TIMEFRAMES = ['1h', '4h', '1d'] as const;
+
+/** Recomputes distanceFromCurrentPrice against one shared reference price so
+ * detections from different timeframes (each tool call otherwise measures
+ * distance against that timeframe's own, differently-lagged last close) are
+ * directly comparable once merged. */
+function rebaseDistance<T extends { priceLevel: number; distanceFromCurrentPrice: number }>(
+  detections: T[],
+  currentPrice: number,
+): T[] {
+  return detections.map((d) => ({
+    ...d,
+    distanceFromCurrentPrice: currentPrice === 0 ? d.distanceFromCurrentPrice : ((d.priceLevel - currentPrice) / currentPrice) * 100,
+  }));
+}
+
 export async function detectSMCStructuresPhase<
-  T extends { candles1h: z.infer<typeof candleSchema>[]; symbol: string; exchange: string; marketType?: string },
+  T extends {
+    candles1h: z.infer<typeof candleSchema>[];
+    candles4h: z.infer<typeof candleSchema>[];
+    candles1d: z.infer<typeof candleSchema>[];
+    symbol: string;
+    exchange: string;
+    marketType?: string;
+  },
 >(
   input: T,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any,
 ): Promise<T & { smcStructures: z.infer<typeof smcResultSchema> }> {
   return withTimeout('detectSMCStructures', async () => {
-    const cacheKey = buildAnalysisCacheKey(input.symbol, input.exchange, input.marketType ?? 'spot', 'smc');
+    const cacheKey = buildAnalysisCacheKey(input.symbol, input.exchange, input.marketType ?? 'spot', 'smc-v2');
 
     const smcStructures = await readThroughDeterministicCache<z.infer<typeof smcResultSchema>>(
       cacheKey,
@@ -618,9 +659,33 @@ export async function detectSMCStructuresPhase<
         const tool = mastra?.getTool('smcTool');
         if (!tool) throw new Error('smcTool not found in Mastra instance');
 
-        // Use 1h candles as the primary timeframe for SMC structures
-        const result = await tool.execute!({ candles: input.candles1h }, {});
-        return result as z.infer<typeof smcResultSchema>;
+        const candlesByTf: Record<(typeof STRUCTURE_TIMEFRAMES)[number], z.infer<typeof candleSchema>[]> = {
+          '1h': input.candles1h,
+          '4h': input.candles4h,
+          '1d': input.candles1d,
+        };
+
+        const results = await Promise.all(
+          STRUCTURE_TIMEFRAMES.map((timeframe) =>
+            tool.execute!({ candles: candlesByTf[timeframe], timeframe }, {}),
+          ),
+        ) as z.infer<typeof smcResultSchema>[];
+
+        // 1h is the primary/reference timeframe for the merged scalar fields.
+        const currentPrice = results[0].currentPrice;
+
+        const merge = (field: 'fvgs' | 'orderBlocks' | 'bos' | 'choch' | 'liquiditySweeps') =>
+          rebaseDistance(results.flatMap((r) => r[field]), currentPrice);
+
+        return {
+          fvgs: merge('fvgs'),
+          orderBlocks: merge('orderBlocks'),
+          bos: merge('bos'),
+          choch: merge('choch'),
+          liquiditySweeps: merge('liquiditySweeps'),
+          currentPrice,
+          candleCount: results[0].candleCount,
+        };
       },
     );
 
@@ -633,14 +698,21 @@ export async function detectSMCStructuresPhase<
 // ---------------------------------------------------------------------------
 
 export async function detectChartPatternsPhase<
-  T extends { candles1h: z.infer<typeof candleSchema>[]; symbol: string; exchange: string; marketType?: string },
+  T extends {
+    candles1h: z.infer<typeof candleSchema>[];
+    candles4h: z.infer<typeof candleSchema>[];
+    candles1d: z.infer<typeof candleSchema>[];
+    symbol: string;
+    exchange: string;
+    marketType?: string;
+  },
 >(
   input: T,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any,
 ): Promise<T & { chartPatterns: z.infer<typeof patternSchema>[] }> {
   return withTimeout('detectChartPatterns', async () => {
-    const cacheKey = buildAnalysisCacheKey(input.symbol, input.exchange, input.marketType ?? 'spot', 'patterns');
+    const cacheKey = buildAnalysisCacheKey(input.symbol, input.exchange, input.marketType ?? 'spot', 'patterns-v2');
 
     const chartPatterns = await readThroughDeterministicCache<z.infer<typeof patternSchema>[]>(
       cacheKey,
@@ -650,8 +722,22 @@ export async function detectChartPatternsPhase<
         const tool = mastra?.getTool('patternTool');
         if (!tool) throw new Error('patternTool not found in Mastra instance');
 
-        const result = await tool.execute!({ candles: input.candles1h, sensitivity: 0.05 }, {});
-        return (result as { patterns: z.infer<typeof patternSchema>[] }).patterns;
+        const candlesByTf: Record<(typeof STRUCTURE_TIMEFRAMES)[number], z.infer<typeof candleSchema>[]> = {
+          '1h': input.candles1h,
+          '4h': input.candles4h,
+          '1d': input.candles1d,
+        };
+
+        const results = await Promise.all(
+          STRUCTURE_TIMEFRAMES.map((timeframe) =>
+            tool.execute!({ candles: candlesByTf[timeframe], sensitivity: 0.05, timeframe }, {}),
+          ),
+        ) as { patterns: z.infer<typeof patternSchema>[] }[];
+
+        // necklinePrice/targetPrice/invalidationLevel are absolute price levels,
+        // not percentage distances, so — unlike SMC detections — no rebasing is
+        // needed when merging across timeframes.
+        return results.flatMap((r) => r.patterns);
       },
     );
 
@@ -777,6 +863,71 @@ export async function fetchOnchainSignalsPhase<T extends { symbol: string; excha
 // Phase 7 — agentDecision
 // ---------------------------------------------------------------------------
 
+// Prompt-only trimming so tripling the timeframes doesn't triple the prompt's
+// token cost — the cached/persisted smcStructures/chartPatterns stay full
+// (deriveStructuralTargetBound and the signal's audit-trail JSON want the
+// complete picture); only what's rendered into the agent's prompt is capped.
+const PROMPT_ZONE_LIMIT = 5; // top FVGs/order blocks per timeframe, by proximity
+const PROMPT_ZONE_BAND_PCT = 15; // ...within this % band of current price
+const PROMPT_EVENT_LIMIT = 3; // last BOS/ChoCH/liquidity sweeps per timeframe
+const PROMPT_PATTERN_LIMIT = 3; // top chart patterns per timeframe, by confidence
+
+type SmcDetection = z.infer<typeof smcDetectionSchema>;
+type ChartPattern = z.infer<typeof patternSchema>;
+
+function byTimeframe<T extends { timeframe?: string }>(items: T[], timeframe: string): T[] {
+  return items.filter((item) => item.timeframe === timeframe);
+}
+
+function formatDetection(d: SmcDetection): string {
+  const sign = d.distanceFromCurrentPrice >= 0 ? '+' : '';
+  return `- ${d.type} ${d.direction} @ ${d.priceLevel} (strength ${d.strengthScore.toFixed(2)}, ${sign}${d.distanceFromCurrentPrice.toFixed(2)}%)`;
+}
+
+/** FVGs/Order Blocks are standing zones — proximity to current price is what
+ * makes one relevant, so rank by |distance| within a band. */
+function topZonesByProximity(items: SmcDetection[]): SmcDetection[] {
+  return items
+    .filter((d) => Math.abs(d.distanceFromCurrentPrice) <= PROMPT_ZONE_BAND_PCT)
+    .sort((a, b) => Math.abs(a.distanceFromCurrentPrice) - Math.abs(b.distanceFromCurrentPrice))
+    .slice(0, PROMPT_ZONE_LIMIT);
+}
+
+/** BOS/ChoCH/liquidity sweeps are point-in-time events with no timestamp
+ * field — array order (oldest-first, matching the candle order they were
+ * detected from) is the only recency signal, so take the most recent ones
+ * rather than ranking by strength (a strong-but-stale break would otherwise
+ * crowd out the most decision-relevant recent one). */
+function recentEvents(items: SmcDetection[]): SmcDetection[] {
+  return items.slice(-PROMPT_EVENT_LIMIT);
+}
+
+function buildSmcPromptSection(smc: z.infer<typeof smcResultSchema>): string {
+  return STRUCTURE_TIMEFRAMES.map((tf) => {
+    const lines = [
+      ...topZonesByProximity(byTimeframe(smc.fvgs, tf)),
+      ...topZonesByProximity(byTimeframe(smc.orderBlocks, tf)),
+      ...recentEvents(byTimeframe(smc.bos, tf)),
+      ...recentEvents(byTimeframe(smc.choch, tf)),
+      ...recentEvents(byTimeframe(smc.liquiditySweeps, tf)),
+    ].map(formatDetection);
+    return `### ${tf}\n${lines.length ? lines.join('\n') : '(none)'}`;
+  }).join('\n\n');
+}
+
+function buildPatternsPromptSection(patterns: ChartPattern[]): string {
+  return STRUCTURE_TIMEFRAMES.map((tf) => {
+    const top = byTimeframe(patterns, tf)
+      .sort((a, b) => b.confidenceScore - a.confidenceScore)
+      .slice(0, PROMPT_PATTERN_LIMIT);
+    const lines = top.map(
+      (p) =>
+        `- ${p.patternType} ${p.direction} (confidence ${p.confidenceScore.toFixed(2)}, neckline ${p.necklinePrice ?? 'n/a'}, target ${p.targetPrice ?? 'n/a'}, invalidation ${p.invalidationLevel ?? 'n/a'})`,
+    );
+    return `### ${tf}\n${lines.length ? lines.join('\n') : '(none)'}`;
+  }).join('\n\n');
+}
+
 export interface AgentDecisionInput {
   symbol: string;
   // Optional: see computeIndicatorsPhase — absent when replaying eval fixtures
@@ -831,7 +982,21 @@ RULES YOU MUST FOLLOW:
 - If tradeBias is BEARISH → only ENTER_SHORT or HOLD are allowed. ENTER_LONG is FORBIDDEN.
 - If tradeBias is NEUTRAL → ENTER_LONG or ENTER_SHORT are allowed but confidence must be MEDIUM or lower.
 - When a counter-trend trade would otherwise trigger, output HOLD and cite the HTF filter in reasoning.
-- Include "top-down-alignment" in strategiesTriggered when the LTF signal agrees with tradeBias.` +
+- Include "top-down-alignment" in strategiesTriggered when the LTF signal agrees with tradeBias.
+
+## HTF/LTF STRUCTURE HIERARCHY (MANDATORY)
+SMC structures and chart patterns below are grouped by timeframe (1h/4h/1d).
+- 4h and 1d structures are bias/points-of-interest (POI) — they mark where price is
+  expected to react, not when to enter.
+- 1h structures are entry triggers — use them to time entries into or out of the HTF POI.
+- If a 1h zone/pattern sits inside an opposing-direction 4h/1d zone, the HTF zone is
+  dominant: do not enter against it. Cite this explicitly in reasoning and lower confidence.
+- If 1h and HTF structure agree (same direction, overlapping/adjacent zones), this is the
+  strongest structural confluence available — eligible for confidence: HIGH if no other
+  conflict rule fires.
+- Include "htf-poi-alignment" in strategiesTriggered when 1h and HTF SMC/pattern direction agree.
+- Include "ltf-counter-htf-zone" in strategiesTriggered when a 1h entry trigger fires inside
+  an opposing-direction HTF zone (this is also a CONFLICT RULE — see your instructions).` +
         (input.indicators15m
           ? `
 
@@ -868,10 +1033,10 @@ ${JSON.stringify(input.indicators4h, null, 2)}
 ${JSON.stringify(input.indicators1d, null, 2)}
 
 ## SMC Structures
-${JSON.stringify(input.smcStructures, null, 2)}
+${buildSmcPromptSection(input.smcStructures)}
 
 ## Chart Patterns
-${JSON.stringify(input.chartPatterns, null, 2)}
+${buildPatternsPromptSection(input.chartPatterns)}
 
 ## Order Book
 ${JSON.stringify(input.orderBook, null, 2)}
