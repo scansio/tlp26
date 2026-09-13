@@ -10,7 +10,7 @@ import { db } from '@/db'
 import { userRiskProfiles, userExchanges } from '@/db/schema'
 import { decrypt } from '@/lib/crypto'
 import { configureMarketType, type MarketType } from '@/mastra/tools/market-symbol'
-import { getUserTradePerformance } from '@/lib/analysis/trade-performance'
+import { getUserTradePerformance, getRecentSignals } from '@/lib/analysis/trade-performance'
 import { BYOK_USER_ID_CONTEXT_KEY } from '@/lib/byok/resolve-model'
 import { resolvePlanForUser } from '@/lib/billing/plan'
 import { getUsageToday, hasChatQuota, incrementChatMessageUsage } from '@/lib/billing/usage'
@@ -180,6 +180,48 @@ ${perf.suggestion ? `\nSUGGESTION: ${perf.suggestion.message}` : ''}
 ===`;
 }
 
+// Shown instead of buildPerformanceContext's real block when
+// plan.allowsPersonalizedMemory is false (free tier) — keeps the agent aware
+// personalization exists as a plan perk rather than silently omitting it.
+const FREE_TIER_PERFORMANCE_STUB = `=== TRADE PERFORMANCE ===
+Personalized trade-history insights (win-rate breakdown, recent signal recall) are a Pro/BYOK feature. This account is on the free plan — do not fabricate performance stats; if asked, tell the user to upgrade for this.
+===`;
+
+// ---------------------------------------------------------------------------
+// Build a per-signal recall block (as opposed to buildPerformanceContext's
+// aggregate stats) — the most recent N *executed* signals, so the agent can
+// reference specific past trades, not just win-rate numbers. Scoped to
+// status='executed' only (see getRecentSignals) — a pending/rejected/
+// cancelled/expired signal never became a trade.
+// Paid-tier only (see plan.allowsPersonalizedMemory gating in POST below).
+// ---------------------------------------------------------------------------
+
+async function buildRecentSignalsContext(userId: string, limit: number): Promise<string> {
+  const signals = await getRecentSignals(userId, limit);
+
+  if (signals.length === 0) {
+    return `=== RECENT SIGNALS ===
+No executed trades yet.
+===`;
+  }
+
+  const lines = signals.map((s) => {
+    const rr = s.plannedRR !== null ? `${s.plannedRR.toFixed(2)}R planned` : 'R:R n/a';
+    const outcome =
+      s.realizedPnl !== null
+        ? `, closed P&L ${s.realizedPnl >= 0 ? '+' : ''}$${s.realizedPnl.toFixed(2)}`
+        : s.positionStatus === 'open'
+          ? ', still open'
+          : '';
+    const reasoning = s.reasoningExcerpt ? ` — "${s.reasoningExcerpt}"` : '';
+    return `- ${s.createdAt.toISOString().slice(0, 10)} ${s.symbol} ${s.direction} ${rr}, source=${s.source ?? 'ai'}, confidence=${s.confidence ?? 'n/a'}${outcome}${reasoning}`;
+  });
+
+  return `=== RECENT SIGNALS ===
+${lines.join('\n')}
+===`;
+}
+
 export async function POST(req: Request) {
   const { userId } = await auth();
   if (!userId) {
@@ -210,10 +252,26 @@ export async function POST(req: Request) {
   // takes or whether the client disconnects mid-stream.
   await incrementChatMessageUsage(userId)
 
+  // --- Personalized memory (Pro/BYOK plan perk — see subscription_plans
+  // .allows_personalized_memory) ---------------------------------------------
+  // Free tier gets a stub instead of the real win-rate/recent-signals blocks:
+  // this data (trade history, reasoning, outcomes) is exactly what the
+  // pricing page advertises as a paid perk, so it must not leak to free users.
+  // BYOK gets a slightly larger recent-signals window than pro — they already
+  // have 3x the chat quota (see subscription_plans seed), so a proportionally
+  // richer context block is consistent with that tier's positioning.
+  const personalizedMemory = plan.allowsPersonalizedMemory;
+  const recentSignalsLimit = plan.name === 'byok' ? 10 : 5;
+
   // Build risk + performance context in parallel with the rest of request handling
-  const [riskContext, performanceContext] = await Promise.all([
+  const [riskContext, performanceContext, recentSignalsContext] = await Promise.all([
     buildRiskContext(userId).catch(() => 'RISK PROFILE: unavailable'),
-    buildPerformanceContext(userId).catch(() => 'TRADE PERFORMANCE: unavailable'),
+    personalizedMemory
+      ? buildPerformanceContext(userId).catch(() => 'TRADE PERFORMANCE: unavailable')
+      : Promise.resolve(FREE_TIER_PERFORMANCE_STUB),
+    personalizedMemory
+      ? buildRecentSignalsContext(userId, recentSignalsLimit).catch(() => 'RECENT SIGNALS: unavailable')
+      : Promise.resolve(''),
   ]);
 
   const stream = await handleChatStream({
@@ -233,7 +291,9 @@ export async function POST(req: Request) {
       context: [
         {
           role: 'system',
-          content: `userId:${userId}\n\n${riskContext}\n\n${performanceContext}`,
+          content:
+            `userId:${userId}\n\n${riskContext}\n\n${performanceContext}` +
+            (recentSignalsContext ? `\n\n${recentSignalsContext}` : ''),
         },
       ],
       memory: {

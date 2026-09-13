@@ -14,7 +14,7 @@
  * src/app/api/chat/route.ts for how this gets surfaced to agents/users.
  */
 
-import { and, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { tradeExecutions, tradeSignals, userRiskProfiles } from '@/db/schema';
 
@@ -88,7 +88,8 @@ interface RawRow {
   takeProfit: string | null;
 }
 
-function computePlannedRR(row: RawRow): number | null {
+/** Shared by getUserTradePerformance's aggregation and getRecentSignals' per-signal R:R. */
+export function computePlannedRR(row: Pick<RawRow, 'entryPrice' | 'stopLoss' | 'takeProfit'>): number | null {
   if (!row.entryPrice || !row.stopLoss || !row.takeProfit) return null;
   const entry = parseFloat(row.entryPrice);
   const sl = parseFloat(row.stopLoss);
@@ -242,4 +243,66 @@ function buildSuggestion(buckets: RRBucketStat[], profileMinRR: number): Perform
       `(expectancy ${better.expectancy >= 0 ? '+' : ''}${better.expectancy}R). ` +
       `Consider raising your minimum Risk:Reward ratio to ${better.minRR}.`,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Recent signals recall — per-signal detail (as opposed to the aggregate
+// win-rate stats above), so the agent can reference specific past setups
+// ("last time you shorted BTC on a bearish divergence, it hit SL") rather
+// than only overall win-rate numbers. Scoped to status='executed' only —
+// matches buildPerformanceContext's own definition of a "trade" (which
+// counts trade_executions, not raw signals); a pending/rejected/cancelled/
+// expired signal never became a trade, so it has no performance to recall.
+// See src/app/api/chat/route.ts for gating/formatting.
+// ---------------------------------------------------------------------------
+
+const REASONING_EXCERPT_MAX_CHARS = 100;
+
+export interface RecentSignalSummary {
+  symbol: string;
+  direction: string;
+  /** The linked trade_execution's own status: open | closed | cancelled. */
+  positionStatus: string | null;
+  createdAt: Date;
+  plannedRR: number | null;
+  source: string | null;
+  confidence: string | null;
+  reasoningExcerpt: string | null;
+  /** Only set once the linked execution has closed (positionStatus='closed'); null otherwise. */
+  realizedPnl: number | null;
+}
+
+export async function getRecentSignals(userId: string, limit: number): Promise<RecentSignalSummary[]> {
+  const rows = await db
+    .select({
+      symbol: tradeSignals.symbol,
+      direction: tradeSignals.direction,
+      createdAt: tradeSignals.createdAt,
+      entryPrice: tradeSignals.entryPrice,
+      stopLoss: tradeSignals.stopLoss,
+      takeProfit: tradeSignals.takeProfit,
+      source: tradeSignals.source,
+      confidence: tradeSignals.confidence,
+      reasoning: tradeSignals.reasoning,
+      executionStatus: tradeExecutions.status,
+      realizedPnl: tradeExecutions.realizedPnl,
+    })
+    .from(tradeSignals)
+    .leftJoin(tradeExecutions, eq(tradeExecutions.signalId, tradeSignals.id))
+    .where(and(eq(tradeSignals.userId, userId), eq(tradeSignals.status, 'executed')))
+    .orderBy(desc(tradeSignals.createdAt))
+    .limit(limit);
+
+  return rows.map((row) => ({
+    symbol: row.symbol,
+    direction: row.direction,
+    positionStatus: row.executionStatus,
+    createdAt: row.createdAt ?? new Date(0),
+    plannedRR: computePlannedRR(row),
+    source: row.source,
+    confidence: row.confidence,
+    reasoningExcerpt: row.reasoning ? row.reasoning.slice(0, REASONING_EXCERPT_MAX_CHARS) : null,
+    realizedPnl:
+      row.executionStatus === 'closed' && row.realizedPnl != null ? parseFloat(row.realizedPnl) : null,
+  }));
 }
