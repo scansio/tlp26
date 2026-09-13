@@ -16,9 +16,9 @@
  * by this allowlist.
  */
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '@/db';
-import { userExchanges, userRiskProfiles } from '@/db/schema';
+import { autoTradeJobs, tradeExecutions, tradeSignals, userExchanges, userRiskProfiles } from '@/db/schema';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
 import { sendNotification } from '@/lib/notifications';
 import { normalizeSymbolList } from '@/lib/symbols';
@@ -71,6 +71,46 @@ async function notifyUnsupportedSymbols(
       `Not yet supported for automated trading on ${exchange} (${marketType}). ` +
       `Use the chat to analyze or trade ${unnotified.length > 1 ? 'these symbols' : 'this symbol'} manually instead.`,
   });
+}
+
+/**
+ * Builds the set of `${userId}:${symbol}` pairs that already have exposure a
+ * new worker-generated signal would duplicate: a trade_signal still awaiting
+ * action (pending/approved), an open trade_execution (a live/paper position),
+ * or an auto_trade_job still in flight (pending/processing) — the last one
+ * closes a retry-window hole: without it, a job stuck in backoff after a
+ * failed finalize has produced no trade_signals row yet, so the *next* tick
+ * would see no exposure and enqueue a second job for the same user+symbol,
+ * and both would eventually create a signal.
+ *
+ * Matches on symbol alone (not exchange/marketType/direction) — an open LONG
+ * on one venue still blocks a new SHORT or a same-symbol signal on another
+ * venue for that user, since a second concurrent signal on the same symbol
+ * is the duplicate the user is complaining about either way.
+ */
+async function fetchExposureKeys(userIds: string[]): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+
+  const [openSignals, openExecutions, inFlightJobs] = await Promise.all([
+    db
+      .select({ userId: tradeSignals.userId, symbol: tradeSignals.symbol })
+      .from(tradeSignals)
+      .where(and(inArray(tradeSignals.userId, userIds), inArray(tradeSignals.status, ['pending', 'approved']))),
+    db
+      .select({ userId: tradeExecutions.userId, symbol: tradeExecutions.symbol })
+      .from(tradeExecutions)
+      .where(and(inArray(tradeExecutions.userId, userIds), eq(tradeExecutions.status, 'open'))),
+    db
+      .select({ userId: autoTradeJobs.userId, symbol: autoTradeJobs.symbol })
+      .from(autoTradeJobs)
+      .where(and(inArray(autoTradeJobs.userId, userIds), inArray(autoTradeJobs.status, ['pending', 'processing']))),
+  ]);
+
+  const keys = new Set<string>();
+  for (const row of [...openSignals, ...openExecutions, ...inFlightJobs]) {
+    keys.add(`${row.userId}:${row.symbol}`);
+  }
+  return keys;
 }
 
 export async function fetchEligibleUsers(): Promise<EligibleUser[]> {
@@ -179,5 +219,26 @@ export async function fetchEligibleUsers(): Promise<EligibleUser[]> {
     }
   }
 
-  return eligible;
+  // Drop (user, symbol) pairs the user already has exposure to — see
+  // fetchExposureKeys — so a confluence group whose only interested users
+  // already hold a signal/position/queued job for it never gets built at
+  // all (grouping.ts runs on whatever `symbols` survives here), instead of
+  // running a full (LLM-costing) analysis just to produce a duplicate.
+  const exposureKeys = await fetchExposureKeys(eligible.map((u) => u.userId));
+  let skippedExposureCount = 0;
+  const withoutExistingExposure: EligibleUser[] = [];
+  for (const user of eligible) {
+    const symbols = user.symbols.filter((symbol) => !exposureKeys.has(`${user.userId}:${symbol}`));
+    skippedExposureCount += user.symbols.length - symbols.length;
+    if (symbols.length > 0) {
+      withoutExistingExposure.push({ ...user, symbols });
+    }
+  }
+  if (skippedExposureCount > 0) {
+    console.log(
+      `[worker] ${skippedExposureCount} user/symbol pair(s) skipped — existing exposure (open signal, position, or queued job)`,
+    );
+  }
+
+  return withoutExistingExposure;
 }

@@ -26,6 +26,38 @@ import { groupIntoConfluenceGroups } from './grouping';
 import { processAutoTradeJobs } from './job-queue';
 import { withGlobalTickLock } from './lock';
 
+/**
+ * In-process HOLD cooldown, keyed by confluence group (symbol+exchange+
+ * marketType). Ticks fire every 15m by default (see schedule.ts) plus
+ * session-aware cron fires layered on top of that interval, so without this a
+ * symbol sitting at HOLD gets a full re-analysis — including the
+ * agentDecision LLM call, which analysis-cache.ts's deterministic-data cache
+ * does NOT cover — on every single fire. This only throttles the *worker's*
+ * scheduled path; runMarketAnalysis itself has no cooldown, so the chat and
+ * TradingView-webhook callers (trade-analysis-workflow.ts) are unaffected.
+ *
+ * In-process (not persisted) so it resets on restart, same tradeoff as
+ * eligibility.ts's `notifiedUnsupported` Set — the boot tick
+ * (WORKER_RUN_ON_BOOT) re-populates it within one cycle regardless.
+ */
+const lastHoldByGroup = new Map<string, number>();
+
+const DEFAULT_HOLD_COOLDOWN_MINUTES = 30;
+
+function resolveHoldCooldownMs(): number {
+  const raw = process.env.WORKER_HOLD_COOLDOWN_MINUTES;
+  const minutes = raw ? Number(raw) : DEFAULT_HOLD_COOLDOWN_MINUTES;
+  if (!Number.isFinite(minutes) || minutes < 0) {
+    throw new Error(`WORKER_HOLD_COOLDOWN_MINUTES must be a non-negative number, got "${raw}"`);
+  }
+  return minutes * 60_000;
+}
+
+// Validated once at module load (mirrors schedule.ts's WORKER_TICK_INTERVAL_MINUTES
+// check) so a bad env value fails the worker at startup, not silently every
+// tick inside withGlobalTickLock's catch.
+const HOLD_COOLDOWN_MS = resolveHoldCooldownMs();
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function runTick(mastra: any): Promise<void> {
   await withGlobalTickLock(async () => {
@@ -45,6 +77,14 @@ export async function runTick(mastra: any): Promise<void> {
       );
 
       for (const group of groups) {
+        const lastHoldAt = lastHoldByGroup.get(group.key);
+        if (lastHoldAt !== undefined && Date.now() - lastHoldAt < HOLD_COOLDOWN_MS) {
+          console.log(
+            `[worker] group=${group.key} -> skipped, HOLD ${Math.round((Date.now() - lastHoldAt) / 60_000)}m ago (cooldown ${HOLD_COOLDOWN_MS / 60_000}m)`,
+          );
+          continue;
+        }
+
         const analysisRunId = crypto.randomUUID();
 
         try {
@@ -57,11 +97,14 @@ export async function runTick(mastra: any): Promise<void> {
           });
 
           if (analysis.action === 'HOLD') {
+            lastHoldByGroup.set(group.key, Date.now());
             console.log(
               `[worker] group=${group.key} -> HOLD, no jobs enqueued for ${group.users.length} user(s)`,
             );
             continue;
           }
+
+          lastHoldByGroup.delete(group.key);
 
           const jobs = group.users.map((user) => ({
             userId: user.userId,
