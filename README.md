@@ -115,7 +115,6 @@ npm run dev          # Start Next.js dev server (localhost:3000)
 npm run build        # Production build
 npm run start        # Production server
 npm run lint         # ESLint
-npm run worker       # Background signal worker (scheduled analysis + SL/TP monitor)
 npm run db:generate  # Generate Drizzle migration from schema changes
 npm run db:migrate   # Apply pending migrations to the database
 

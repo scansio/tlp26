@@ -6,23 +6,22 @@
  * this out cheaply to every user in a confluence group after the shared
  * market analysis (src/lib/analysis/market-analysis.ts) has run once.
  *
- * The market analysis always runs against one canonical reference exchange
- * (analysis.exchange), decoupled from each user's own connected execution
- * exchange — risk sizing and order placement here use `executionExchange`
- * (the user's own exchange), falling back to `analysis.exchange` for the
- * single-user webhook/manual path where there is no separate reference
- * exchange concept.
+ * Confluence groups are keyed by (symbol, exchange, marketType) — see
+ * src/worker/grouping.ts — so every user in a group already shares the same
+ * exchange/marketType the analysis ran against. Risk sizing and order
+ * placement here use `executionExchange` (the user's own exchange), falling
+ * back to `analysis.exchange` for the single-user webhook/manual path where
+ * there is no separate group concept.
  */
 
-import ccxt, { type Exchange } from 'ccxt';
-import { and, eq } from 'drizzle-orm';
-import { db } from '@/db';
-import { userExchanges, userRiskProfiles } from '@/db/schema';
-import { decrypt } from '@/lib/crypto';
 import { propagatePublisherSignal } from '@/lib/copy-mirror-engine';
+import { fetchLiveUsdtBalance } from '@/lib/exchange-account';
+import { resolveUserTradingContext } from '@/lib/user-trading-context';
 import { createSignalTool } from '@/mastra/tools/create-signal-tool';
 import { executeTradeTool } from '@/mastra/tools/execute-trade-tool';
+import type { MarketType } from '@/mastra/tools/market-symbol';
 import { noopObserve } from '@mastra/core/tools';
+import { deriveStructuralTargetBound } from './market-analysis';
 import type { MarketAnalysisResult } from './market-analysis';
 
 export interface FinalizeForUserInput {
@@ -51,77 +50,33 @@ export interface FinalizeForUserResult {
     signalStatus: string;
     message: string;
   } | null;
+  /** Set when this user's signal was intentionally not created — a successful no-op, not a failure. */
+  skippedReason?: 'rr_exceeds_structure';
 }
 
-// ---------------------------------------------------------------------------
-// Live-balance resolution (mirrors the getExchangeClient pattern duplicated
-// across src/app/api/dashboard/route.ts and src/app/api/positions/route.ts)
-// ---------------------------------------------------------------------------
-
-async function getUserActiveExchangeClient(userId: string): Promise<Exchange | null> {
-  const [row] = await db
-    .select({
-      exchangeName: userExchanges.exchangeName,
-      encryptedApiKey: userExchanges.encryptedApiKey,
-      encryptedApiSecret: userExchanges.encryptedApiSecret,
-      encryptedPassphrase: userExchanges.encryptedPassphrase,
-    })
-    .from(userExchanges)
-    .where(and(eq(userExchanges.userId, userId), eq(userExchanges.status, 'active')))
-    .limit(1);
-
-  if (!row) return null;
-
-  try {
-    const apiKey = decrypt(row.encryptedApiKey);
-    const secret = decrypt(row.encryptedApiSecret);
-    const password = row.encryptedPassphrase ? decrypt(row.encryptedPassphrase) : undefined;
-
-    const ExchangeClass = (ccxt as unknown as Record<string, new (config: object) => Exchange>)[
-      row.exchangeName
-    ];
-    if (!ExchangeClass) return null;
-
-    return new ExchangeClass({ apiKey, secret, ...(password ? { password } : {}) });
-  } catch {
-    return null;
-  }
-}
-
-async function resolveAccountBalance(
+/**
+ * Resolves the balance to size a position against. In paper mode this is
+ * always the configured paper balance. In live mode it must be the real
+ * exchange balance (via the shared exchange-account resolver, which is
+ * market-type-aware) — returns null (never a guessed/paper number) if that
+ * can't be determined, so callers can skip sizing/execution rather than
+ * computing against an unknown balance.
+ */
+export async function resolveAccountBalance(
   userId: string,
   executionMode: string,
   paperBalanceUsd: string | null,
-): Promise<number> {
-  const fallback = Number(paperBalanceUsd ?? '10000.00');
-
+  marketType: MarketType,
+): Promise<number | null> {
   if (executionMode !== 'live') {
-    return fallback;
+    return Number(paperBalanceUsd ?? '10000.00');
   }
 
-  try {
-    const client = await getUserActiveExchangeClient(userId);
-    if (!client) {
-      console.warn(
-        `finalizeForUser: live mode but no active exchange connected for userId=${userId}, falling back to paper balance`,
-      );
-      return fallback;
-    }
-
-    const balance = await client.fetchBalance();
-    const totals = balance?.total as unknown as Record<string, number> | undefined;
-    const free = balance?.free as unknown as Record<string, number> | undefined;
-    const usdt = totals?.USDT ?? free?.USDT;
-    if (typeof usdt === 'number' && usdt > 0) return usdt;
-
-    console.warn(
-      `finalizeForUser: live balance fetch returned no USDT for userId=${userId}, falling back to paper balance`,
-    );
-    return fallback;
-  } catch (err) {
-    console.warn(`finalizeForUser: fetchBalance failed for userId=${userId}, falling back to paper balance`, err);
-    return fallback;
+  const balance = await fetchLiveUsdtBalance(userId, marketType);
+  if (balance === null) {
+    console.warn(`finalizeForUser: could not determine live account balance for userId=${userId}`);
   }
+  return balance;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,54 +100,136 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
     return { signalId: null, action: 'HOLD', symbol, userId, executionMode: 'n/a', executionResult: null };
   }
 
-  // Load the user's risk profile once (previously loaded twice — once for risk
-  // sizing, once for routing — collapsed into a single query here).
+  // Load the user's trading context once via the shared resolver (same one
+  // the worker's eligibility pass and the TradingView webhook use), so
+  // marketType/leverage/margin/risk defaults can't drift between entry points.
   let riskPerTradePct = 1.0;
   let slippagePct = 0.05;
   let executionMode = 'paper'; // 'paper' | 'live'
   let tradingMode = 'manual'; // 'auto' | 'manual'
   let paperBalanceUsd: string | null = null;
+  let marketType: 'spot' | 'swap' = 'spot';
+  // Leverage is derived per-trade by riskTool (see below), not a rigid
+  // profile setting — this is only a last-resort fallback for the rare case
+  // riskTool never ran (e.g. live balance unavailable), so a signal still has
+  // *some* leverage value to persist.
+  let profileLeverageFallback = 1;
+  let marginMode: 'cross' | 'isolated' = 'cross';
+  // Matches the user_risk_profiles.min_risk_reward_ratio column default.
+  let minRiskRewardRatio = 1.5;
   try {
-    const [profile] = await db
-      .select()
-      .from(userRiskProfiles)
-      .where(eq(userRiskProfiles.userId, userId))
-      .limit(1);
-    if (profile) {
-      riskPerTradePct = parseFloat(profile.riskPerTradePct ?? '1.0');
-      slippagePct = profile.slippagePct ? parseFloat(profile.slippagePct) : 0.05;
-      executionMode = profile.executionMode ?? 'paper';
-      tradingMode = profile.tradingMode ?? 'manual';
-      paperBalanceUsd = profile.paperBalanceUsd ?? null;
+    const context = await resolveUserTradingContext(userId);
+    if (context) {
+      riskPerTradePct = context.riskPerTradePct;
+      slippagePct = context.slippagePct;
+      executionMode = context.executionMode;
+      tradingMode = context.tradingMode;
+      paperBalanceUsd = context.paperBalanceUsd;
+      marketType = context.marketType;
+      profileLeverageFallback = context.leverage;
+      marginMode = context.marginMode;
+      minRiskRewardRatio = context.minRiskRewardRatio;
     }
   } catch (err) {
     console.warn('finalizeForUser: could not load risk profile, using defaults', err);
   }
 
+  // --- Per-user R:R enforcement ---------------------------------------------
+  // SL never moves per user — it stays exactly at the agent's structural
+  // invalidation point. Only TP is recomputed per this user's
+  // minRiskRewardRatio, capped by whatever real market structure actually
+  // supports (see deriveStructuralTargetBound's SMC-first/pattern-fallback
+  // priority). If this user's required R:R would need a TP beyond that
+  // structural bound, we skip signal creation for this user only — every
+  // other user in the same confluence group is finalized independently (see
+  // src/worker/job-queue.ts) and is unaffected.
+  const slDistance = Math.abs(entryPrice - analysis.sl);
+  const requiredTp =
+    direction === 'LONG'
+      ? entryPrice + slDistance * minRiskRewardRatio
+      : entryPrice - slDistance * minRiskRewardRatio;
+  const structuralBound = deriveStructuralTargetBound(analysis, direction);
+  const rrExceedsStructure =
+    requiredTp <= 0 ||
+    (structuralBound !== null && (direction === 'LONG' ? requiredTp > structuralBound : requiredTp < structuralBound));
+
+  if (rrExceedsStructure) {
+    console.warn(
+      `finalizeForUser: userId=${userId}'s minRiskRewardRatio=${minRiskRewardRatio} requires tp=${requiredTp} for ` +
+        `${direction} ${symbol} (structural bound=${structuralBound}) — skipping signal creation for this user.`,
+    );
+    return {
+      signalId: null,
+      action,
+      symbol,
+      userId,
+      executionMode: 'n/a',
+      executionResult: null,
+      skippedReason: 'rr_exceeds_structure',
+    };
+  }
+
+  // This user's actual TP — replaces the shared analysis.tp everywhere below
+  // (signal persistence + auto-execution), computed once here, never
+  // recomputed downstream. riskTool's own inputs below are intentionally
+  // left on analysis.sl/analysis.tp — this phase only changes SL/TP/R:R
+  // persisted to the signal and used at execution, not position sizing.
+  const userTp = requiredTp;
+
+  if (analysis.marketType !== marketType) {
+    // Expected on the TradingView auto-mode path: a ".P"/".PERP" alert
+    // suffix analyzes as swap regardless of the profile's default marketType
+    // (see normaliseSymbol() in src/lib/tradingview.ts) — execution still
+    // uses the profile's marketType below. For the scheduled worker this
+    // should never fire, since confluence groups are keyed by marketType
+    // (src/worker/grouping.ts) — if it does, that's a grouping bug.
+    console.warn(
+      `finalizeForUser: analysis ran as marketType=${analysis.marketType} but userId=${userId}'s profile says ` +
+        `marketType=${marketType} — expected for a TradingView alert-suffix override, a bug if triggeredBy=scheduled; ` +
+        `proceeding with the user's own profile value for sizing/execution.`,
+    );
+  }
+
   const executionExchange = input.executionExchange ?? analysis.exchange;
-  const accountBalance = await resolveAccountBalance(userId, executionMode, paperBalanceUsd);
+  const accountBalance = await resolveAccountBalance(userId, executionMode, paperBalanceUsd, marketType);
 
   // --- Risk sizing ---
+  // accountBalance is null only when live mode couldn't determine a real
+  // balance — skip sizing entirely rather than computing against a guess.
   let riskCalculation: Record<string, unknown> | null = null;
   const riskTool = mastra?.getTool('riskTool');
   if (!riskTool) throw new Error('riskTool not found in Mastra instance');
-  try {
-    riskCalculation = (await riskTool.execute!(
-      {
-        exchange: executionExchange,
-        accountBalance,
-        riskPerTradePct,
-        entryPrice,
-        stopLossPrice: analysis.sl,
-        takeProfitPrice: analysis.tp,
-        direction,
-        slippagePct,
-      },
-      {},
-    )) as Record<string, unknown>;
-  } catch (err) {
-    console.warn('finalizeForUser: riskTool failed', err);
+  if (accountBalance !== null) {
+    try {
+      riskCalculation = (await riskTool.execute!(
+        {
+          exchange: executionExchange,
+          symbol,
+          marketType,
+          accountBalance,
+          riskPerTradePct,
+          entryPrice,
+          stopLossPrice: analysis.sl,
+          takeProfitPrice: userTp,
+          direction,
+          slippagePct,
+        },
+        {},
+      )) as Record<string, unknown>;
+    } catch (err) {
+      console.warn('finalizeForUser: riskTool failed', err);
+    }
+  } else {
+    console.warn(
+      `finalizeForUser: live account balance unavailable for userId=${userId} — creating signal without a computed position size.`,
+    );
   }
+
+  // Leverage is now derived by riskTool (capped to the exchange's per-symbol
+  // max, margin adjusted upward to compensate — see risk-tool.ts) rather than
+  // a rigid profile setting; only fall back to the profile's leverage when
+  // riskTool never ran.
+  const leverage = (riskCalculation?.leverage as number | undefined) ?? profileLeverageFallback;
 
   // --- News/on-chain snapshot for persistence ---
   const newsItems = analysis.news?.items ?? [];
@@ -210,11 +247,14 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
       direction,
       entryPrice,
       sl: analysis.sl,
-      tp: analysis.tp,
+      tp: userTp,
       confidence,
       reasoning,
       strategySource: strategiesTriggered.join(', '),
       exchange: executionExchange,
+      marketType,
+      leverage,
+      marginMode,
       analysisRunId: analysisRunId ?? undefined,
       newsSentiment: analysis.news?.overallSentiment,
       newsSentimentScore: avgSentimentScore,
@@ -225,11 +265,13 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
         triggeredBy: analysis.triggeredBy,
         analysisExchange: analysis.exchange,
         topDownBias: analysis.topDownBias,
-        riskCalculation,
         smcStructures: analysis.smcStructures,
         chartPatterns: analysis.chartPatterns,
+        indicators15m: analysis.indicators15m,
         indicators1h: analysis.indicators1h,
       }),
+      riskCalculationJson: riskCalculation ? JSON.stringify(riskCalculation) : undefined,
+      riskCapitalUsdt: riskCalculation?.accountBalance as number | undefined,
     },
     { observe: noopObserve },
   )) as { signalId: string };
@@ -244,9 +286,9 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
   // not on executionMode (which only ever selects paper vs live venue). ---
   let executionResult: FinalizeForUserResult['executionResult'] = null;
   const shouldAutoExecute = tradingMode === 'auto';
+  const positionSizeUsdt = riskCalculation?.positionSizeUsdt as number | undefined;
 
-  if (shouldAutoExecute && signalId) {
-    const positionSizeUsdt = (riskCalculation?.positionSizeUsdt as number | undefined) ?? 100;
+  if (shouldAutoExecute && signalId && typeof positionSizeUsdt === 'number' && positionSizeUsdt > 0) {
     const toolMode = executionMode === 'live' ? 'live' : 'paper';
 
     try {
@@ -260,15 +302,23 @@ export async function finalizeForUser(input: FinalizeForUserInput): Promise<Fina
           entryPrice,
           positionSizeUsdt,
           sl: analysis.sl,
-          tp: analysis.tp,
+          tp: userTp,
           mode: toolMode,
           slippagePct,
+          marketType,
+          leverage,
+          marginMode,
+          fallbackLeverage: profileLeverageFallback,
         },
         { observe: noopObserve },
       )) as FinalizeForUserResult['executionResult'];
     } catch (err) {
       console.error('finalizeForUser: execute-trade-tool threw unexpectedly', err);
     }
+  } else if (shouldAutoExecute && signalId) {
+    console.error(
+      `finalizeForUser: skipping auto-execution for userId=${userId} — no valid computed position size (unknown balance or invalid risk sizing); signal ${signalId} left pending for manual approval.`,
+    );
   }
 
   return { signalId, action, symbol, userId, executionMode, executionResult };

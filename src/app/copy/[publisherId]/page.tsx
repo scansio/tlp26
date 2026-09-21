@@ -107,8 +107,8 @@ function SubscribeModal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-background rounded-lg shadow-xl w-full max-w-md p-6 space-y-5">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-background rounded-lg shadow-xl w-full max-w-md p-5 md:p-6 space-y-5 max-h-[90vh] overflow-y-auto">
         <div>
           <h2 className="text-xl font-bold">Subscribe to {publisherName}</h2>
           <p className="text-sm text-muted-foreground mt-1">
@@ -132,7 +132,7 @@ function SubscribeModal({
             onChange={(e) =>
               setForm((f) => ({ ...f, copyRatioPct: Number(e.target.value) }))
             }
-            className="w-full accent-primary"
+            className="w-full h-11 md:h-auto accent-primary"
           />
           <p className="text-xs text-muted-foreground">
             If publisher opens a $1,000 position, you open a{' '}
@@ -147,7 +147,7 @@ function SubscribeModal({
           <div className="flex gap-2">
             <button
               type="button"
-              className={`flex-1 rounded-md border px-3 py-2 text-sm ${
+              className={`flex-1 rounded-md border px-3 py-3 md:py-2 text-sm ${
                 form.executionMode === 'review-copy'
                   ? 'border-primary bg-primary/10 font-medium'
                   : 'border-input'
@@ -158,7 +158,7 @@ function SubscribeModal({
             </button>
             <button
               type="button"
-              className={`flex-1 rounded-md border px-3 py-2 text-sm ${
+              className={`flex-1 rounded-md border px-3 py-3 md:py-2 text-sm ${
                 form.executionMode === 'auto-copy'
                   ? 'border-primary bg-primary/10 font-medium'
                   : 'border-input'
@@ -190,7 +190,7 @@ function SubscribeModal({
             onChange={(e) =>
               setForm((f) => ({ ...f, maxPositionSizeCap: e.target.value }))
             }
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="flex h-11 md:h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
         </div>
 
@@ -199,14 +199,14 @@ function SubscribeModal({
         <div className="flex gap-3 pt-1">
           <Button
             variant="outline"
-            className="flex-1"
+            className="flex-1 h-11 md:h-9"
             onClick={onClose}
             disabled={submitting}
           >
             Cancel
           </Button>
           <Button
-            className="flex-1"
+            className="flex-1 h-11 md:h-9"
             onClick={() => onSubmit(form)}
             disabled={submitting}
           >
@@ -314,12 +314,12 @@ export default function PublisherPublicPage() {
 
   return (
     <>
-      <div className="max-w-2xl mx-auto py-10 px-4 space-y-8">
+      <div className="max-w-2xl mx-auto py-6 md:py-10 px-4 space-y-6 md:space-y-8">
         {/* Header */}
         <div className="flex items-start justify-between gap-4">
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-2xl font-bold">
+              <h1 className="text-2xl font-bold break-words">
                 {profile.displayName ?? 'Anonymous Publisher'}
               </h1>
               {profile.isSelf && <Badge variant="secondary">Your profile</Badge>}
@@ -367,9 +367,9 @@ export default function PublisherPublicPage() {
 
         {/* Current subscription config */}
         {profile.subscription && (
-          <Card className="p-5 space-y-2 border-primary/40">
+          <Card className="p-4 md:p-5 space-y-2 border-primary/40">
             <h2 className="font-semibold text-sm">Your Subscription Settings</h2>
-            <div className="grid grid-cols-3 gap-4 text-sm">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
               <div>
                 <p className="text-muted-foreground text-xs">Copy Ratio</p>
                 <p className="font-medium">{profile.subscription.copyRatioPct}%</p>
@@ -390,7 +390,7 @@ export default function PublisherPublicPage() {
             <div className="pt-1">
               <Link
                 href="/copy/subscriptions"
-                className="text-sm text-primary underline underline-offset-2"
+                className="inline-flex items-center min-h-11 md:min-h-0 text-sm text-primary underline underline-offset-2"
               >
                 Manage subscription
               </Link>
@@ -400,7 +400,11 @@ export default function PublisherPublicPage() {
 
         {/* Subscribe button -- hidden for self or already subscribed */}
         {!profile.isSelf && !profile.subscription && (
-          <Button size="lg" className="w-full" onClick={() => setModalOpen(true)}>
+          <Button
+            size="lg"
+            className="w-full h-11 md:h-10"
+            onClick={() => setModalOpen(true)}
+          >
             Subscribe
           </Button>
         )}

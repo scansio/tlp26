@@ -24,6 +24,10 @@ const detectionSchema = z.object({
   direction: z.enum(['BULLISH', 'BEARISH']),
   strengthScore: z.number().min(0).max(1).describe('Normalized strength 0–1'),
   distanceFromCurrentPrice: z.number().describe('Distance from current close as a percentage'),
+  timeframe: z
+    .string()
+    .optional()
+    .describe('Source candle timeframe (e.g. "1h", "4h", "1d"), set when the caller passes `timeframe` in the input'),
 });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -393,6 +397,10 @@ export const smcTool = createTool({
       .optional()
       .default([])
       .describe('Optional liquidation levels from onchain-tool for liquidity sweep cross-referencing'),
+    timeframe: z
+      .string()
+      .optional()
+      .describe('Timeframe label for the candles passed in (e.g. "1h", "4h", "1d") — stamped onto every detection when provided'),
   }),
   outputSchema: z.object({
     fvgs: z.array(detectionSchema).describe('Detected unmitigated Fair Value Gaps'),
@@ -404,9 +412,10 @@ export const smcTool = createTool({
     candleCount: z.number().describe('Number of candles analysed'),
   }),
   execute: async (inputData) => {
-    const { candles, liquidationLevels } = inputData as {
+    const { candles, liquidationLevels, timeframe } = inputData as {
       candles: Candle[];
       liquidationLevels: LiquidationLevel[];
+      timeframe?: string;
     };
 
     if (!candles.length) {
@@ -424,16 +433,19 @@ export const smcTool = createTool({
     const currentPrice = candles[candles.length - 1].close;
     const liqLevels = liquidationLevels ?? [];
 
-    const fvgs = detectFVGs(candles, currentPrice);
-    const orderBlocks = detectOrderBlocks(candles, currentPrice);
+    const stamp = (detections: Detection[]): Detection[] =>
+      timeframe ? detections.map((d) => ({ ...d, timeframe })) : detections;
+
+    const fvgs = stamp(detectFVGs(candles, currentPrice));
+    const orderBlocks = stamp(detectOrderBlocks(candles, currentPrice));
     const { bos, choch } = detectBOSAndChoCH(candles, currentPrice);
-    const liquiditySweeps = detectLiquiditySweeps(candles, currentPrice, liqLevels);
+    const liquiditySweeps = stamp(detectLiquiditySweeps(candles, currentPrice, liqLevels));
 
     return {
       fvgs,
       orderBlocks,
-      bos,
-      choch,
+      bos: stamp(bos),
+      choch: stamp(choch),
       liquiditySweeps,
       currentPrice,
       candleCount: candles.length,

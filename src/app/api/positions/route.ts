@@ -11,38 +11,11 @@
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
-import ccxt, { type Exchange } from 'ccxt';
 import { db } from '@/db';
-import { userExchanges, tradeExecutions, tradeSignals } from '@/db/schema';
-import { decrypt } from '@/lib/crypto';
-import { computePnlUsd, computePnlPct } from '@/lib/pnl';
-
-async function getExchangeClient(userId: string): Promise<Exchange | null> {
-  const rows = await db
-    .select({
-      exchangeName: userExchanges.exchangeName,
-      encryptedApiKey: userExchanges.encryptedApiKey,
-      encryptedApiSecret: userExchanges.encryptedApiSecret,
-      encryptedPassphrase: userExchanges.encryptedPassphrase,
-    })
-    .from(userExchanges)
-    .where(and(eq(userExchanges.userId, userId), eq(userExchanges.status, 'active')))
-    .limit(1);
-
-  if (!rows[0]) return null;
-  const { exchangeName, encryptedApiKey, encryptedApiSecret, encryptedPassphrase } = rows[0];
-
-  try {
-    const apiKey = decrypt(encryptedApiKey);
-    const secret = decrypt(encryptedApiSecret);
-    const password = encryptedPassphrase ? decrypt(encryptedPassphrase) : undefined;
-    const ExClass = (ccxt as unknown as Record<string, new (c: object) => Exchange>)[exchangeName];
-    if (!ExClass) return null;
-    return new ExClass({ apiKey, secret, ...(password ? { password } : {}) });
-  } catch {
-    return null;
-  }
-}
+import { tradeExecutions, tradeSignals } from '@/db/schema';
+import { computePnlUsd, computePnlPct, computeLeveragedPnlPct } from '@/lib/pnl';
+import { fetchLiveTickerPrices } from '@/lib/live-price';
+import { toExchangeSymbol, type MarketType } from '@/mastra/tools/market-symbol';
 
 export async function GET() {
   const { userId } = await auth();
@@ -56,7 +29,9 @@ export async function GET() {
       positionSize: tradeExecutions.positionSize,
       mode: tradeExecutions.mode,
       exchangeName: tradeExecutions.exchangeName,
+      marketType: tradeExecutions.marketType,
       entryAt: tradeExecutions.entryAt,
+      leverage: tradeExecutions.leverage,
       direction: tradeSignals.direction,
       stopLoss: tradeSignals.stopLoss,
       takeProfit: tradeSignals.takeProfit,
@@ -66,42 +41,26 @@ export async function GET() {
     .leftJoin(tradeSignals, eq(tradeExecutions.signalId, tradeSignals.id))
     .where(and(eq(tradeExecutions.userId, userId), eq(tradeExecutions.status, 'open')));
 
-  // Fetch live prices
-  const uniqueSymbols = [...new Set(rows.map((r) => r.symbol).filter(Boolean))];
-  const tickerMap = new Map<string, number>();
-
-  if (uniqueSymbols.length > 0) {
-    const isPaper = rows.every((r) => r.mode === 'paper');
-    let client: Exchange | null = null;
-
-    if (!isPaper) {
-      client = await getExchangeClient(userId).catch(() => null);
-    }
-
-    if (!client) {
-      const firstExchange = rows[0]?.exchangeName;
-      if (firstExchange) {
-        const ExClass = (ccxt as unknown as Record<string, new (c: object) => Exchange>)[firstExchange];
-        if (ExClass) client = new ExClass({});
-      }
-    }
-
-    if (client) {
-      await Promise.allSettled(
-        uniqueSymbols.map(async (symbol) => {
-          try {
-            const ticker = await (client as Exchange).fetchTicker(symbol);
-            if (ticker.last) tickerMap.set(symbol, ticker.last);
-          } catch { /* skip */ }
-        }),
-      );
-    }
-  }
+  // Fetch live prices — dedupe by the CCXT exchange symbol (spot vs swap resolve
+  // to different markets, e.g. BTC/USDT vs BTC/USDT:USDT, so plain symbol isn't a safe key).
+  const uniqueExchangeSymbols = [
+    ...new Set(
+      rows
+        .filter((r) => r.symbol)
+        .map((r) => toExchangeSymbol(r.symbol, (r.marketType as MarketType) ?? 'spot')),
+    ),
+  ];
+  const isPaper = rows.every((r) => r.mode === 'paper');
+  const tickerMap = await fetchLiveTickerPrices(userId, uniqueExchangeSymbols, {
+    isPaper,
+    fallbackExchangeName: rows[0]?.exchangeName ?? null,
+  });
 
   const positions = rows.map((pos) => {
     const entryPrice = pos.entryPrice ? parseFloat(pos.entryPrice) : null;
     const positionSize = pos.positionSize ? parseFloat(pos.positionSize) : null;
-    const currentPrice = pos.symbol ? (tickerMap.get(pos.symbol) ?? null) : null;
+    const marketType = (pos.marketType as MarketType) ?? 'spot';
+    const currentPrice = pos.symbol ? (tickerMap.get(toExchangeSymbol(pos.symbol, marketType)) ?? null) : null;
     const direction = (pos.direction ?? 'LONG') as 'LONG' | 'SHORT';
 
     let unrealizedPnlUsd: number | null = null;
@@ -117,12 +76,18 @@ export async function GET() {
       symbol: pos.symbol,
       direction,
       exchangeName: pos.exchangeName,
+      marketType,
       mode: pos.mode ?? 'paper',
       entryPrice,
       currentPrice,
       positionSize,
+      leverage: pos.leverage ?? 1,
       unrealizedPnlUsd,
       unrealizedPnlPct,
+      // ROI on margin (price move % × leverage) — what exchanges show as the
+      // headline percentage on an open position, vs. unrealizedPnlPct above
+      // which is % of notional.
+      unrealizedPnlPctLeveraged: computeLeveragedPnlPct(unrealizedPnlPct, pos.leverage),
       stopLoss: pos.stopLoss ? parseFloat(pos.stopLoss) : null,
       takeProfit: pos.takeProfit ? parseFloat(pos.takeProfit) : null,
       entryAt: pos.entryAt?.toISOString() ?? null,

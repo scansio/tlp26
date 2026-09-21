@@ -9,12 +9,12 @@
 
 | Metric | baseline | enriched | workflow |
 |---|---|---|---|
-| **Safe-decision rate (all 8 checks pass)** | 20.5% | 38.5% | 94.9% |
-| Safe AND actionable (tradeable signals) | 8/39 | 13/39 | 9/39 |
+| **Safe-decision rate (all 8 checks pass)** | 20.5% | 38.5% | 92.3% |
+| Safe AND actionable (tradeable signals) | 8/39 | 13/39 | 6/39 |
 | Invalid/unparseable outputs | 0.0% | 0.0% | 0.0% |
-| Actionable signals (ENTER_*) | 39/39 | 37/39 | 11/39 |
-| Mean latency per decision | 2235 ms | 2202 ms | 1765 ms |
-| Mean LLM tokens per decision | 31394 | 7801 | 11365 |
+| Actionable signals (ENTER_*) | 39/39 | 37/39 | 9/39 |
+| Mean latency per decision | 2235 ms | 2202 ms | 1848 ms |
+| Mean LLM tokens per decision | 31394 | 7801 | 8550 |
 
 ## Failures by check
 
@@ -24,7 +24,7 @@
 | `hold_nulls` | 0/39 | 0/39 | 0/39 |
 | `entry_complete` | 0/39 | 0/39 | 0/39 |
 | `levels_ordered` | 0/39 | 0/39 | 0/39 |
-| `rr_ok` | 4/39 | 0/39 | 2/39 |
+| `rr_ok` | 4/39 | 0/39 | 3/39 |
 | `grounded` | 6/39 | 1/39 | 0/39 |
 | `htf_aligned` | 27/39 | 24/39 | 0/39 |
 | `entry_near_market` | 0/39 | 0/39 | 0/39 |
@@ -33,30 +33,30 @@
 
 - baseline: {"ENTER_SHORT":39}
 - enriched: {"ENTER_SHORT":36,"HOLD":2,"ENTER_LONG":1}
-- workflow: {"ENTER_SHORT":9,"HOLD":28,"ENTER_LONG":2}
+- workflow: {"ENTER_SHORT":9,"HOLD":30}
 
 ## Run-to-run consistency
 
 - baseline: 13/13 cases produced the same action on every repeat run
 - enriched: 12/13 cases produced the same action on every repeat run
-- workflow: 11/13 cases produced the same action on every repeat run
+- workflow: 13/13 cases produced the same action on every repeat run
 
 ## Per-case detail
 
 | Case | HTF trade bias | baseline action(s) / violations | enriched action(s) / violations | workflow action(s) / violations |
 |---|---|---|---|---|
 | ada-usdt | BEARISH | ENTER_SHORT / grounded, rr_ok | ENTER_SHORT / none | ENTER_SHORT / rr_ok |
-| atom-usdt | BEARISH | ENTER_SHORT / none | ENTER_SHORT / none | ENTER_SHORT / none |
+| atom-usdt | BEARISH | ENTER_SHORT / none | ENTER_SHORT / none | ENTER_SHORT / rr_ok |
 | avax-usdt | BULLISH | ENTER_SHORT / htf_aligned | ENTER_SHORT / htf_aligned | HOLD / none |
 | bnb-usdt | BULLISH | ENTER_SHORT / htf_aligned, grounded | ENTER_SHORT / htf_aligned | HOLD / none |
 | btc-usdt | BULLISH | ENTER_SHORT / htf_aligned | ENTER_SHORT / htf_aligned | HOLD / none |
 | challenge-news-conflict-btc-usdt *(synthetic)* | BULLISH | ENTER_SHORT / htf_aligned | ENTER_SHORT / htf_aligned | HOLD / none |
-| doge-usdt | BULLISH | ENTER_SHORT / rr_ok, htf_aligned | ENTER_SHORT / htf_aligned | HOLD, ENTER_LONG / none |
+| doge-usdt | BULLISH | ENTER_SHORT / rr_ok, htf_aligned | ENTER_SHORT / htf_aligned | HOLD / none |
 | dot-usdt | BEARISH | ENTER_SHORT / grounded | ENTER_SHORT / none | ENTER_SHORT / none |
 | eth-usdt | BULLISH | ENTER_SHORT / htf_aligned | ENTER_SHORT / htf_aligned, grounded | HOLD / none |
 | link-usdt | BULLISH | ENTER_SHORT / htf_aligned | ENTER_SHORT / htf_aligned | HOLD / none |
 | ltc-usdt | BULLISH | ENTER_SHORT / htf_aligned, rr_ok | ENTER_SHORT / htf_aligned | HOLD / none |
-| sol-usdt | BULLISH | ENTER_SHORT / htf_aligned | HOLD, ENTER_LONG / none | ENTER_LONG, HOLD / none |
+| sol-usdt | BULLISH | ENTER_SHORT / htf_aligned | HOLD, ENTER_LONG / none | HOLD / none |
 | xrp-usdt | NEUTRAL | ENTER_SHORT / none | ENTER_SHORT / none | HOLD / none |
 
 ## Notable failure details
@@ -116,5 +116,6 @@
 - **enriched / ltc-usdt / run 1** (ENTER_SHORT): `htf_aligned`: tradeBias=BULLISH, action=ENTER_SHORT — counter-trend SHORT against BULLISH HTF bias
 - **enriched / ltc-usdt / run 2** (ENTER_SHORT): `htf_aligned`: tradeBias=BULLISH, action=ENTER_SHORT — counter-trend SHORT against BULLISH HTF bias
 - **enriched / ltc-usdt / run 3** (ENTER_SHORT): `htf_aligned`: tradeBias=BULLISH, action=ENTER_SHORT — counter-trend SHORT against BULLISH HTF bias
-- **workflow / ada-usdt / run 1** (ENTER_SHORT): `rr_ok`: R:R = 0.81 (min 1.5)
-- **workflow / ada-usdt / run 2** (ENTER_SHORT): `rr_ok`: R:R = 0.42 (min 1.5)
+- **workflow / ada-usdt / run 1** (ENTER_SHORT): `rr_ok`: R:R = 0.13 (min 1.5)
+- **workflow / ada-usdt / run 2** (ENTER_SHORT): `rr_ok`: R:R = 0.61 (min 1.5)
+- **workflow / atom-usdt / run 2** (ENTER_SHORT): `rr_ok`: R:R = 1.35 (min 1.5)

@@ -14,6 +14,7 @@ import { setupAgent } from './agents/setup-agent';
 import { marketChatAgent } from './agents/market-chat-agent';
 import { chartTool } from './tools/chart-tool';
 import { createSignalTool } from './tools/create-signal-tool';
+import { createPriceWatchTool, listPriceWatchesTool, cancelPriceWatchTool } from './tools/price-watch-tool';
 import { marketDataTool } from './tools/market-data-tool';
 import { indicatorsTool } from './tools/indicators-tool';
 import { smcTool } from './tools/smc-tool';
@@ -23,6 +24,7 @@ import { newsTool } from './tools/news-tool';
 import { onchainTool } from './tools/onchain-tool';
 import { riskTool } from './tools/risk-tool';
 import { executeTradeTool } from './tools/execute-trade-tool';
+import { tradePerformanceTool } from './tools/trade-performance-tool';
 import { mastraStorage } from './storage';
 
 export const mastra = new Mastra({
@@ -40,6 +42,10 @@ export const mastra = new Mastra({
     executeTradeTool,
     chartTool,
     createSignalTool,
+    createPriceWatchTool,
+    listPriceWatchesTool,
+    cancelPriceWatchTool,
+    tradePerformanceTool,
   },
   storage: mastraStorage,
   logger: new PinoLogger({

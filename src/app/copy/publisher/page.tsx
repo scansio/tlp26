@@ -263,17 +263,17 @@ export default function PublisherProfilePage() {
   const isProfileActive = profile?.isActive ?? true;
 
   return (
-    <div className="max-w-2xl mx-auto py-10 px-4 space-y-8">
+    <div className="max-w-2xl mx-auto py-6 md:py-10 px-4 space-y-6 md:space-y-8">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold">Publisher Profile</h1>
           <p className="text-muted-foreground mt-1">
             Share your AI signals publicly and build a track record for performance-fee income.
           </p>
         </div>
         {profile && (
-          <Link href="/copy/publisher/earnings">
-            <Button variant="outline" size="sm" className="shrink-0">
+          <Link href="/copy/publisher/earnings" className="w-full sm:w-auto shrink-0">
+            <Button variant="outline" size="sm" className="w-full sm:w-auto h-11 sm:h-8">
               View Earnings
             </Button>
           </Link>
@@ -284,7 +284,7 @@ export default function PublisherProfilePage() {
       {/* Gate error — not enough closed trades                               */}
       {/* ------------------------------------------------------------------ */}
       {gateError && (
-        <Card className="p-6 border-destructive bg-destructive/5">
+        <Card className="p-4 md:p-6 border-destructive bg-destructive/5">
           <p className="font-semibold text-destructive">Track record requirement not met</p>
           <p className="text-sm mt-1">{gateError.error}</p>
           {gateError.closedTrades !== undefined && gateError.required !== undefined && (
@@ -310,8 +310,8 @@ export default function PublisherProfilePage() {
       {/* ------------------------------------------------------------------ */}
       {profile && !isProfileActive && (
         <Card className="p-4 border-yellow-500 bg-yellow-50 dark:bg-yellow-950/20">
-          <div className="flex items-center justify-between gap-4">
-            <div>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
+            <div className="min-w-0">
               <p className="font-medium text-yellow-800 dark:text-yellow-300">Profile deactivated</p>
               <p className="text-sm text-yellow-700 dark:text-yellow-400 mt-0.5">
                 New subscriptions are blocked. Your existing profile data is preserved.
@@ -322,6 +322,7 @@ export default function PublisherProfilePage() {
               variant="outline"
               onClick={handleReactivate}
               disabled={saving}
+              className="w-full sm:w-auto h-11 sm:h-8 shrink-0"
             >
               Reactivate
             </Button>
@@ -333,7 +334,7 @@ export default function PublisherProfilePage() {
       {/* Live performance stats (read-only)                                  */}
       {/* ------------------------------------------------------------------ */}
       {profile && (
-        <Card className="p-6 space-y-4">
+        <Card className="p-4 md:p-6 space-y-4">
           <div>
             <h2 className="text-lg font-semibold">Performance Stats</h2>
             <p className="text-sm text-muted-foreground mt-0.5">
@@ -348,7 +349,7 @@ export default function PublisherProfilePage() {
             <StatCard label="Max Drawdown" value={formatPct(profile.stats.maxDrawdown)} />
             <StatCard label="Subscribers" value={profile.stats.subscriberCount ?? 0} />
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground break-all">
             Public profile link:{' '}
             <a
               href={`/copy/${profile.id}`}
@@ -365,7 +366,7 @@ export default function PublisherProfilePage() {
       {/* ------------------------------------------------------------------ */}
       {/* Profile form                                                         */}
       {/* ------------------------------------------------------------------ */}
-      <Card className="p-6 space-y-6">
+      <Card className="p-4 md:p-6 space-y-6">
         <div>
           <h2 className="text-lg font-semibold">
             {profile ? 'Edit Profile' : 'Create Publisher Profile'}
@@ -404,14 +405,14 @@ export default function PublisherProfilePage() {
         <div className="space-y-4">
           <h3 className="font-medium">Visibility</h3>
 
-          <label className="flex items-start gap-3 cursor-pointer">
+          <label className="flex items-start gap-3 cursor-pointer py-1.5 sm:py-0">
             <input
               type="checkbox"
-              className="mt-0.5 h-4 w-4 rounded border-input"
+              className="mt-0.5 h-4 w-4 rounded border-input shrink-0"
               checked={form.isPublic}
               onChange={(e) => setField('isPublic', e.target.checked)}
             />
-            <div>
+            <div className="min-w-0">
               <p className="text-sm font-medium">Public — listed on leaderboard</p>
               <p className="text-xs text-muted-foreground">
                 Anyone can discover and follow your profile. Uncheck for invite-only via direct link.
@@ -419,14 +420,14 @@ export default function PublisherProfilePage() {
             </div>
           </label>
 
-          <label className="flex items-start gap-3 cursor-pointer">
+          <label className="flex items-start gap-3 cursor-pointer py-1.5 sm:py-0">
             <input
               type="checkbox"
-              className="mt-0.5 h-4 w-4 rounded border-input"
+              className="mt-0.5 h-4 w-4 rounded border-input shrink-0"
               checked={form.shareIndividualTrades}
               onChange={(e) => setField('shareIndividualTrades', e.target.checked)}
             />
-            <div>
+            <div className="min-w-0">
               <p className="text-sm font-medium">Share individual trade history</p>
               <p className="text-xs text-muted-foreground">
                 Show individual signal entries and exits on your public profile page.
@@ -456,10 +457,11 @@ export default function PublisherProfilePage() {
           </>
         )}
 
-        <div className="flex flex-wrap items-center gap-4 pt-2">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-3 sm:gap-4 pt-2">
           <Button
             onClick={profile ? handleUpdate : handleCreate}
             disabled={saving || !form.displayName.trim()}
+            className="w-full sm:w-auto h-11 sm:h-9"
           >
             {saving && isCreating
               ? 'Creating…'
@@ -475,6 +477,7 @@ export default function PublisherProfilePage() {
               variant="destructive"
               onClick={handleDeactivate}
               disabled={saving}
+              className="w-full sm:w-auto h-11 sm:h-9"
             >
               Deactivate Profile
             </Button>

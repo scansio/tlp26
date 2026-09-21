@@ -287,7 +287,7 @@ export default function OnboardingPage() {
   const StepIcon = !isFinalStep ? SELECTION_STEPS[step].icon : Sparkles;
 
   return (
-    <div className="relative flex h-screen w-full flex-col overflow-hidden">
+    <div className="relative flex h-dvh w-full flex-col overflow-hidden">
       {/* Animated background gradient per step */}
       <AnimatePresence mode="wait">
         <motion.div
@@ -318,9 +318,9 @@ export default function OnboardingPage() {
         />
       </AnimatePresence>
 
-      <div className="relative flex flex-1 flex-col overflow-hidden p-6">
+      <div className="relative flex flex-1 flex-col overflow-hidden p-4 md:p-6">
         {/* Brand + skip */}
-        <div className="mb-8 flex items-center justify-between">
+        <div className="mb-6 flex items-center justify-between md:mb-8">
           <div className="flex items-center gap-2.5">
             <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <TrendingUp className="size-4" />
@@ -335,7 +335,7 @@ export default function OnboardingPage() {
           <form action={skipOnboarding}>
             <button
               type="submit"
-              className="text-xs text-muted-foreground underline-offset-4 hover:underline"
+              className="-mx-3 -my-3 flex min-h-11 items-center px-3 py-3 text-xs text-muted-foreground underline-offset-4 hover:underline md:min-h-0 md:px-0 md:py-0"
             >
               Skip for now
             </button>
@@ -345,7 +345,7 @@ export default function OnboardingPage() {
         {messages.length === 0 ? (
           <div className="flex flex-1 flex-col overflow-hidden">
             {/* Progress pills */}
-            <div className="mx-auto mb-8 flex w-full max-w-md items-center gap-1.5">
+            <div className="mx-auto mb-6 flex w-full max-w-md items-center gap-1.5 md:mb-8">
               {Array.from({ length: TOTAL_STEPS }).map((_, i) => (
                 <motion.div
                   key={i}
@@ -374,7 +374,7 @@ export default function OnboardingPage() {
                 className="mx-auto flex w-full max-w-md flex-1 flex-col overflow-hidden"
               >
                 {/* Hero icon */}
-                <div className="mb-7 flex flex-col items-center text-center">
+                <div className="mb-5 flex flex-col items-center text-center md:mb-7">
                   <motion.div
                     initial={{ y: -8, opacity: 0 }}
                     animate={{ y: 0, opacity: 1 }}
@@ -383,19 +383,19 @@ export default function OnboardingPage() {
                   >
                     <div
                       className={cn(
-                        "relative flex size-16 items-center justify-center rounded-2xl bg-gradient-to-br text-white shadow-2xl",
+                        "relative flex size-14 items-center justify-center rounded-2xl bg-gradient-to-br text-white shadow-2xl md:size-16",
                         currentStep.gradient,
                         currentStep.glow,
                       )}
                     >
-                      <StepIcon className="size-7" />
+                      <StepIcon className="size-6 md:size-7" />
                     </div>
                   </motion.div>
 
                   <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
                     Step {step + 1} of {TOTAL_STEPS}
                   </p>
-                  <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+                  <h2 className="mt-2 text-xl font-semibold tracking-tight md:text-2xl">
                     {currentStep.title}
                   </h2>
                   <p className="mt-1 text-sm text-muted-foreground">
@@ -444,7 +444,7 @@ export default function OnboardingPage() {
                                   onClick={() => toggle(key, opt)}
                                   whileTap={{ scale: 0.94 }}
                                   className={cn(
-                                    "rounded-full border px-4 py-2 text-sm transition-colors",
+                                    "flex min-h-11 items-center rounded-full border px-4 py-2 text-sm transition-colors md:min-h-0",
                                     isSelected(key, opt)
                                       ? `border-transparent bg-gradient-to-r ${SELECTION_STEPS[step].gradient} text-white shadow-sm`
                                       : "border-border bg-background/40 text-foreground backdrop-blur-sm hover:bg-muted",
@@ -467,7 +467,7 @@ export default function OnboardingPage() {
                                 [step]: !prev[step],
                               }))
                             }
-                            className="flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                            className="-mx-3 -my-2.5 flex min-h-11 items-center gap-1.5 px-3 py-2.5 text-xs text-muted-foreground transition-colors hover:text-foreground md:mx-0 md:my-0 md:min-h-0 md:px-0 md:py-0"
                           >
                             <MessageCircle className="size-3.5" />
                             {showStepNote[step]
@@ -511,7 +511,7 @@ export default function OnboardingPage() {
                     <button
                       type="button"
                       onClick={goBack}
-                      className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-muted"
+                      className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-muted md:size-10"
                     >
                       <ArrowLeft className="size-4" />
                     </button>
@@ -524,7 +524,7 @@ export default function OnboardingPage() {
                     }
                     whileTap={{ scale: 0.97 }}
                     className={cn(
-                      "flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold text-white shadow-lg transition-opacity disabled:opacity-40",
+                      "min-h-11 flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold text-white shadow-lg transition-opacity disabled:opacity-40 md:min-h-0",
                       `bg-gradient-to-r ${currentStep.gradient}`,
                       currentStep.glow,
                     )}

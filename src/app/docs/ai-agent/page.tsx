@@ -42,26 +42,26 @@ const TOOLS = [
 
 export default function AiAgentPage() {
   return (
-    <article>
+    <article className="w-full max-w-full min-w-0">
       <p className="text-xs font-semibold uppercase tracking-widest text-emerald-500 mb-2">AI Agent</p>
-      <h1 className="text-3xl font-bold text-white mb-3">How the agent thinks</h1>
-      <p className="text-zinc-400 text-lg mb-12">
+      <h1 className="text-2xl md:text-3xl font-bold text-white mb-3">How the agent thinks</h1>
+      <p className="text-zinc-400 text-base md:text-lg mb-8 md:mb-12">
         Every trade signal goes through a 9-step analysis pipeline before a decision is made. Here&apos;s exactly what happens — and why.
       </p>
 
       {/* Pipeline diagram */}
-      <div className="mb-14">
-        <h2 className="text-lg font-semibold text-white mb-5 flex items-center gap-2">
+      <div className="mb-10 md:mb-14">
+        <h2 className="text-base md:text-lg font-semibold text-white mb-4 md:mb-5 flex items-center gap-2">
           <span className="w-1 h-5 rounded-full bg-emerald-500 inline-block" />
           The 9-step pipeline
         </h2>
-        <div className="relative pl-6 border-l border-zinc-800 space-y-0">
+        <div className="relative pl-5 md:pl-6 border-l border-zinc-800 space-y-0">
           {PIPELINE_STEPS.map(({ n, label, detail }, i) => (
-            <div key={n} className="relative pb-6 last:pb-0">
-              <div className="absolute -left-[25px] w-6 h-6 rounded-full bg-zinc-900 border border-zinc-700 flex items-center justify-center">
-                <span className="text-[10px] font-mono text-zinc-400">{n}</span>
+            <div key={n} className="relative pb-5 md:pb-6 last:pb-0 min-w-0">
+              <div className="absolute -left-[21px] md:-left-[25px] w-5 h-5 md:w-6 md:h-6 rounded-full bg-zinc-900 border border-zinc-700 flex items-center justify-center">
+                <span className="text-[9px] md:text-[10px] font-mono text-zinc-400">{n}</span>
               </div>
-              <div className={`ml-4 rounded-lg border px-4 py-3 ${i === 5 || i === 6 ? 'border-emerald-800/50 bg-emerald-950/30' : 'border-zinc-800 bg-zinc-900/30'}`}>
+              <div className={`ml-3 md:ml-4 min-w-0 rounded-lg border px-3 py-2.5 md:px-4 md:py-3 ${i === 5 || i === 6 ? 'border-emerald-800/50 bg-emerald-950/30' : 'border-zinc-800 bg-zinc-900/30'}`}>
                 <p className="text-sm font-medium text-white mb-0.5">{label}</p>
                 <p className="text-xs text-zinc-400">{detail}</p>
                 {i === 5 && (
@@ -77,14 +77,14 @@ export default function AiAgentPage() {
       </div>
 
       {/* Tool explanations */}
-      <div className="mb-14">
-        <h2 className="text-lg font-semibold text-white mb-5 flex items-center gap-2">
+      <div className="mb-10 md:mb-14">
+        <h2 className="text-base md:text-lg font-semibold text-white mb-4 md:mb-5 flex items-center gap-2">
           <span className="w-1 h-5 rounded-full bg-emerald-500 inline-block" />
           What each tool contributes
         </h2>
-        <div className="space-y-5">
+        <div className="space-y-4 md:space-y-5">
           {TOOLS.map(({ title, body }) => (
-            <div key={title} className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-5">
+            <div key={title} className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 md:p-5 min-w-0">
               <h3 className="text-sm font-semibold text-white mb-2">{title}</h3>
               <p className="text-sm text-zinc-400 leading-relaxed">{body}</p>
             </div>
@@ -92,12 +92,12 @@ export default function AiAgentPage() {
         </div>
       </div>
 
-      <div className="rounded-xl bg-zinc-900/60 border border-zinc-800 p-6 mb-16">
+      <div className="rounded-xl bg-zinc-900/60 border border-zinc-800 p-4 md:p-6 mb-10 md:mb-16">
         <p className="text-sm text-zinc-400 mb-1">Output format</p>
         <p className="text-white text-sm leading-relaxed mb-3">
           Every decision returns one of three actions:
         </p>
-        <div className="grid grid-cols-3 gap-3 text-center text-xs">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-center text-xs">
           <div className="rounded-lg border border-emerald-800/50 bg-emerald-950/30 p-3">
             <p className="font-mono font-bold text-emerald-400">ENTER_LONG</p>
             <p className="text-zinc-400 mt-1">Bullish confluence — buy signal with TP/SL</p>
@@ -113,12 +113,12 @@ export default function AiAgentPage() {
         </div>
       </div>
 
-      <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800 p-8 text-center">
-        <p className="text-2xl font-bold text-white mb-2">See the agent in action</p>
-        <p className="text-zinc-400 mb-6">Open AI Chat and ask it to analyse any coin — no setup needed to start.</p>
+      <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800 p-5 md:p-8 text-center">
+        <p className="text-xl md:text-2xl font-bold text-white mb-2">See the agent in action</p>
+        <p className="text-zinc-400 mb-6 text-sm md:text-base">Open AI Chat and ask it to analyse any coin — no setup needed to start.</p>
         <Link
           href="/sign-up"
-          className="inline-flex items-center gap-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-8 py-3 transition-colors"
+          className="inline-flex w-full md:w-auto items-center justify-center gap-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-8 py-3 min-h-11 transition-colors"
         >
           Try it free <ArrowRight className="h-4 w-4" />
         </Link>

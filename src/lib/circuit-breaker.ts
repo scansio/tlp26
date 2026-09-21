@@ -3,7 +3,8 @@
  *
  * Checks run in this order before every trade execution:
  *  1. Daily trade count < maxTradesPerDay
- *  2. Daily realized + unrealized loss < maxDailyLoss% of starting equity (approximated as sum of realizedPnl today)
+ *  2. Daily realized loss < maxDailyLoss% of start-of-day equity (paper: paperBalanceUsd +
+ *     all-time realized P&L before today; live: real exchange balance)
  *  3. Kill switch is OFF
  *  4. Open positions < maxOpenPositions (default: 5)
  *
@@ -11,10 +12,13 @@
  * Call getCircuitBreakerState(userId) for dashboard display.
  */
 
-import { and, count, eq, gte, sql } from 'drizzle-orm';
+import { and, count, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { userRiskProfiles, tradeExecutions, tradeSignals } from '@/db/schema';
 import { sendNotification } from '@/lib/notifications';
+import { buildExchangeClient, cancelEntryOrder } from '@/lib/entry-fill';
+import { fetchLiveUsdtBalance } from '@/lib/exchange-account';
+import type { MarketType } from '@/mastra/tools/market-symbol';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -156,8 +160,11 @@ export async function checkCircuitBreaker(
     };
   }
 
+  const isPaper = (profile.executionMode ?? 'paper') !== 'live';
+  const marketType = (profile.marketType as MarketType) ?? 'spot';
+
   // --- Parallel DB queries ---
-  const [tradeCountRow, openPosRow, dailyLossRow] = await Promise.all([
+  const [tradeCountRow, openPosRow, dailyLossRow, priorRealizedRow] = await Promise.all([
     // Check 1: daily trade count (entries today, any status except cancelled)
     db
       .select({ cnt: count() })
@@ -183,37 +190,57 @@ export async function checkCircuitBreaker(
       )
       .then((rows) => rows[0]?.cnt ?? 0),
 
-    // Check 2: daily realized loss (sum of negative P&L today for closed positions)
-    // Unrealized: we sum (exitPrice-entryPrice)*positionSize for closed + approximate open
-    // as 0 (we don't have live prices without CCXT — open positions add risk but not loss yet)
+    // Check 2: daily realized loss (sum of negative P&L today for closed positions,
+    // scoped to the account's current trading mode so paper and live P&L never mix)
     db
       .select({
         totalLoss: sql<string>`COALESCE(SUM(CASE WHEN ${tradeExecutions.realizedPnl} < 0 THEN ABS(${tradeExecutions.realizedPnl}) ELSE 0 END), 0)`,
-        totalPositionSize: sql<string>`COALESCE(SUM(${tradeExecutions.positionSize}), 0)`,
       })
       .from(tradeExecutions)
       .where(
         and(
           eq(tradeExecutions.userId, userId),
           eq(tradeExecutions.status, 'closed'),
+          eq(tradeExecutions.mode, isPaper ? 'paper' : 'live'),
           gte(tradeExecutions.exitAt!, dayStart),
         ),
       )
       .then((rows) => rows[0]),
+
+    // Start-of-day equity component (paper only): all-time realized P&L before today
+    db
+      .select({
+        priorRealized: sql<string>`COALESCE(SUM(${tradeExecutions.realizedPnl}), 0)`,
+      })
+      .from(tradeExecutions)
+      .where(
+        and(
+          eq(tradeExecutions.userId, userId),
+          eq(tradeExecutions.status, 'closed'),
+          eq(tradeExecutions.mode, 'paper'),
+          lt(tradeExecutions.exitAt!, dayStart),
+        ),
+      )
+      .then((rows) => rows[0]?.priorRealized ?? '0'),
   ]);
 
   const dailyTradeCount = Number(tradeCountRow);
   const openPositions = Number(openPosRow);
   const dailyLossAbs = Number(dailyLossRow?.totalLoss ?? 0);
 
-  // Express loss as a % of total position size today (fallback: we use 0 if no reference)
-  // Simple approach: treat daily loss as a % against an internal $10k reference or
-  // aggregate position size. If positionSize is 0, treat as 0%.
-  // Note: the most meaningful comparison is loss / total_risk_deployed today, but
-  // without an account balance we approximate loss / sum(positionSizes today).
-  const totalPositionSize = Number(dailyLossRow?.totalPositionSize ?? 0);
+  // Denominator is start-of-day account equity, not a sum of raw position sizes
+  // (those are in base-asset units, not dollars, and aren't comparable across symbols).
+  let startOfDayEquity: number | null;
+  if (isPaper) {
+    startOfDayEquity = Number(profile.paperBalanceUsd ?? 10000) + Number(priorRealizedRow ?? 0);
+  } else {
+    startOfDayEquity = await fetchLiveUsdtBalance(userId, marketType);
+  }
+
+  // Fail open on an unresolvable live balance (exchange outage, no connection yet) —
+  // the other three checks still run; we just can't evaluate the loss-% check this cycle.
   const dailyLossPct =
-    totalPositionSize > 0 ? (dailyLossAbs / totalPositionSize) * 100 : 0;
+    startOfDayEquity && startOfDayEquity > 0 ? (dailyLossAbs / startOfDayEquity) * 100 : 0;
 
   const state = deriveStatus(
     killSwitch,
@@ -294,7 +321,10 @@ export async function getCircuitBreakerState(
 
 /**
  * Toggle the kill switch for a user.
- * When turning ON: also cancels all pending trade signals.
+ * When turning ON: also cancels all pending AND approved trade signals — an
+ * 'approved' signal can have a real limit order resting on the exchange (see
+ * src/lib/entry-fill.ts), which must be cancelled too or it can still fill
+ * after the user has explicitly tried to stop all trading.
  * Returns updated state.
  */
 export async function setKillSwitch(
@@ -307,22 +337,54 @@ export async function setKillSwitch(
     .set({ killSwitchActive: active, updatedAt: new Date() })
     .where(eq(userRiskProfiles.userId, userId));
 
-  // If activating: cancel all pending signals for this user
+  // If activating: cancel all pending/approved signals for this user
   if (active) {
-    await db
-      .update(tradeSignals)
-      .set({ status: 'cancelled', updatedAt: new Date() })
+    const toCancel = await db
+      .select({
+        id: tradeSignals.id,
+        symbol: tradeSignals.symbol,
+        marketType: tradeSignals.marketType,
+        entryOrderId: tradeSignals.entryOrderId,
+        rawPayload: tradeSignals.rawPayload,
+      })
+      .from(tradeSignals)
       .where(
         and(
           eq(tradeSignals.userId, userId),
-          eq(tradeSignals.status, 'pending'),
+          inArray(tradeSignals.status, ['pending', 'approved']),
         ),
       );
+
+    for (const signal of toCancel) {
+      if (!signal.entryOrderId) continue;
+      const rawPayload = signal.rawPayload as Record<string, unknown> | null;
+      const exchangeName = (rawPayload?.exchange as string | undefined) ?? 'binance';
+      try {
+        const client = await buildExchangeClient(userId, exchangeName);
+        if (client) {
+          await cancelEntryOrder(client, signal.symbol, (signal.marketType as MarketType) ?? 'spot', signal.entryOrderId);
+        }
+      } catch (err) {
+        console.error(`[circuit-breaker] Failed to cancel resting order for signal ${signal.id}:`, err);
+      }
+    }
+
+    if (toCancel.length > 0) {
+      await db
+        .update(tradeSignals)
+        .set({ status: 'cancelled', updatedAt: new Date(), entryOrderId: null })
+        .where(
+          inArray(
+            tradeSignals.id,
+            toCancel.map((s) => s.id),
+          ),
+        );
+    }
 
     // Notify user
     void sendNotification(userId, {
       event: 'daily_loss_limit', // reuse "kill switch activated" message
-      reason: 'Kill switch manually activated. All pending signals cancelled.',
+      reason: 'Kill switch manually activated. All pending and resting signals cancelled.',
     });
   }
 

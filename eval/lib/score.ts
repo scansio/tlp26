@@ -103,7 +103,7 @@ export function buildScoringContext(
   for (const p of derived.chartPatterns) {
     if (p.necklinePrice != null) levels.push(p.necklinePrice);
     if (p.targetPrice != null) levels.push(p.targetPrice);
-    if (p.stopLossPrice != null) levels.push(p.stopLossPrice);
+    if (p.invalidationLevel != null) levels.push(p.invalidationLevel);
   }
 
   for (const w of evalCase.orderBook.bidWalls) levels.push(w.price);

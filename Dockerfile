@@ -1,6 +1,9 @@
 # Main Next.js app — self-hosted (Namecheap/Dokploy via Docker), not Vercel.
 # Migrations run once on container start, then the standalone server boots.
-# The worker (Dockerfile.worker) is a separate image and must NEVER run migrations.
+# The confluence-group trading worker (scheduled ticks, SL/TP monitor, price
+# watches, signal expiry, auto-execute retries) runs in this same process via
+# src/instrumentation.ts's register() hook — see that file for the
+# WORKER_ENABLED gating. There is no separate worker image/container anymore.
 
 # ---- deps ----
 FROM node:22-alpine AS deps
@@ -32,10 +35,18 @@ ARG DATABASE_URL=postgresql://placeholder:placeholder@localhost:5432/placeholder
 ARG AI_PROVIDER=groq
 ARG GROQ_MODEL=placeholder
 ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_cGxhY2Vob2xkZXIuY2xlcmsuYWNjb3VudHMuZGV2JA
+ARG NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+ARG NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+ARG NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/
+ARG NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/
 ENV DATABASE_URL=$DATABASE_URL
 ENV AI_PROVIDER=$AI_PROVIDER
 ENV GROQ_MODEL=$GROQ_MODEL
 ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+ENV NEXT_PUBLIC_CLERK_SIGN_IN_URL=$NEXT_PUBLIC_CLERK_SIGN_IN_URL
+ENV NEXT_PUBLIC_CLERK_SIGN_UP_URL=$NEXT_PUBLIC_CLERK_SIGN_UP_URL
+ENV NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=$NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL
+ENV NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=$NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL
 
 RUN npm run build
 

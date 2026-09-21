@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { DefaultChatTransport, ToolUIPart } from 'ai';
 import { useChat } from '@ai-sdk/react';
 
@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Alert } from '@/components/ui/alert';
 import { CircuitBreakerPanel } from '@/components/circuit-breaker/circuit-breaker-panel';
+import { normalizeSymbolList } from '@/lib/symbols';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -39,6 +40,13 @@ interface RiskProfile {
   allowedSymbols: string[];
   paperMode: boolean;
   paperBalanceUsd: number;
+  marketType: 'spot' | 'swap';
+  marginMode: 'cross' | 'isolated';
+  profitLockEnabled: boolean;
+  exitMode: 'fixed' | 'trailing';
+  trailSlPct: number;
+  trailTpPct: number;
+  trailActivationPct: number;
   isActive: boolean;
   updatedAt: string | null;
 }
@@ -53,6 +61,13 @@ interface FormState {
   preferredTimeframes: string[];
   allowedSymbols: string[];
   paperBalanceUsd: number;
+  marketType: 'spot' | 'swap';
+  marginMode: 'cross' | 'isolated';
+  profitLockEnabled: boolean;
+  exitMode: 'fixed' | 'trailing';
+  trailSlPct: number;
+  trailTpPct: number;
+  trailActivationPct: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +93,13 @@ const DEFAULT_FORM: FormState = {
   preferredTimeframes: [],
   allowedSymbols: [],
   paperBalanceUsd: 10_000,
+  marketType: 'spot',
+  marginMode: 'cross',
+  profitLockEnabled: false,
+  exitMode: 'fixed',
+  trailSlPct: 1.0,
+  trailTpPct: 2.0,
+  trailActivationPct: 0.0,
 };
 
 // ---------------------------------------------------------------------------
@@ -94,9 +116,9 @@ function SymbolTagInput({
   const [inputValue, setInputValue] = useState('');
 
   function addTag() {
-    const tag = inputValue.trim().toUpperCase();
-    if (tag && !value.includes(tag)) {
-      onChange([...value, tag]);
+    const newTags = normalizeSymbolList([inputValue]).filter((tag) => !value.includes(tag));
+    if (newTags.length > 0) {
+      onChange([...value, ...newTags]);
     }
     setInputValue('');
   }
@@ -125,7 +147,7 @@ function SymbolTagInput({
           <button
             type="button"
             onClick={() => removeTag(tag)}
-            className="text-muted-foreground hover:text-foreground leading-none"
+            className="text-muted-foreground hover:text-foreground leading-none p-1 -m-1"
             aria-label={`Remove ${tag}`}
           >
             &times;
@@ -199,6 +221,13 @@ function FallbackForm({
         preferredTimeframes: profile.preferredTimeframes ?? [],
         allowedSymbols: profile.allowedSymbols ?? [],
         paperBalanceUsd: profile.paperBalanceUsd ?? 10_000,
+        marketType: profile.marketType ?? 'spot',
+        marginMode: profile.marginMode ?? 'cross',
+        profitLockEnabled: profile.profitLockEnabled ?? false,
+        exitMode: profile.exitMode ?? 'fixed',
+        trailSlPct: profile.trailSlPct ?? 1.0,
+        trailTpPct: profile.trailTpPct ?? 2.0,
+        trailActivationPct: profile.trailActivationPct ?? 0.0,
       });
     }
   }, [profile]);
@@ -238,6 +267,13 @@ function FallbackForm({
       preferredTimeframes: form.preferredTimeframes,
       allowedSymbols: form.allowedSymbols,
       paperBalanceUsd: form.paperBalanceUsd,
+      marketType: form.marketType,
+      marginMode: form.marginMode,
+      profitLockEnabled: form.profitLockEnabled,
+      exitMode: form.exitMode,
+      trailSlPct: form.trailSlPct,
+      trailTpPct: form.trailTpPct,
+      trailActivationPct: form.trailActivationPct,
     };
 
     try {
@@ -272,11 +308,11 @@ function FallbackForm({
       {/* Strategies */}
       <div className="space-y-3">
         <label className="text-sm font-medium">Trading Strategies</label>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {STRATEGIES.map(({ value, label }) => (
             <label
               key={value}
-              className="flex items-center gap-2 rounded-md border border-input px-3 py-2 cursor-pointer hover:bg-accent"
+              className="flex items-center gap-2 rounded-md border border-input px-3 py-2.5 md:py-2 cursor-pointer hover:bg-accent"
             >
               <input
                 type="checkbox"
@@ -402,11 +438,11 @@ function FallbackForm({
       {/* Execution mode */}
       <div className="space-y-2">
         <label className="text-sm font-medium">Execution Mode</label>
-        <div className="flex gap-3">
+        <div className="flex flex-col md:flex-row gap-3">
           {(['manual', 'auto'] as const).map((mode) => (
             <label
               key={mode}
-              className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2 cursor-pointer ${
+              className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2.5 md:py-2 cursor-pointer ${
                 form.executionMode === mode
                   ? 'border-primary bg-primary/10 font-medium'
                   : 'border-input hover:bg-accent'
@@ -436,6 +472,222 @@ function FallbackForm({
 
       <Separator />
 
+      {/* Market type */}
+      <div className="space-y-2">
+        <label className="text-sm font-medium">Market Type</label>
+        <div className="flex flex-col md:flex-row gap-3">
+          {(['spot', 'swap'] as const).map((mt) => (
+            <label
+              key={mt}
+              className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2.5 md:py-2 cursor-pointer ${
+                form.marketType === mt
+                  ? 'border-primary bg-primary/10 font-medium'
+                  : 'border-input hover:bg-accent'
+              }`}
+            >
+              <input
+                type="radio"
+                name="marketType"
+                value={mt}
+                checked={form.marketType === mt}
+                onChange={() => {
+                  setForm((f) => ({ ...f, marketType: mt }));
+                  setSaveMessage('');
+                }}
+                className="accent-primary"
+              />
+              <span className="text-sm capitalize">{mt === 'swap' ? 'Perpetual Futures' : 'Spot'}</span>
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {form.marketType === 'swap'
+            ? 'Trades use USDT-M perpetual futures with leverage. Higher risk — liquidation is possible.'
+            : 'Trades buy/sell the underlying asset directly. No leverage, no liquidation risk.'}
+        </p>
+      </div>
+
+      {form.marketType === 'swap' && (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Leverage is calculated automatically per trade from your stop-loss distance and Risk per Trade
+            below, capped to what the exchange allows for that symbol — it&apos;s never a fixed number you set.
+          </p>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Margin Mode</label>
+            <div className="flex flex-col md:flex-row gap-3">
+              {(['cross', 'isolated'] as const).map((mm) => (
+                <label
+                  key={mm}
+                  className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2.5 md:py-2 cursor-pointer ${
+                    form.marginMode === mm
+                      ? 'border-primary bg-primary/10 font-medium'
+                      : 'border-input hover:bg-accent'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="marginMode"
+                    value={mm}
+                    checked={form.marginMode === mm}
+                    onChange={() => {
+                      setForm((f) => ({ ...f, marginMode: mm }));
+                      setSaveMessage('');
+                    }}
+                    className="accent-primary"
+                  />
+                  <span className="text-sm capitalize">{mm}</span>
+                </label>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Isolated limits loss on a position to its own margin; cross shares margin across positions
+              (a loss on one position can draw down the others).
+            </p>
+          </div>
+        </>
+      )}
+
+      <Separator />
+
+      {/* Exit strategy */}
+      <div className="space-y-2">
+        <label className="text-sm font-medium">Exit Strategy</label>
+        <div className="flex flex-col md:flex-row gap-3">
+          {(['fixed', 'trailing'] as const).map((mode) => (
+            <label
+              key={mode}
+              className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-3 py-2.5 md:py-2 cursor-pointer ${
+                form.exitMode === mode
+                  ? 'border-primary bg-primary/10 font-medium'
+                  : 'border-input hover:bg-accent'
+              }`}
+            >
+              <input
+                type="radio"
+                name="exitMode"
+                value={mode}
+                checked={form.exitMode === mode}
+                onChange={() => {
+                  setForm((f) => ({ ...f, exitMode: mode }));
+                  setSaveMessage('');
+                }}
+                className="accent-primary"
+              />
+              <span className="text-sm">{mode === 'trailing' ? 'Trailing Stop' : 'Fixed SL/TP'}</span>
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {form.exitMode === 'trailing'
+            ? 'The stop-loss follows price as a trade moves into profit, locking in more as it runs, instead of staying at one fixed level.'
+            : 'Stop-loss and take-profit stay at the levels set when a trade opens.'}
+          {' '}A trading signal can still override this on a per-trade basis.
+          {' '}Changing this applies to any position that&apos;s already open, not just new trades — avoid switching it while you have a live position running.
+        </p>
+      </div>
+
+      {form.exitMode === 'trailing' && (
+        <>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">Trailing Stop-Loss Distance</label>
+              <span className="text-sm font-semibold tabular-nums">{form.trailSlPct}%</span>
+            </div>
+            <input
+              type="range"
+              min={0.1}
+              max={10}
+              step={0.1}
+              value={form.trailSlPct}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, trailSlPct: Number(e.target.value) }));
+                setSaveMessage('');
+              }}
+              className="w-full accent-primary"
+            />
+            <p className="text-xs text-muted-foreground">
+              How far behind the current price the stop-loss trails once trailing is active.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">Trailing Take-Profit Distance</label>
+              <span className="text-sm font-semibold tabular-nums">{form.trailTpPct}%</span>
+            </div>
+            <input
+              type="range"
+              min={0.1}
+              max={20}
+              step={0.1}
+              value={form.trailTpPct}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, trailTpPct: Number(e.target.value) }));
+                setSaveMessage('');
+              }}
+              className="w-full accent-primary"
+            />
+            <p className="text-xs text-muted-foreground">
+              Once price first reaches the take-profit target, it keeps trailing by this much instead of
+              closing immediately — lets a strong move keep running.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">Trailing Activation Threshold</label>
+              <span className="text-sm font-semibold tabular-nums">{form.trailActivationPct}%</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={10}
+              step={0.1}
+              value={form.trailActivationPct}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, trailActivationPct: Number(e.target.value) }));
+                setSaveMessage('');
+              }}
+              className="w-full accent-primary"
+            />
+            <p className="text-xs text-muted-foreground">
+              {form.trailActivationPct === 0
+                ? 'Trailing starts immediately from entry.'
+                : `Trailing only starts once the trade is ${form.trailActivationPct}% in profit.`}
+            </p>
+          </div>
+        </>
+      )}
+
+      <Separator />
+
+      {/* Trailing profit lock */}
+      <div className="space-y-2">
+        <label className="flex items-center gap-2 rounded-md border border-input px-3 py-2.5 md:py-2 cursor-pointer hover:bg-accent">
+          <input
+            type="checkbox"
+            checked={form.profitLockEnabled}
+            onChange={(e) => {
+              setForm((f) => ({ ...f, profitLockEnabled: e.target.checked }));
+              setSaveMessage('');
+            }}
+            className="accent-primary"
+          />
+          <span className="text-sm font-medium">Trailing Position Profit Lock</span>
+        </label>
+        <p className="text-xs text-muted-foreground">
+          Live trailing-stop positions are otherwise protected only by this app watching the price —
+          if it goes down, so does that protection. When enabled, every few minutes we place a real
+          stop-loss order on the exchange itself once a trailing position is confirmed in profit, so
+          it stays protected even if the app is offline. Has no effect on fixed SL/TP positions, which
+          already get a resting order at entry.
+        </p>
+      </div>
+
+      <Separator />
+
       {/* Preferred timeframes */}
       <div className="space-y-2">
         <label className="text-sm font-medium">Preferred Timeframes</label>
@@ -443,7 +695,7 @@ function FallbackForm({
           {TIMEFRAMES.map((tf) => (
             <label
               key={tf}
-              className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm cursor-pointer ${
+              className={`flex items-center gap-1.5 rounded-md border px-3 py-2.5 md:py-1.5 text-sm cursor-pointer ${
                 form.preferredTimeframes.includes(tf)
                   ? 'border-primary bg-primary/10 font-medium'
                   : 'border-input hover:bg-accent'
@@ -486,7 +738,7 @@ function FallbackForm({
         <p className="text-xs text-muted-foreground">
           Virtual starting balance for simulated paper trades.
         </p>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3">
           <input
             type="number"
             min={100}
@@ -498,7 +750,7 @@ function FallbackForm({
               setForm((f) => ({ ...f, paperBalanceUsd: val }));
               setSaveMessage('');
             }}
-            className="w-40 rounded-md border border-input bg-background px-3 py-1.5 text-sm tabular-nums"
+            className="w-full md:w-40 rounded-md border border-input bg-background px-3 py-2.5 md:py-1.5 text-sm tabular-nums"
           />
           <span className="text-sm text-muted-foreground">
             ${form.paperBalanceUsd.toLocaleString('en-US')}
@@ -509,8 +761,8 @@ function FallbackForm({
       <Separator />
 
       {/* Save */}
-      <div className="flex items-center gap-4 pt-2">
-        <Button onClick={handleSave} disabled={saving}>
+      <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-4 pt-2">
+        <Button onClick={handleSave} disabled={saving} className="w-full md:w-auto min-h-11 md:min-h-0">
           {saving ? 'Saving…' : 'Save Risk Profile'}
         </Button>
         {saveMessage && (
@@ -582,7 +834,7 @@ function SetupChat({ onSaved }: { onSaved: (p: RiskProfile) => void }) {
   };
 
   return (
-    <div className="relative flex h-[600px] flex-col rounded-lg border bg-background">
+    <div className="relative flex h-[70dvh] md:h-[600px] flex-col rounded-lg border bg-background">
       <Conversation className="flex-1 overflow-hidden">
         <ConversationContent>
           {messages.length === 0 && status === 'ready' && (
@@ -690,9 +942,9 @@ function TradingModePanel({
   }
 
   return (
-    <Card className="p-5 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
+    <Card className="p-4 md:p-5 space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
           <p className="text-sm font-semibold">Trading Mode</p>
           <p className="text-xs text-muted-foreground mt-0.5">
             {isPaper
@@ -700,7 +952,7 @@ function TradingModePanel({
               : 'Live mode — trades execute on your connected exchange with real funds.'}
           </p>
         </div>
-        <div className={`px-3 py-1 rounded-full text-xs font-semibold ${
+        <div className={`shrink-0 px-3 py-1 rounded-full text-xs font-semibold ${
           isPaper
             ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200'
             : 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200'
@@ -711,13 +963,14 @@ function TradingModePanel({
 
       {/* Switch buttons */}
       {!showLiveConfirm && (
-        <div className="flex gap-3">
+        <div className="flex flex-col md:flex-row gap-3">
           {isPaper ? (
             <Button
               size="sm"
               variant="outline"
               onClick={() => setShowLiveConfirm(true)}
               disabled={switching}
+              className="w-full md:w-auto min-h-11 md:min-h-0"
             >
               Switch to Live Trading
             </Button>
@@ -727,6 +980,7 @@ function TradingModePanel({
               variant="outline"
               onClick={() => void switchMode('paper')}
               disabled={switching}
+              className="w-full md:w-auto min-h-11 md:min-h-0"
             >
               {switching ? 'Switching…' : 'Switch to Paper Mode'}
             </Button>
@@ -758,12 +1012,13 @@ function TradingModePanel({
           {switchError && (
             <p className="text-sm text-red-700 dark:text-red-300">{switchError}</p>
           )}
-          <div className="flex gap-2">
+          <div className="flex flex-col md:flex-row gap-2">
             <Button
               size="sm"
               variant="destructive"
               disabled={!confirmed || switching}
               onClick={() => void switchMode('live')}
+              className="w-full md:w-auto min-h-11 md:min-h-0"
             >
               {switching ? 'Switching…' : 'Confirm — Switch to Live'}
             </Button>
@@ -775,6 +1030,7 @@ function TradingModePanel({
                 setConfirmed(false);
                 setSwitchError(null);
               }}
+              className="w-full md:w-auto min-h-11 md:min-h-0"
             >
               Cancel
             </Button>
@@ -788,6 +1044,149 @@ function TradingModePanel({
           Virtual balance: ${(profile.paperBalanceUsd ?? 10_000).toLocaleString('en-US')} USD
           &mdash; configurable in the form below.
         </p>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Import / Export panel
+// ---------------------------------------------------------------------------
+
+function ImportExportPanel({
+  hasProfile,
+  onImported,
+}: {
+  hasProfile: boolean;
+  onImported: (p: RiskProfile) => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [message, setMessage] = useState('');
+  const [isError, setIsError] = useState(false);
+
+  async function handleExport() {
+    setExporting(true);
+    setMessage('');
+    setIsError(false);
+    try {
+      const res = await fetch('/api/risk-profile/export');
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as Record<string, string>;
+        setMessage(err?.error ?? 'Failed to export risk profile.');
+        setIsError(true);
+        return;
+      }
+      const doc = await res.json();
+      const blob = new Blob([JSON.stringify(doc, null, 2)], {
+        type: 'application/json;charset=utf-8;',
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `risk-profile-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setMessage('Risk profile exported.');
+      setIsError(false);
+    } catch {
+      setMessage('Network error. Please try again.');
+      setIsError(true);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function handleImportClick() {
+    fileInputRef.current?.click();
+  }
+
+  async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setImporting(true);
+    setMessage('');
+    setIsError(false);
+
+    try {
+      const text = await file.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        setMessage('That file is not valid JSON.');
+        setIsError(true);
+        return;
+      }
+
+      const res = await fetch('/api/risk-profile/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(parsed),
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        setMessage('Risk profile imported successfully.');
+        setIsError(false);
+        onImported(json.profile as RiskProfile);
+      } else {
+        const err = await res.json().catch(() => ({})) as Record<string, unknown>;
+        const detail =
+          typeof err?.error === 'string' ? err.error : 'Failed to import risk profile.';
+        setMessage(detail);
+        setIsError(true);
+      }
+    } catch {
+      setMessage('Network error. Please try again.');
+      setIsError(true);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <Card className="p-4 sm:p-5 space-y-3">
+      <div>
+        <p className="text-sm font-semibold">Backup &amp; Restore</p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          Export your risk profile to a JSON file, or import a previously exported file.
+        </p>
+      </div>
+      <div className="flex flex-col sm:flex-row gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => void handleExport()}
+          disabled={exporting || !hasProfile}
+          className="w-full sm:w-auto"
+        >
+          {exporting ? 'Exporting…' : 'Export Risk Profile'}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleImportClick}
+          disabled={importing}
+          className="w-full sm:w-auto"
+        >
+          {importing ? 'Importing…' : 'Import Risk Profile'}
+        </Button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(e) => void handleFileSelected(e)}
+        />
+      </div>
+      {message && (
+        <p className={`text-sm ${isError ? 'text-red-600' : 'text-green-600'}`}>{message}</p>
       )}
     </Card>
   );
@@ -828,7 +1227,7 @@ export default function RiskProfilePage() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto py-10 px-4 space-y-6">
+    <div className="max-w-2xl mx-auto py-6 md:py-10 px-4 space-y-6">
       {/* Page header */}
       <div>
         <h1 className="text-2xl font-bold">Risk Profile Setup</h1>
@@ -853,11 +1252,14 @@ export default function RiskProfilePage() {
         <TradingModePanel profile={profile} onModeChanged={handleModeChanged} />
       )}
 
+      {/* Import / export */}
+      <ImportExportPanel hasProfile={!!profile} onImported={handleSaved} />
+
       {/* Mode toggle */}
       <div className="flex items-center gap-4">
-        <div className="flex rounded-lg border border-input overflow-hidden text-sm">
+        <div className="flex w-full md:w-auto rounded-lg border border-input overflow-hidden text-sm">
           <button
-            className={`px-4 py-1.5 transition-colors ${
+            className={`flex-1 md:flex-none px-4 py-2.5 md:py-1.5 transition-colors ${
               mode === 'chat' ? 'bg-primary text-primary-foreground font-medium' : 'hover:bg-accent'
             }`}
             onClick={() => setMode('chat')}
@@ -865,7 +1267,7 @@ export default function RiskProfilePage() {
             Chat Setup
           </button>
           <button
-            className={`px-4 py-1.5 transition-colors ${
+            className={`flex-1 md:flex-none px-4 py-2.5 md:py-1.5 transition-colors ${
               mode === 'form' ? 'bg-primary text-primary-foreground font-medium' : 'hover:bg-accent'
             }`}
             onClick={() => setMode('form')}
@@ -879,9 +1281,9 @@ export default function RiskProfilePage() {
       {profile && mode === 'chat' && (
         <Card className="p-4 bg-muted/40">
           <p className="text-sm font-medium mb-2">Current profile</p>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm text-muted-foreground">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 sm:gap-y-1 text-sm text-muted-foreground">
             <span>Strategies:</span>
-            <span className="font-medium text-foreground">
+            <span className="font-medium text-foreground break-words">
               {profile.strategies?.join(', ') || '—'}
             </span>
             <span>Max trades/day:</span>
@@ -895,11 +1297,11 @@ export default function RiskProfilePage() {
             <span>Execution mode:</span>
             <span className="font-medium text-foreground capitalize">{profile.executionMode}</span>
             <span>Timeframes:</span>
-            <span className="font-medium text-foreground">
+            <span className="font-medium text-foreground break-words">
               {profile.preferredTimeframes?.join(', ') || 'All'}
             </span>
             <span>Symbols:</span>
-            <span className="font-medium text-foreground">
+            <span className="font-medium text-foreground break-words">
               {profile.allowedSymbols?.length > 0 ? profile.allowedSymbols.join(', ') : 'All'}
             </span>
             <span>Paper balance:</span>
@@ -921,7 +1323,7 @@ export default function RiskProfilePage() {
       <CircuitBreakerPanel />
 
       {/* Main content */}
-      <Card className="p-6">
+      <Card className="p-4 md:p-6">
         {mode === 'chat' ? (
           <SetupChat onSaved={handleSaved} />
         ) : (

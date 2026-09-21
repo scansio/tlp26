@@ -12,6 +12,14 @@
  */
 
 import { z } from 'zod';
+import { db } from '@/db';
+import { ohlcvCache } from '@/db/schema';
+import {
+  buildAnalysisCacheKey,
+  readThroughDeterministicCache,
+  CACHE_TTL_LTF_MS,
+  CACHE_TTL_FUNDING_MS,
+} from './analysis-cache';
 
 // ---------------------------------------------------------------------------
 // Shared schemas (mirrors market-data-tool / indicators-tool / smc-tool / etc.)
@@ -79,6 +87,7 @@ export const smcDetectionSchema = z.object({
   direction: z.enum(['BULLISH', 'BEARISH']),
   strengthScore: z.number(),
   distanceFromCurrentPrice: z.number(),
+  timeframe: z.string().optional().describe('Source candle timeframe: "1h", "4h", or "1d"'),
 });
 
 export const smcResultSchema = z.object({
@@ -91,16 +100,20 @@ export const smcResultSchema = z.object({
   candleCount: z.number(),
 });
 
+// Mirrors pattern-tool.ts's detectedPatternSchema — the actual shape returned by
+// patternTool.execute(). This schema previously declared different field names
+// (type/stopLossPrice/patternStartIndex/patternEndIndex/description) that the tool
+// never produced; that mismatch was masked by a blind `as` cast in
+// detectChartPatternsPhase and only became load-bearing once step-input validation
+// started parsing this shape for real (see market-analysis.ts's phase widening).
 export const patternSchema = z.object({
-  type: z.string(),
+  patternType: z.string(),
   direction: z.enum(['BULLISH', 'BEARISH', 'NEUTRAL']),
   confidenceScore: z.number(),
   necklinePrice: z.number().optional(),
   targetPrice: z.number().optional(),
-  stopLossPrice: z.number().optional(),
-  patternStartIndex: z.number(),
-  patternEndIndex: z.number(),
-  description: z.string(),
+  invalidationLevel: z.number().optional(),
+  timeframe: z.string().optional().describe('Source candle timeframe: "1h", "4h", or "1d"'),
 });
 
 export const wallSchema = z.object({
@@ -204,6 +217,7 @@ async function withRetry<T>(
 export interface MarketAnalysisInput {
   symbol: string;
   exchange: 'binance' | 'bybit' | 'bingx';
+  marketType: 'spot' | 'swap';
   triggeredBy: 'scheduled' | 'manual' | 'tradingview';
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any;
@@ -212,10 +226,13 @@ export interface MarketAnalysisInput {
 export interface MarketAnalysisResult {
   symbol: string;
   exchange: 'binance' | 'bybit' | 'bingx';
+  marketType: 'spot' | 'swap';
   triggeredBy: 'scheduled' | 'manual' | 'tradingview';
+  candles15m: z.infer<typeof candleSchema>[];
   candles1h: z.infer<typeof candleSchema>[];
   candles4h: z.infer<typeof candleSchema>[];
   candles1d: z.infer<typeof candleSchema>[];
+  indicators15m: z.infer<typeof indicatorsResultSchema>;
   indicators1h: z.infer<typeof indicatorsResultSchema>;
   indicators4h: z.infer<typeof indicatorsResultSchema>;
   indicators1d: z.infer<typeof indicatorsResultSchema>;
@@ -237,37 +254,212 @@ export interface MarketAnalysisResult {
 }
 
 // ---------------------------------------------------------------------------
+// Structural target bound — per-user R:R enforcement (finalizeForUser)
+// ---------------------------------------------------------------------------
+
+/**
+ * Finds the furthest take-profit level the current market structure actually
+ * supports for a trade in `direction`, so per-user R:R enforcement never asks
+ * for a TP beyond what real structure can reach.
+ *
+ * Source-of-truth priority (deliberate, not an open question): SMC structures
+ * first — specifically order blocks and liquidity sweeps ahead of price in
+ * the trade's favorable direction, since those are actual supply/demand
+ * levels a move is expected to react to. FVGs are excluded as targets: they
+ * are mitigation/entry zones, not levels a move stalls at, so they're a poor
+ * proxy for "how far can this realistically go." Chart-pattern measured-move
+ * targets (targetPrice) are used only as a fallback when no SMC structure
+ * qualifies, since they're a coarser statistical projection rather than an
+ * observed structural level.
+ *
+ * SMC polarity note: smc-tool.ts's `direction` on an order block/liquidity
+ * sweep tags the zone's own polarity (BULLISH = demand/support, BEARISH =
+ * supply/resistance), not the trade direction it caps. Because these are
+ * detected only after price has already moved away from them, a BULLISH
+ * (demand) zone sits below current price and a BEARISH (supply) zone sits
+ * above it — so the level actually capping a LONG's upside is a BEARISH
+ * (supply) structure, and the level capping a SHORT's downside is a BULLISH
+ * (demand) structure. This is the opposite of matching the trade's own
+ * direction — deliberately: chart-pattern targetPrice below is the projected
+ * *move* direction (matches the trade), whereas SMC direction here is the
+ * opposing zone's polarity (caps the trade).
+ *
+ * Returns null when neither source yields a usable bound — callers should
+ * treat that as "no structural constraint to enforce" rather than blocking
+ * the signal on missing data.
+ */
+export function deriveStructuralTargetBound(
+  analysis: Pick<MarketAnalysisResult, 'smcStructures' | 'chartPatterns'>,
+  direction: 'LONG' | 'SHORT',
+): number | null {
+  // Capping zone polarity is the opposite of the trade direction — see the
+  // SMC polarity note above. Pattern targetPrice uses the trade's own
+  // direction instead (see wantMoveDirection below).
+  const wantCapDirection = direction === 'LONG' ? 'BEARISH' : 'BULLISH';
+  const wantMoveDirection = direction === 'LONG' ? 'BULLISH' : 'BEARISH';
+  const { smcStructures, chartPatterns } = analysis;
+  const currentPrice = smcStructures.currentPrice;
+
+  // "Ahead of price" in the trade's favorable direction: above current price
+  // for LONG (positive distanceFromCurrentPrice), below for SHORT (negative).
+  const isAheadOfPrice = (distanceFromCurrentPrice: number): boolean =>
+    direction === 'LONG' ? distanceFromCurrentPrice > 0 : distanceFromCurrentPrice < 0;
+
+  // Restricted to 1h (the pre-existing single-timeframe behavior) even though
+  // smcStructures/chartPatterns now carry 4h/1d structures too — widening this
+  // R:R gate to weight HTF zones as stronger caps is a real behavior change to
+  // live risk gating and deserves its own deliberate follow-up, not a side
+  // effect of adding timeframe tags.
+  const isOnBoundTimeframe = (timeframe: string | undefined): boolean =>
+    timeframe === '1h' || timeframe === undefined;
+
+  const smcCandidates = [...smcStructures.orderBlocks, ...smcStructures.liquiditySweeps].filter(
+    (s) => s.direction === wantCapDirection && isAheadOfPrice(s.distanceFromCurrentPrice) && isOnBoundTimeframe(s.timeframe),
+  );
+
+  if (smcCandidates.length > 0) {
+    const furthest = smcCandidates.reduce((best, s) =>
+      Math.abs(s.distanceFromCurrentPrice) > Math.abs(best.distanceFromCurrentPrice) ? s : best,
+    );
+    return furthest.priceLevel;
+  }
+
+  // Fallback: pattern-tool's measured-move target — same direction as the
+  // trade (targetPrice is the projected move itself, not a capping zone) +
+  // ahead-of-price filter.
+  const patternCandidates = chartPatterns.filter(
+    (p) =>
+      p.direction === wantMoveDirection &&
+      typeof p.targetPrice === 'number' &&
+      isAheadOfPrice(((p.targetPrice - currentPrice) / currentPrice) * 100) &&
+      isOnBoundTimeframe(p.timeframe),
+  );
+
+  if (patternCandidates.length > 0) {
+    const furthest = patternCandidates.reduce((best, p) =>
+      Math.abs((p.targetPrice as number) - currentPrice) > Math.abs((best.targetPrice as number) - currentPrice)
+        ? p
+        : best,
+    );
+    return furthest.targetPrice as number;
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Phase 1 — fetchMarketData
 // ---------------------------------------------------------------------------
 
-export async function fetchMarketDataPhase<T extends { symbol: string; exchange: string }>(
+type CandleSet = {
+  candles15m: z.infer<typeof candleSchema>[];
+  candles1h: z.infer<typeof candleSchema>[];
+  candles4h: z.infer<typeof candleSchema>[];
+  candles1d: z.infer<typeof candleSchema>[];
+};
+
+/**
+ * Best-effort backfill of ohlcv_cache with every *closed* candle (i.e. every
+ * candle except the last, currently-forming one per timeframe) from a fresh
+ * fetch, so the backtester (src/lib/historical-data.ts) benefits from the
+ * same CCXT calls the worker is already making. Closed candles are
+ * immutable, so onConflictDoNothing is correct here — this is a write-only
+ * side channel, never read back by fetchMarketDataPhase itself (see the
+ * read-through cache below for why: ohlcv_cache has no per-row "last written
+ * at" column, so a freshness check keyed off the forming candle's own
+ * timestamp would serve an HTF candle frozen at its opening values for the
+ * rest of its period). Never allowed to fail the analysis phase.
+ *
+ * Gated to marketType='spot' on the 'binance' exchange (historical-data.ts's
+ * own default exchange) only: ohlcv_cache has no exchange/marketType column,
+ * so it's keyed by (symbol, timeframe, timestamp) alone across every
+ * exchange and market. Writing swap/perpetual candles (different basis,
+ * volume profile) or non-Binance spot candles into the same rows under
+ * onConflictDoNothing would let whichever confluence group happens to fetch
+ * a timestamp first silently win, corrupting the backtester's spot data with
+ * no way to tell which source a given row came from.
+ */
+async function backfillClosedCandles(
+  symbol: string,
+  exchange: string,
+  marketType: string,
+  candles: CandleSet,
+): Promise<void> {
+  if (marketType !== 'spot' || exchange !== 'binance') return;
+
+  try {
+    const perTimeframe: { timeframe: string; candles: z.infer<typeof candleSchema>[] }[] = [
+      { timeframe: '15m', candles: candles.candles15m },
+      { timeframe: '1h', candles: candles.candles1h },
+      { timeframe: '4h', candles: candles.candles4h },
+      { timeframe: '1d', candles: candles.candles1d },
+    ];
+
+    for (const { timeframe, candles: series } of perTimeframe) {
+      const closed = series.slice(0, -1); // drop the last (currently-forming) candle
+      if (closed.length === 0) continue;
+
+      await db
+        .insert(ohlcvCache)
+        .values(
+          closed.map((c) => ({
+            symbol,
+            timeframe,
+            timestamp: c.timestamp,
+            open: String(c.open),
+            high: String(c.high),
+            low: String(c.low),
+            close: String(c.close),
+            volume: String(c.volume),
+          })),
+        )
+        .onConflictDoNothing();
+    }
+  } catch (err) {
+    console.warn('[market-analysis] backfillClosedCandles failed (non-fatal)', err);
+  }
+}
+
+export async function fetchMarketDataPhase<
+  T extends { symbol: string; exchange: string; marketType: string },
+>(
   input: T,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any,
-): Promise<
-  T & {
-    candles1h: z.infer<typeof candleSchema>[];
-    candles4h: z.infer<typeof candleSchema>[];
-    candles1d: z.infer<typeof candleSchema>[];
-  }
-> {
+): Promise<T & CandleSet> {
   return withTimeout('fetchMarketData', async () => {
-    const { symbol, exchange } = input;
-    const tool = mastra?.getTool('marketDataTool');
-    if (!tool) throw new Error('marketDataTool not found in Mastra instance');
+    const { symbol, exchange, marketType } = input;
+    const cacheKey = buildAnalysisCacheKey(symbol, exchange, marketType, 'market-data');
 
-    const [r1h, r4h, r1d] = await Promise.all([
-      tool.execute!({ symbol, timeframe: '1h', limit: 200, exchange }, {}),
-      tool.execute!({ symbol, timeframe: '4h', limit: 200, exchange }, {}),
-      tool.execute!({ symbol, timeframe: '1d', limit: 200, exchange }, {}),
-    ]);
+    const candles = await readThroughDeterministicCache<CandleSet>(
+      cacheKey,
+      'market-data',
+      CACHE_TTL_LTF_MS,
+      async () => {
+        const tool = mastra?.getTool('marketDataTool');
+        if (!tool) throw new Error('marketDataTool not found in Mastra instance');
 
-    return {
-      ...input,
-      candles1h: (r1h as { candles: z.infer<typeof candleSchema>[] }).candles,
-      candles4h: (r4h as { candles: z.infer<typeof candleSchema>[] }).candles,
-      candles1d: (r1d as { candles: z.infer<typeof candleSchema>[] }).candles,
-    };
+        const [r15m, r1h, r4h, r1d] = await Promise.all([
+          tool.execute!({ symbol, timeframe: '15m', limit: 200, exchange, marketType }, {}),
+          tool.execute!({ symbol, timeframe: '1h', limit: 200, exchange, marketType }, {}),
+          tool.execute!({ symbol, timeframe: '4h', limit: 200, exchange, marketType }, {}),
+          tool.execute!({ symbol, timeframe: '1d', limit: 200, exchange, marketType }, {}),
+        ]);
+
+        const result: CandleSet = {
+          candles15m: (r15m as { candles: z.infer<typeof candleSchema>[] }).candles,
+          candles1h: (r1h as { candles: z.infer<typeof candleSchema>[] }).candles,
+          candles4h: (r4h as { candles: z.infer<typeof candleSchema>[] }).candles,
+          candles1d: (r1d as { candles: z.infer<typeof candleSchema>[] }).candles,
+        };
+
+        void backfillClosedCandles(symbol, exchange, marketType, result);
+
+        return result;
+      },
+    );
+
+    return { ...input, ...candles };
   });
 }
 
@@ -275,36 +467,65 @@ export async function fetchMarketDataPhase<T extends { symbol: string; exchange:
 // Phase 2 — computeIndicators
 // ---------------------------------------------------------------------------
 
+type IndicatorSet = {
+  indicators15m?: z.infer<typeof indicatorsResultSchema>;
+  indicators1h: z.infer<typeof indicatorsResultSchema>;
+  indicators4h: z.infer<typeof indicatorsResultSchema>;
+  indicators1d: z.infer<typeof indicatorsResultSchema>;
+};
+
 export async function computeIndicatorsPhase<
   T extends {
+    // Optional: the eval harness replays frozen fixtures recorded before the
+    // 15m LTF was added and doesn't carry this field. Production (worker +
+    // trade-analysis-workflow) always fetches it via fetchMarketDataPhase.
+    candles15m?: z.infer<typeof candleSchema>[];
     candles1h: z.infer<typeof candleSchema>[];
     candles4h: z.infer<typeof candleSchema>[];
     candles1d: z.infer<typeof candleSchema>[];
+    // Optional: eval/derive-challenge.ts calls this phase directly with just
+    // candles, no symbol/exchange context. Production always has both (via
+    // fetchMarketDataPhase's output) — caching is simply skipped without them,
+    // since there'd be no meaningful cache key to build.
+    symbol?: string;
+    exchange?: string;
+    marketType?: string;
   },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
->(input: T, mastra: any): Promise<
-  T & {
-    indicators1h: z.infer<typeof indicatorsResultSchema>;
-    indicators4h: z.infer<typeof indicatorsResultSchema>;
-    indicators1d: z.infer<typeof indicatorsResultSchema>;
-  }
-> {
+>(input: T, mastra: any): Promise<T & IndicatorSet> {
   return withTimeout('computeIndicators', async () => {
-    const tool = mastra?.getTool('indicatorsTool');
-    if (!tool) throw new Error('indicatorsTool not found in Mastra instance');
+    const compute = async (): Promise<IndicatorSet> => {
+      const tool = mastra?.getTool('indicatorsTool');
+      if (!tool) throw new Error('indicatorsTool not found in Mastra instance');
 
-    const [ind1h, ind4h, ind1d] = await Promise.all([
-      tool.execute!({ candles: input.candles1h }, {}),
-      tool.execute!({ candles: input.candles4h }, {}),
-      tool.execute!({ candles: input.candles1d }, {}),
-    ]);
+      const has15m = Array.isArray(input.candles15m) && input.candles15m.length > 0;
 
-    return {
-      ...input,
-      indicators1h: ind1h as z.infer<typeof indicatorsResultSchema>,
-      indicators4h: ind4h as z.infer<typeof indicatorsResultSchema>,
-      indicators1d: ind1d as z.infer<typeof indicatorsResultSchema>,
+      const [ind15m, ind1h, ind4h, ind1d] = await Promise.all([
+        has15m ? tool.execute!({ candles: input.candles15m }, {}) : Promise.resolve(undefined),
+        tool.execute!({ candles: input.candles1h }, {}),
+        tool.execute!({ candles: input.candles4h }, {}),
+        tool.execute!({ candles: input.candles1d }, {}),
+      ]);
+
+      return {
+        ...(ind15m !== undefined ? { indicators15m: ind15m as z.infer<typeof indicatorsResultSchema> } : {}),
+        indicators1h: ind1h as z.infer<typeof indicatorsResultSchema>,
+        indicators4h: ind4h as z.infer<typeof indicatorsResultSchema>,
+        indicators1d: ind1d as z.infer<typeof indicatorsResultSchema>,
+      };
     };
+
+    const indicators =
+      input.symbol && input.exchange
+        ? await readThroughDeterministicCache<IndicatorSet>(
+            buildAnalysisCacheKey(input.symbol, input.exchange, input.marketType ?? 'spot', 'indicators'),
+            'indicators',
+            CACHE_TTL_LTF_MS,
+            compute,
+          )
+        : await compute();
+
+    return { ...input, ...indicators };
   });
 }
 
@@ -393,22 +614,82 @@ export function deriveTopDownBiasPhase<
 // Phase 3 — detectSMCStructures
 // ---------------------------------------------------------------------------
 
-export async function detectSMCStructuresPhase<T extends { candles1h: z.infer<typeof candleSchema>[] }>(
+// Timeframes SMC/pattern detection runs on. 15m is deliberately excluded — it
+// stays scoped to indicator entry-timing only (see agentDecisionPhase's LTF
+// section); structure detection on 15m would be mostly noise and would push
+// prompt growth to 4x instead of 3x.
+const STRUCTURE_TIMEFRAMES = ['1h', '4h', '1d'] as const;
+
+/** Recomputes distanceFromCurrentPrice against one shared reference price so
+ * detections from different timeframes (each tool call otherwise measures
+ * distance against that timeframe's own, differently-lagged last close) are
+ * directly comparable once merged. */
+function rebaseDistance<T extends { priceLevel: number; distanceFromCurrentPrice: number }>(
+  detections: T[],
+  currentPrice: number,
+): T[] {
+  return detections.map((d) => ({
+    ...d,
+    distanceFromCurrentPrice: currentPrice === 0 ? d.distanceFromCurrentPrice : ((d.priceLevel - currentPrice) / currentPrice) * 100,
+  }));
+}
+
+export async function detectSMCStructuresPhase<
+  T extends {
+    candles1h: z.infer<typeof candleSchema>[];
+    candles4h: z.infer<typeof candleSchema>[];
+    candles1d: z.infer<typeof candleSchema>[];
+    symbol: string;
+    exchange: string;
+    marketType?: string;
+  },
+>(
   input: T,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any,
 ): Promise<T & { smcStructures: z.infer<typeof smcResultSchema> }> {
   return withTimeout('detectSMCStructures', async () => {
-    const tool = mastra?.getTool('smcTool');
-    if (!tool) throw new Error('smcTool not found in Mastra instance');
+    const cacheKey = buildAnalysisCacheKey(input.symbol, input.exchange, input.marketType ?? 'spot', 'smc-v2');
 
-    // Use 1h candles as the primary timeframe for SMC structures
-    const result = await tool.execute!({ candles: input.candles1h }, {});
+    const smcStructures = await readThroughDeterministicCache<z.infer<typeof smcResultSchema>>(
+      cacheKey,
+      'smc',
+      CACHE_TTL_LTF_MS,
+      async () => {
+        const tool = mastra?.getTool('smcTool');
+        if (!tool) throw new Error('smcTool not found in Mastra instance');
 
-    return {
-      ...input,
-      smcStructures: result as z.infer<typeof smcResultSchema>,
-    };
+        const candlesByTf: Record<(typeof STRUCTURE_TIMEFRAMES)[number], z.infer<typeof candleSchema>[]> = {
+          '1h': input.candles1h,
+          '4h': input.candles4h,
+          '1d': input.candles1d,
+        };
+
+        const results = await Promise.all(
+          STRUCTURE_TIMEFRAMES.map((timeframe) =>
+            tool.execute!({ candles: candlesByTf[timeframe], timeframe }, {}),
+          ),
+        ) as z.infer<typeof smcResultSchema>[];
+
+        // 1h is the primary/reference timeframe for the merged scalar fields.
+        const currentPrice = results[0].currentPrice;
+
+        const merge = (field: 'fvgs' | 'orderBlocks' | 'bos' | 'choch' | 'liquiditySweeps') =>
+          rebaseDistance(results.flatMap((r) => r[field]), currentPrice);
+
+        return {
+          fvgs: merge('fvgs'),
+          orderBlocks: merge('orderBlocks'),
+          bos: merge('bos'),
+          choch: merge('choch'),
+          liquiditySweeps: merge('liquiditySweeps'),
+          currentPrice,
+          candleCount: results[0].candleCount,
+        };
+      },
+    );
+
+    return { ...input, smcStructures };
   });
 }
 
@@ -416,21 +697,51 @@ export async function detectSMCStructuresPhase<T extends { candles1h: z.infer<ty
 // Phase 4 — detectChartPatterns
 // ---------------------------------------------------------------------------
 
-export async function detectChartPatternsPhase<T extends { candles1h: z.infer<typeof candleSchema>[] }>(
+export async function detectChartPatternsPhase<
+  T extends {
+    candles1h: z.infer<typeof candleSchema>[];
+    candles4h: z.infer<typeof candleSchema>[];
+    candles1d: z.infer<typeof candleSchema>[];
+    symbol: string;
+    exchange: string;
+    marketType?: string;
+  },
+>(
   input: T,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any,
 ): Promise<T & { chartPatterns: z.infer<typeof patternSchema>[] }> {
   return withTimeout('detectChartPatterns', async () => {
-    const tool = mastra?.getTool('patternTool');
-    if (!tool) throw new Error('patternTool not found in Mastra instance');
+    const cacheKey = buildAnalysisCacheKey(input.symbol, input.exchange, input.marketType ?? 'spot', 'patterns-v2');
 
-    const result = await tool.execute!({ candles: input.candles1h, sensitivity: 0.05 }, {});
+    const chartPatterns = await readThroughDeterministicCache<z.infer<typeof patternSchema>[]>(
+      cacheKey,
+      'patterns',
+      CACHE_TTL_LTF_MS,
+      async () => {
+        const tool = mastra?.getTool('patternTool');
+        if (!tool) throw new Error('patternTool not found in Mastra instance');
 
-    return {
-      ...input,
-      chartPatterns: (result as { patterns: z.infer<typeof patternSchema>[] }).patterns,
-    };
+        const candlesByTf: Record<(typeof STRUCTURE_TIMEFRAMES)[number], z.infer<typeof candleSchema>[]> = {
+          '1h': input.candles1h,
+          '4h': input.candles4h,
+          '1d': input.candles1d,
+        };
+
+        const results = await Promise.all(
+          STRUCTURE_TIMEFRAMES.map((timeframe) =>
+            tool.execute!({ candles: candlesByTf[timeframe], sensitivity: 0.05, timeframe }, {}),
+          ),
+        ) as { patterns: z.infer<typeof patternSchema>[] }[];
+
+        // necklinePrice/targetPrice/invalidationLevel are absolute price levels,
+        // not percentage distances, so — unlike SMC detections — no rebasing is
+        // needed when merging across timeframes.
+        return results.flatMap((r) => r.patterns);
+      },
+    );
+
+    return { ...input, chartPatterns };
   });
 }
 
@@ -438,28 +749,38 @@ export async function detectChartPatternsPhase<T extends { candles1h: z.infer<ty
 // Phase 5 — analyzeOrderBook
 // ---------------------------------------------------------------------------
 
-export async function analyzeOrderBookPhase<T extends { symbol: string; exchange: string }>(
+export async function analyzeOrderBookPhase<
+  T extends { symbol: string; exchange: string; marketType: string },
+>(
   input: T,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any,
 ): Promise<T & { orderBook: z.infer<typeof orderbookResultSchema> }> {
   return withTimeout('analyzeOrderBook', async () => {
-    const tool = mastra?.getTool('orderbookTool');
-    if (!tool) throw new Error('orderbookTool not found in Mastra instance');
+    const cacheKey = buildAnalysisCacheKey(input.symbol, input.exchange, input.marketType, 'orderbook');
 
-    const result = await tool.execute!(
-      {
-        symbol: input.symbol,
-        exchange: input.exchange,
-        depth: 50,
+    const orderBook = await readThroughDeterministicCache<z.infer<typeof orderbookResultSchema>>(
+      cacheKey,
+      'orderbook',
+      CACHE_TTL_LTF_MS,
+      async () => {
+        const tool = mastra?.getTool('orderbookTool');
+        if (!tool) throw new Error('orderbookTool not found in Mastra instance');
+
+        const result = await tool.execute!(
+          {
+            symbol: input.symbol,
+            exchange: input.exchange,
+            marketType: input.marketType,
+            depth: 50,
+          },
+          {},
+        );
+        return result as z.infer<typeof orderbookResultSchema>;
       },
-      {},
     );
 
-    return {
-      ...input,
-      orderBook: result as z.infer<typeof orderbookResultSchema>,
-    };
+    return { ...input, orderBook };
   });
 }
 
@@ -473,6 +794,14 @@ export async function fetchNewsPhase<T extends { symbol: string }>(
   mastra: any,
 ): Promise<T & { news: z.infer<typeof newsResultSchema> }> {
   return withTimeout('fetchNews', async () => {
+    // newsTool (src/mastra/tools/news-tool.ts) already reads/writes the
+    // news_cache table itself (1-day TTL, keyed by the same sorted/uppercased
+    // currency list this phase passes in) — no extra caching needed here.
+    // An earlier version of this phase wrapped the call in its own 5-minute
+    // cache using the exact same cache key, which just clobbered the tool's
+    // 1-day expiresAt down to 5 minutes on every round trip and forced a real
+    // external fetch far more often than intended. Do not re-add a wrapper
+    // here without changing the key so the two layers don't collide.
     const tool = mastra?.getTool('newsTool');
     if (!tool) throw new Error('newsTool not found in Mastra instance');
 
@@ -491,28 +820,42 @@ export async function fetchNewsPhase<T extends { symbol: string }>(
 // Phase 6b — fetchOnchainSignals (run concurrently with 6a)
 // ---------------------------------------------------------------------------
 
-export async function fetchOnchainSignalsPhase<T extends { symbol: string }>(
+export async function fetchOnchainSignalsPhase<T extends { symbol: string; exchange: string; marketType: string }>(
   input: T,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mastra: any,
 ): Promise<T & { onchain: z.infer<typeof onchainResultSchema> }> {
   return withTimeout('fetchOnchainSignals', async () => {
-    const tool = mastra?.getTool('onchainTool');
-    if (!tool) throw new Error('onchainTool not found in Mastra instance');
+    // onchain-tool returns funding rate + netflow + open interest + liquidation
+    // levels from a single Coinglass/Santiment call — it isn't split by field,
+    // so there's no way to give netflow its own (longer, daily) TTL without
+    // either a second live call or caching a stale netflow value alongside a
+    // fresh funding rate. We cache the whole result under one key at the
+    // funding-rate (hourly) TTL — stricter than the requested daily TTL for
+    // netflow specifically, but never staler than what was asked for.
+    const cacheKey = buildAnalysisCacheKey(input.symbol, input.exchange, input.marketType, 'onchain');
 
-    const baseCurrency = input.symbol.split('/')[0] ?? input.symbol;
-    const result = await tool.execute!(
-      {
-        symbol: input.symbol,
-        baseCurrency,
+    const onchain = await readThroughDeterministicCache<z.infer<typeof onchainResultSchema>>(
+      cacheKey,
+      'onchain',
+      CACHE_TTL_FUNDING_MS,
+      async () => {
+        const tool = mastra?.getTool('onchainTool');
+        if (!tool) throw new Error('onchainTool not found in Mastra instance');
+
+        const baseCurrency = input.symbol.split('/')[0] ?? input.symbol;
+        const result = await tool.execute!(
+          {
+            symbol: input.symbol,
+            baseCurrency,
+          },
+          {},
+        );
+        return result as z.infer<typeof onchainResultSchema>;
       },
-      {},
     );
 
-    return {
-      ...input,
-      onchain: result as z.infer<typeof onchainResultSchema>,
-    };
+    return { ...input, onchain };
   });
 }
 
@@ -520,11 +863,80 @@ export async function fetchOnchainSignalsPhase<T extends { symbol: string }>(
 // Phase 7 — agentDecision
 // ---------------------------------------------------------------------------
 
+// Prompt-only trimming so tripling the timeframes doesn't triple the prompt's
+// token cost — the cached/persisted smcStructures/chartPatterns stay full
+// (deriveStructuralTargetBound and the signal's audit-trail JSON want the
+// complete picture); only what's rendered into the agent's prompt is capped.
+const PROMPT_ZONE_LIMIT = 5; // top FVGs/order blocks per timeframe, by proximity
+const PROMPT_ZONE_BAND_PCT = 15; // ...within this % band of current price
+const PROMPT_EVENT_LIMIT = 3; // last BOS/ChoCH/liquidity sweeps per timeframe
+const PROMPT_PATTERN_LIMIT = 3; // top chart patterns per timeframe, by confidence
+
+type SmcDetection = z.infer<typeof smcDetectionSchema>;
+type ChartPattern = z.infer<typeof patternSchema>;
+
+function byTimeframe<T extends { timeframe?: string }>(items: T[], timeframe: string): T[] {
+  return items.filter((item) => item.timeframe === timeframe);
+}
+
+function formatDetection(d: SmcDetection): string {
+  const sign = d.distanceFromCurrentPrice >= 0 ? '+' : '';
+  return `- ${d.type} ${d.direction} @ ${d.priceLevel} (strength ${d.strengthScore.toFixed(2)}, ${sign}${d.distanceFromCurrentPrice.toFixed(2)}%)`;
+}
+
+/** FVGs/Order Blocks are standing zones — proximity to current price is what
+ * makes one relevant, so rank by |distance| within a band. */
+function topZonesByProximity(items: SmcDetection[]): SmcDetection[] {
+  return items
+    .filter((d) => Math.abs(d.distanceFromCurrentPrice) <= PROMPT_ZONE_BAND_PCT)
+    .sort((a, b) => Math.abs(a.distanceFromCurrentPrice) - Math.abs(b.distanceFromCurrentPrice))
+    .slice(0, PROMPT_ZONE_LIMIT);
+}
+
+/** BOS/ChoCH/liquidity sweeps are point-in-time events with no timestamp
+ * field — array order (oldest-first, matching the candle order they were
+ * detected from) is the only recency signal, so take the most recent ones
+ * rather than ranking by strength (a strong-but-stale break would otherwise
+ * crowd out the most decision-relevant recent one). */
+function recentEvents(items: SmcDetection[]): SmcDetection[] {
+  return items.slice(-PROMPT_EVENT_LIMIT);
+}
+
+function buildSmcPromptSection(smc: z.infer<typeof smcResultSchema>): string {
+  return STRUCTURE_TIMEFRAMES.map((tf) => {
+    const lines = [
+      ...topZonesByProximity(byTimeframe(smc.fvgs, tf)),
+      ...topZonesByProximity(byTimeframe(smc.orderBlocks, tf)),
+      ...recentEvents(byTimeframe(smc.bos, tf)),
+      ...recentEvents(byTimeframe(smc.choch, tf)),
+      ...recentEvents(byTimeframe(smc.liquiditySweeps, tf)),
+    ].map(formatDetection);
+    return `### ${tf}\n${lines.length ? lines.join('\n') : '(none)'}`;
+  }).join('\n\n');
+}
+
+function buildPatternsPromptSection(patterns: ChartPattern[]): string {
+  return STRUCTURE_TIMEFRAMES.map((tf) => {
+    const top = byTimeframe(patterns, tf)
+      .sort((a, b) => b.confidenceScore - a.confidenceScore)
+      .slice(0, PROMPT_PATTERN_LIMIT);
+    const lines = top.map(
+      (p) =>
+        `- ${p.patternType} ${p.direction} (confidence ${p.confidenceScore.toFixed(2)}, neckline ${p.necklinePrice ?? 'n/a'}, target ${p.targetPrice ?? 'n/a'}, invalidation ${p.invalidationLevel ?? 'n/a'})`,
+    );
+    return `### ${tf}\n${lines.length ? lines.join('\n') : '(none)'}`;
+  }).join('\n\n');
+}
+
 export interface AgentDecisionInput {
   symbol: string;
+  // Optional: see computeIndicatorsPhase — absent when replaying eval fixtures
+  // recorded before the 15m LTF was added.
+  candles15m?: z.infer<typeof candleSchema>[];
   candles1h: z.infer<typeof candleSchema>[];
   candles4h: z.infer<typeof candleSchema>[];
   candles1d: z.infer<typeof candleSchema>[];
+  indicators15m?: z.infer<typeof indicatorsResultSchema>;
   indicators1h: z.infer<typeof indicatorsResultSchema>;
   indicators4h: z.infer<typeof indicatorsResultSchema>;
   indicators1d: z.infer<typeof indicatorsResultSchema>;
@@ -570,7 +982,30 @@ RULES YOU MUST FOLLOW:
 - If tradeBias is BEARISH → only ENTER_SHORT or HOLD are allowed. ENTER_LONG is FORBIDDEN.
 - If tradeBias is NEUTRAL → ENTER_LONG or ENTER_SHORT are allowed but confidence must be MEDIUM or lower.
 - When a counter-trend trade would otherwise trigger, output HOLD and cite the HTF filter in reasoning.
-- Include "top-down-alignment" in strategiesTriggered when the LTF signal agrees with tradeBias.`;
+- Include "top-down-alignment" in strategiesTriggered when the LTF signal agrees with tradeBias.
+
+## HTF/LTF STRUCTURE HIERARCHY (MANDATORY)
+SMC structures and chart patterns below are grouped by timeframe (1h/4h/1d).
+- 4h and 1d structures are bias/points-of-interest (POI) — they mark where price is
+  expected to react, not when to enter.
+- 1h structures are entry triggers — use them to time entries into or out of the HTF POI.
+- If a 1h zone/pattern sits inside an opposing-direction 4h/1d zone, the HTF zone is
+  dominant: do not enter against it. Cite this explicitly in reasoning and lower confidence.
+- If 1h and HTF structure agree (same direction, overlapping/adjacent zones), this is the
+  strongest structural confluence available — eligible for confidence: HIGH if no other
+  conflict rule fires.
+- Include "htf-poi-alignment" in strategiesTriggered when 1h and HTF SMC/pattern direction agree.
+- Include "ltf-counter-htf-zone" in strategiesTriggered when a 1h entry trigger fires inside
+  an opposing-direction HTF zone (this is also a CONFLICT RULE — see your instructions).` +
+        (input.indicators15m
+          ? `
+
+## LTF ENTRY TIMING (15m)
+The 15m timeframe is for entry timing and trigger precision only — it never overrides tradeBias.
+Use it to judge whether price is at a favorable entry right now (momentum exhaustion, pullback into
+the zone, fresh crossover) versus chasing an extended move. Include "ltf-entry-timing" in
+strategiesTriggered when the 15m indicators support entering at the current price.`
+          : '');
 
       const prompt = `You are the trading decision engine. Analyze the following data and return ONLY a valid JSON object with no prose.
 
@@ -580,11 +1015,14 @@ ${topDownSection}
 ${input.symbol}
 
 ## Market Data (candle counts)
-- 1h candles: ${input.candles1h.length}
+${input.candles15m ? `- 15m candles: ${input.candles15m.length}\n` : ''}- 1h candles: ${input.candles1h.length}
 - 4h candles: ${input.candles4h.length}
 - 1d candles: ${input.candles1d.length}
 
-## Technical Indicators
+## Technical Indicators${input.indicators15m ? `
+### 15m (entry timing only)
+${JSON.stringify(input.indicators15m, null, 2)}
+` : ''}
 ### 1h
 ${JSON.stringify(input.indicators1h, null, 2)}
 
@@ -595,10 +1033,10 @@ ${JSON.stringify(input.indicators4h, null, 2)}
 ${JSON.stringify(input.indicators1d, null, 2)}
 
 ## SMC Structures
-${JSON.stringify(input.smcStructures, null, 2)}
+${buildSmcPromptSection(input.smcStructures)}
 
 ## Chart Patterns
-${JSON.stringify(input.chartPatterns, null, 2)}
+${buildPatternsPromptSection(input.chartPatterns)}
 
 ## Order Book
 ${JSON.stringify(input.orderBook, null, 2)}

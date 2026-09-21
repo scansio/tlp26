@@ -1,5 +1,7 @@
 import { SignInButton, SignUpButton, SignedIn, SignedOut, UserButton } from "@clerk/nextjs";
 import Link from "next/link";
+import { listActivePlansWithPrices } from "@/lib/billing/plans";
+import { INTERVAL_LABEL, formatPlanPrice } from "@/lib/billing/format";
 
 // ─── PLACEHOLDER DATA — replace with real metrics before launch ───────────────
 const STATS = [
@@ -108,7 +110,7 @@ const FAQS = [
   },
   {
     q: "What does it cost?",
-    a: "Paper trading is completely free — no credit card required. Live trading pricing is coming soon. Sign up now to lock in early-access rates.",
+    a: "Paper trading is completely free on the free plan — no credit card required. Paid plans unlock higher daily limits, BYOK, and personalized memory — see the Pricing section above for current rates.",
   },
 ];
 // ──────────────────────────────────────────────────────────────────────────────
@@ -121,7 +123,15 @@ const SIGNAL_REASONS = [
   "Liquidation wall at $65,800 acting as support",
 ];
 
-export default function Home() {
+// Pricing is read from the DB below — must always be fetched fresh at
+// request time, never baked in from whatever it was at build time (when
+// there's no DB connection to hit anyway, which is what broke the Docker
+// build: `next build` tries to statically prerender `/` by default).
+export const dynamic = 'force-dynamic';
+
+export default async function Home() {
+  const plans = await listActivePlansWithPrices();
+
   return (
     <div className="min-h-screen bg-black text-white antialiased">
       {/* ── Nav ─────────────────────────────────────────────────────────────── */}
@@ -130,19 +140,20 @@ export default function Home() {
         <nav className="hidden md:flex items-center gap-6 text-sm text-zinc-400">
           <a href="#features" className="hover:text-white transition-colors">Features</a>
           <a href="#how-it-works" className="hover:text-white transition-colors">How it works</a>
+          <a href="#pricing" className="hover:text-white transition-colors">Pricing</a>
           <a href="#testimonials" className="hover:text-white transition-colors">Testimonials</a>
           <a href="#faq" className="hover:text-white transition-colors">FAQ</a>
           <a href="/docs" className="hover:text-white transition-colors">Docs</a>
         </nav>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           <SignedOut>
             <SignInButton>
-              <button className="text-sm text-zinc-400 hover:text-white transition-colors px-4 py-1.5">
+              <button className="hidden sm:inline-flex sm:items-center sm:min-h-11 text-sm text-zinc-400 hover:text-white transition-colors px-4 py-1.5">
                 Sign in
               </button>
             </SignInButton>
             <SignUpButton>
-              <button className="rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-sm px-5 py-2 transition-colors">
+              <button className="inline-flex items-center justify-center min-h-11 md:min-h-0 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-sm px-4 sm:px-5 py-2.5 md:py-2 transition-colors">
                 Get started free
               </button>
             </SignUpButton>
@@ -150,7 +161,7 @@ export default function Home() {
           <SignedIn>
             <Link
               href="/dashboard"
-              className="rounded-full border border-zinc-700 px-4 py-1.5 text-sm hover:border-zinc-500 transition-colors"
+              className="inline-flex items-center justify-center min-h-11 md:min-h-0 rounded-full border border-zinc-700 px-4 py-1.5 text-sm hover:border-zinc-500 transition-colors"
             >
               Dashboard
             </Link>
@@ -160,18 +171,18 @@ export default function Home() {
       </header>
 
       {/* ── Hero ────────────────────────────────────────────────────────────── */}
-      <section className="relative pt-32 pb-24 px-6 overflow-hidden">
+      <section className="relative pt-28 pb-16 md:pt-32 md:pb-24 px-6 overflow-hidden">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,_#ffffff08_1px,_transparent_1px),_linear-gradient(to_bottom,_#ffffff08_1px,_transparent_1px)] bg-[size:48px_48px]" />
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[700px] bg-emerald-500/8 rounded-full blur-3xl pointer-events-none" />
 
         <div className="relative max-w-6xl mx-auto grid lg:grid-cols-2 gap-12 items-center">
-          <div className="flex flex-col items-start gap-6">
+          <div className="flex flex-col items-start gap-6 min-w-0">
             <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-400">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
               AI Trading Agent — Now Live
             </div>
 
-            <h1 className="text-5xl lg:text-6xl font-bold leading-[1.1] tracking-tight">
+            <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold leading-[1.15] md:leading-[1.1] tracking-tight">
               Your AI trading{" "}
               <span className="bg-gradient-to-r from-emerald-400 to-teal-300 bg-clip-text text-transparent">
                 edge
@@ -181,20 +192,20 @@ export default function Home() {
               on autopilot.
             </h1>
 
-            <p className="text-lg text-zinc-400 max-w-md leading-relaxed">
+            <p className="text-base md:text-lg text-zinc-400 max-w-full md:max-w-md leading-relaxed">
               SMC analysis, on-chain signals, and real-time news — synthesized by AI and
               executed automatically on BingX, Binance, or Bybit.
             </p>
 
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 pt-2">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 pt-2 w-full sm:w-auto">
               <SignedOut>
                 <SignUpButton>
-                  <button className="rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-8 py-3 text-base transition-colors">
+                  <button className="w-full sm:w-auto text-center rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-8 py-3 text-base transition-colors">
                     Start trading free →
                   </button>
                 </SignUpButton>
                 <SignInButton>
-                  <button className="text-sm text-zinc-400 hover:text-white underline underline-offset-4 transition-colors">
+                  <button className="w-full sm:w-auto text-center py-3 sm:py-0 text-sm text-zinc-400 hover:text-white underline underline-offset-4 transition-colors">
                     Already have an account?
                   </button>
                 </SignInButton>
@@ -202,7 +213,7 @@ export default function Home() {
               <SignedIn>
                 <Link
                   href="/dashboard"
-                  className="rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-8 py-3 text-base transition-colors"
+                  className="w-full sm:w-auto text-center rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-8 py-3 text-base transition-colors"
                 >
                   Go to Dashboard →
                 </Link>
@@ -282,11 +293,11 @@ export default function Home() {
       </section>
 
       {/* ── Stats ───────────────────────────────────────────────────────────── */}
-      <section className="py-16 px-6">
-        <div className="max-w-6xl mx-auto grid grid-cols-2 lg:grid-cols-4 gap-8">
+      <section className="py-12 md:py-16 px-6">
+        <div className="max-w-6xl mx-auto grid grid-cols-2 lg:grid-cols-4 gap-6 md:gap-8">
           {STATS.map((s) => (
-            <div key={s.label} className="text-center">
-              <div className="text-4xl font-bold text-white mb-1">{s.value}</div>
+            <div key={s.label} className="text-center min-w-0">
+              <div className="text-3xl md:text-4xl font-bold text-white mb-1">{s.value}</div>
               <div className="text-sm font-medium text-zinc-300 mb-1">{s.label}</div>
               <div className="text-xs text-zinc-600">{s.note}</div>
             </div>
@@ -295,13 +306,13 @@ export default function Home() {
       </section>
 
       {/* ── Problem / Solution ──────────────────────────────────────────────── */}
-      <section className="py-20 px-6 border-t border-white/5">
+      <section className="py-14 md:py-20 px-6 border-t border-white/5">
         <div className="max-w-3xl mx-auto text-center">
-          <h2 className="text-3xl lg:text-4xl font-bold mb-6 leading-tight">
+          <h2 className="text-2xl md:text-3xl lg:text-4xl font-bold mb-6 leading-tight">
             Most traders lose not from bad instincts —{" "}
             <span className="text-zinc-500">but from missing data.</span>
           </h2>
-          <p className="text-zinc-400 text-lg leading-relaxed">
+          <p className="text-zinc-400 text-base md:text-lg leading-relaxed">
             Manually tracking OHLCV candles, on-chain flows, news sentiment, SMC levels, and
             order book walls simultaneously is impossible. Trading Hub synthesizes all of it into
             a single, reasoned signal — in seconds.
@@ -310,13 +321,13 @@ export default function Home() {
       </section>
 
       {/* ── Features ────────────────────────────────────────────────────────── */}
-      <section id="features" className="py-20 px-6 border-t border-white/5">
+      <section id="features" className="py-14 md:py-20 px-6 border-t border-white/5">
         <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl lg:text-4xl font-bold mb-4">
+          <div className="text-center mb-10 md:mb-16">
+            <h2 className="text-2xl md:text-3xl lg:text-4xl font-bold mb-4">
               Everything the market throws at you. Handled.
             </h2>
-            <p className="text-zinc-400 text-lg max-w-xl mx-auto">
+            <p className="text-zinc-400 text-base md:text-lg max-w-xl mx-auto">
               9 data sources. One AI agent. Decisions in seconds.
             </p>
           </div>
@@ -336,15 +347,15 @@ export default function Home() {
       </section>
 
       {/* ── How it works ────────────────────────────────────────────────────── */}
-      <section id="how-it-works" className="py-20 px-6 border-t border-white/5">
+      <section id="how-it-works" className="py-14 md:py-20 px-6 border-t border-white/5">
         <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl lg:text-4xl font-bold mb-4">Up and running in minutes.</h2>
-            <p className="text-zinc-400 text-lg">No quant background required.</p>
+          <div className="text-center mb-10 md:mb-16">
+            <h2 className="text-2xl md:text-3xl lg:text-4xl font-bold mb-4">Up and running in minutes.</h2>
+            <p className="text-zinc-400 text-base md:text-lg">No quant background required.</p>
           </div>
-          <div className="grid md:grid-cols-3 gap-12">
+          <div className="grid md:grid-cols-3 gap-8 md:gap-12">
             {STEPS.map((s, i) => (
-              <div key={s.n} className="relative">
+              <div key={s.n} className="relative min-w-0">
                 {i < STEPS.length - 1 && (
                   <div className="hidden md:block absolute top-8 left-full w-full h-px bg-gradient-to-r from-zinc-700 to-transparent" />
                 )}
@@ -357,12 +368,77 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ── Testimonials ────────────────────────────────────────────────────── */}
-      <section id="testimonials" className="py-20 px-6 border-t border-white/5">
+      {/* ── Pricing ─────────────────────────────────────────────────────────── */}
+      <section id="pricing" className="py-14 md:py-20 px-6 border-t border-white/5">
         <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl lg:text-4xl font-bold mb-4">Traders who made the switch.</h2>
-            <p className="text-zinc-400 text-lg">Real results from real users.</p>
+          <div className="text-center mb-10 md:mb-16">
+            <h2 className="text-2xl md:text-3xl lg:text-4xl font-bold mb-4">Simple, transparent pricing.</h2>
+            <p className="text-zinc-400 text-base md:text-lg">Start free. Upgrade when you need more.</p>
+          </div>
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-5xl mx-auto">
+            {plans.map((plan) => {
+              const monthly = plan.prices.find((p) => p.billingInterval === "monthly") ?? plan.prices[0];
+              const features = [
+                `${plan.autoTradeRunsPerDay} auto-trade runs / day`,
+                `${plan.chatMessagesPerDay} chat messages / day`,
+                plan.allowsByok ? "Bring your own API keys" : null,
+                plan.allowsPersonalizedMemory ? "Personalized memory" : null,
+              ].filter(Boolean) as string[];
+
+              return (
+                <div
+                  key={plan.id}
+                  className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 flex flex-col"
+                >
+                  <h3 className="font-semibold text-white capitalize mb-1">{plan.name}</h3>
+                  <div className="mb-4">
+                    {monthly ? (
+                      <>
+                        <span className="text-3xl font-bold text-white">
+                          {formatPlanPrice(monthly.price, monthly.currency)}
+                        </span>
+                        <span className="text-sm text-zinc-500">/{INTERVAL_LABEL[monthly.billingInterval]}</span>
+                      </>
+                    ) : (
+                      <span className="text-3xl font-bold text-white">Free</span>
+                    )}
+                  </div>
+                  <ul className="space-y-2 text-sm text-zinc-400 mb-6 flex-1">
+                    {features.map((f) => (
+                      <li key={f} className="flex items-start gap-2">
+                        <span className="text-emerald-400 mt-0.5 shrink-0">✓</span>
+                        {f}
+                      </li>
+                    ))}
+                  </ul>
+                  <SignedOut>
+                    <SignUpButton fallbackRedirectUrl="/billing">
+                      <button className="w-full text-center rounded-full border border-zinc-700 hover:border-zinc-500 px-5 py-2.5 text-sm font-medium transition-colors">
+                        Get started
+                      </button>
+                    </SignUpButton>
+                  </SignedOut>
+                  <SignedIn>
+                    <Link
+                      href="/billing"
+                      className="w-full text-center rounded-full border border-zinc-700 hover:border-zinc-500 px-5 py-2.5 text-sm font-medium transition-colors"
+                    >
+                      View plan
+                    </Link>
+                  </SignedIn>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Testimonials ────────────────────────────────────────────────────── */}
+      <section id="testimonials" className="py-14 md:py-20 px-6 border-t border-white/5">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-center mb-10 md:mb-16">
+            <h2 className="text-2xl md:text-3xl lg:text-4xl font-bold mb-4">Traders who made the switch.</h2>
+            <p className="text-zinc-400 text-base md:text-lg">Real results from real users.</p>
           </div>
           <div className="grid md:grid-cols-3 gap-6">
             {TESTIMONIALS.map((t) => (
@@ -388,17 +464,17 @@ export default function Home() {
       </section>
 
       {/* ── CTA banner ──────────────────────────────────────────────────────── */}
-      <section className="py-20 px-6 border-t border-white/5">
+      <section className="py-14 md:py-20 px-6 border-t border-white/5">
         <div className="max-w-4xl mx-auto">
-          <div className="rounded-3xl border border-emerald-500/20 bg-gradient-to-br from-emerald-500/10 via-zinc-900 to-black p-12 text-center">
-            <h2 className="text-4xl lg:text-5xl font-bold mb-4">Start for free today.</h2>
-            <p className="text-zinc-400 text-lg mb-8 max-w-md mx-auto">
+          <div className="rounded-3xl border border-emerald-500/20 bg-gradient-to-br from-emerald-500/10 via-zinc-900 to-black p-6 md:p-12 text-center">
+            <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold mb-4">Start for free today.</h2>
+            <p className="text-zinc-400 text-base md:text-lg mb-8 max-w-full md:max-w-md mx-auto">
               Paper trading mode is free — no credit card, no risk. Connect an exchange when
               you&apos;re ready to go live.
             </p>
             <SignedOut>
               <SignUpButton>
-                <button className="rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-10 py-4 text-lg transition-colors">
+                <button className="w-full sm:w-auto text-center rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-6 py-3 text-base md:px-10 md:py-4 md:text-lg transition-colors">
                   Create your free account →
                 </button>
               </SignUpButton>
@@ -406,7 +482,7 @@ export default function Home() {
             <SignedIn>
               <Link
                 href="/dashboard"
-                className="inline-block rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-10 py-4 text-lg transition-colors"
+                className="inline-block w-full sm:w-auto text-center rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-6 py-3 text-base md:px-10 md:py-4 md:text-lg transition-colors"
               >
                 Go to Dashboard →
               </Link>
@@ -416,15 +492,15 @@ export default function Home() {
       </section>
 
       {/* ── FAQ ─────────────────────────────────────────────────────────────── */}
-      <section id="faq" className="py-20 px-6 border-t border-white/5">
+      <section id="faq" className="py-14 md:py-20 px-6 border-t border-white/5">
         <div className="max-w-3xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl lg:text-4xl font-bold mb-4">Common questions.</h2>
+          <div className="text-center mb-10 md:mb-16">
+            <h2 className="text-2xl md:text-3xl lg:text-4xl font-bold mb-4">Common questions.</h2>
           </div>
           <div className="divide-y divide-zinc-800">
             {FAQS.map((faq) => (
               <details key={faq.q} className="group py-5">
-                <summary className="flex items-center justify-between cursor-pointer list-none text-white font-medium hover:text-zinc-300 transition-colors">
+                <summary className="flex items-center justify-between gap-4 cursor-pointer list-none text-white font-medium hover:text-zinc-300 transition-colors min-h-11">
                   {faq.q}
                   <span className="ml-4 text-zinc-500 group-open:rotate-45 transition-transform text-xl leading-none shrink-0">
                     +
@@ -447,9 +523,10 @@ export default function Home() {
                 AI-powered crypto trading signals and automated execution.
               </p>
             </div>
-            <nav className="flex flex-wrap gap-6 text-sm text-zinc-500">
+            <nav className="flex flex-wrap gap-x-6 gap-y-3 text-sm text-zinc-500">
               <a href="#features" className="hover:text-zinc-300 transition-colors">Features</a>
               <a href="#how-it-works" className="hover:text-zinc-300 transition-colors">How it works</a>
+              <a href="#pricing" className="hover:text-zinc-300 transition-colors">Pricing</a>
               <a href="#faq" className="hover:text-zinc-300 transition-colors">FAQ</a>
               <SignedOut>
                 <SignUpButton>

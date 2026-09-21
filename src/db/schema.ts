@@ -6,6 +6,7 @@ import {
   boolean,
   numeric,
   timestamp,
+  date,
   bigint,
   jsonb,
   uuid,
@@ -53,8 +54,19 @@ export const userRiskProfiles = pgTable('user_risk_profiles', {
   trailTpPct: numeric('trail_tp_pct', { precision: 5, scale: 3 }).default('2.000'),
   // Trail activates immediately (0) or only after price moves X% in profit direction
   trailActivationPct: numeric('trail_activation_pct', { precision: 5, scale: 3 }).default('0.000'),
+  // Profit lock: for live trailing-mode positions, periodically (every few minutes)
+  // materialize the already-continuously-ratcheted software trailSlPrice as a real
+  // resting exchange order once it represents a genuine profit — trailing itself
+  // stays software-only/continuous either way (see position-monitor.ts).
+  profitLockEnabled: boolean('profit_lock_enabled').default(false),
   // Minimum Risk:Reward ratio required to take a trade (e.g. 1.5 means TP must be ≥1.5× the SL distance)
   minRiskRewardRatio: numeric('min_risk_reward_ratio', { precision: 5, scale: 2 }).default('1.50'),
+  // Market type: 'spot' or 'swap' (USDT-M perpetual futures). Captured onto each
+  // trade_signal/trade_execution at creation time so a position keeps the type
+  // it was opened under even if this default changes later.
+  marketType: varchar('market_type', { length: 10 }).default('spot'),
+  defaultLeverage: integer('default_leverage').default(1),
+  marginMode: varchar('margin_mode', { length: 20 }).default('cross'), // cross | isolated
   isActive: boolean('is_active').default(true),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => [
@@ -78,6 +90,32 @@ export const userExchanges = pgTable('user_exchanges', {
 ]);
 
 // ---------------------------------------------------------------------------
+// exchange_balance_cache
+//
+// Shared cache for fetchLiveUsdtBalance (src/lib/exchange-account.ts) — the
+// queue page's 15s polling, the auto-execute retry loop, and the scheduled
+// worker tick were combining to call a live account's balance endpoint often
+// enough that BingX rate-limited it. Postgres-backed rather than in-memory
+// so it stays correct if this app is ever scaled to multiple replicas
+// (matching src/worker/lock.ts's advisory-lock approach to the same class of
+// problem), not just within one process. balanceUsdt is nullable so a failed
+// fetch (e.g. a rate limit) is also cached — otherwise every caller retries a
+// currently-blocked endpoint immediately, which is exactly what
+// causes/prolongs the block.
+// ---------------------------------------------------------------------------
+export const exchangeBalanceCache = pgTable('exchange_balance_cache', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 255 }).notNull(),
+  exchangeName: varchar('exchange_name', { length: 50 }).notNull(),
+  marketType: varchar('market_type', { length: 10 }).notNull(),
+  balanceUsdt: numeric('balance_usdt', { precision: 20, scale: 2 }), // null = last fetch failed
+  fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+}, (table) => [
+  uniqueIndex('ebc_user_exchange_market_idx').on(table.userId, table.exchangeName, table.marketType),
+]);
+
+// ---------------------------------------------------------------------------
 // user_notifications
 // ---------------------------------------------------------------------------
 export const userNotifications = pgTable('user_notifications', {
@@ -85,12 +123,18 @@ export const userNotifications = pgTable('user_notifications', {
   userId: varchar('user_id', { length: 255 }).notNull().unique(),
   telegramBotToken: text('telegram_bot_token'),
   telegramChatId: varchar('telegram_chat_id', { length: 100 }),
+  // Single-use, expiring token embedded in the `t.me/<bot>?start=<token>` deep link
+  // used to link a Telegram chat to this account without the user hand-entering a chat ID.
+  telegramConnectToken: varchar('telegram_connect_token', { length: 64 }),
+  telegramConnectTokenExpiresAt: timestamp('telegram_connect_token_expires_at', { withTimezone: true }),
   discordWebhookUrl: text('discord_webhook_url'),
   quietHoursStart: integer('quiet_hours_start'),
   quietHoursEnd: integer('quiet_hours_end'),
   timezone: varchar('timezone', { length: 64 }).default('UTC'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
-});
+}, (table) => [
+  index('un_telegram_connect_token_idx').on(table.telegramConnectToken),
+]);
 
 // ---------------------------------------------------------------------------
 // signal_publishers (copy trading — schema only, feature post-launch)
@@ -138,7 +182,14 @@ export const tradeSignals = pgTable('trade_signals', {
   reasoning: text('reasoning'),
   strategySource: text('strategy_source'),
   source: text('source').default('ai'), // ai | tradingview | manual | copy
+  // pending = awaiting approval; approved = entry limit order resting/awaiting
+  // fill (live: real order on the exchange; paper: waiting for price to reach
+  // entryPrice) — see entryOrderId; executed = filled and a trade_execution
+  // exists; rejected/cancelled/expired = terminal, no execution.
   status: text('status').default('pending'), // pending | approved | rejected | executed | cancelled | expired
+  // Exchange order id for the resting entry limit order while status='approved'
+  // in live mode. Null for paper (no real order) and for every other status.
+  entryOrderId: varchar('entry_order_id', { length: 128 }),
   // publisherId: nullable FK — set when this signal is a copy of a publisher's signal
   publisherId: uuid('publisher_id').references(() => signalPublishers.id),
   // parentSignalId: FK to the publisher's own signal — enables cascade cancellation
@@ -159,6 +210,44 @@ export const tradeSignals = pgTable('trade_signals', {
   // Shared by every signal produced from the same confluence-group analysis run
   // (worker-generated signals only; null for single-user webhook/manual paths)
   analysisRunId: uuid('analysis_run_id'),
+  // Market type snapshotted at signal-creation time (from user_risk_profiles or,
+  // for TradingView '.P'/'.PERP' tickers, inferred from the alert itself) — never
+  // read live from the profile again once a signal exists.
+  marketType: varchar('market_type', { length: 10 }).default('spot'),
+  leverage: integer('leverage').default(1),
+  marginMode: varchar('margin_mode', { length: 20 }).default('cross'),
+  // Per-signal risk-per-trade % override — set on manually-created signals that
+  // specify their own risk instead of the user's profile default; null means
+  // "use user_risk_profiles.riskPerTradePct" (the AI/TradingView/copy default).
+  riskOverridePct: numeric('risk_override_pct', { precision: 5, scale: 2 }),
+  // Populated when an execution attempt fails (auto-execute retry loop or a
+  // manual Approve click) — cleared once an attempt succeeds. Status stays
+  // 'pending' so retries/manual approval remain possible; this is purely a
+  // visible "why hasn't this filled yet" reason, not a terminal state.
+  lastError: text('last_error'),
+  lastErrorAt: timestamp('last_error_at', { withTimezone: true }),
+  executionAttempts: integer('execution_attempts').default(0),
+  // Set when the computed position size can never clear the exchange's
+  // minimum order size at current balance/risk% — the auto-execute retry
+  // loop skips these (see src/worker/auto-execute-retry-loop.ts) instead of
+  // retrying a mathematically-doomed order every tick. Manual Approve reads
+  // the same stored riskCalculation.belowExchangeMinimum flag (see below),
+  // so use the Recompute action first if balance/risk% has changed since.
+  autoExecutionBlocked: boolean('auto_execution_blocked').default(false),
+  // Full risk-tool output computed once at signal-creation time (position
+  // size, margin, leverage, fees, P&L) — this is what Approve/auto-execute
+  // actually use to size the order (see finalize-for-user.ts, auto-execute.ts),
+  // not a fresh recompute, so what the user sees is exactly what executes.
+  // The 'recompute' action on PATCH /api/trade-signals/[id] is the explicit
+  // way to refresh this if the account balance has since changed.
+  riskCalculation: jsonb('risk_calculation'),
+  // Promoted out of riskCalculation for quick display without parsing JSON —
+  // the account balance this trade was sized against ("risk capital" in this
+  // platform's own terminology — riskCalculation.accountBalance). NOT the
+  // expected dollar loss/profit; those live in riskCalculation itself
+  // (grossExpectedLoss/netExpectedLoss etc.) and in the UI's Loss/Profit rows.
+  riskCapitalUsdt: numeric('risk_capital_usdt', { precision: 20, scale: 4 }),
+  riskCalculatedAt: timestamp('risk_calculated_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true }),
@@ -180,8 +269,19 @@ export const tradeExecutions = pgTable('trade_executions', {
   // (signalId can be null for manual/copy trades)
   symbol: varchar('symbol', { length: 30 }).notNull().default(''),
   exchangeOrderId: varchar('exchange_order_id', { length: 128 }),
-  // exitOrderId: the SL/TP/close order placed after entry (may differ from entry order)
+  // exitOrderId: the order that actually closed this position — either a resting
+  // slOrderId/tpOrderId that filled on the exchange, or a market order placed by
+  // position-monitor's software-driven close.
   exitOrderId: varchar('exit_order_id', { length: 128 }),
+  // Resting protective orders on the exchange. Fixed-mode: both placed right after
+  // entry. Trailing-mode: normally null (trailing relies on software-driven closes)
+  // — but the periodic profit-lock sync (position-monitor.ts) can populate slOrderId
+  // once a trailing position is confirmed in profit, using profitLockSyncedPrice
+  // below to track what level it reflects. Cancelled/replaced together whenever
+  // SL/TP changes (breakeven, adjust) and whichever didn't fill is cancelled once
+  // the other does.
+  slOrderId: varchar('sl_order_id', { length: 128 }),
+  tpOrderId: varchar('tp_order_id', { length: 128 }),
   entryPrice: numeric('entry_price', { precision: 20, scale: 8 }),
   exitPrice: numeric('exit_price', { precision: 20, scale: 8 }),
   positionSize: numeric('position_size', { precision: 20, scale: 8 }),
@@ -195,14 +295,155 @@ export const tradeExecutions = pgTable('trade_executions', {
   trailSlPrice: numeric('trail_sl_price', { precision: 20, scale: 8 }),
   // trailTpActive: true once price first reaches the initial TP target
   trailTpActive: boolean('trail_tp_active').default(false),
+  // Market type this position was opened under (snapshotted from trade_signals
+  // at execution time) — position-monitor and close orders must keep using
+  // this, not the user's current profile setting, in case it changes mid-trade.
+  marketType: varchar('market_type', { length: 10 }).default('spot'),
+  leverage: integer('leverage').default(1),
+  marginMode: varchar('margin_mode', { length: 20 }).default('cross'),
+  // CCXT contract size for the market at execution time (null for spot / 1-unit
+  // contracts) — kept so position-monitor/close-order code reconstructs the
+  // exact "amount in contracts" the entry order used, instead of re-deriving it.
+  contractSize: numeric('contract_size', { precision: 20, scale: 8 }),
+  orderContracts: numeric('order_contracts', { precision: 20, scale: 8 }),
   // trailTpPrice: current trailing TP level (set when trailTpActive = true)
   trailTpPrice: numeric('trail_tp_price', { precision: 20, scale: 8 }),
+  // profitLockSyncedPrice: the trailSlPrice level the current slOrderId resting
+  // order (if any) was placed at by the periodic profit-lock sync — lets that
+  // sync skip re-placing an order every cycle when nothing has improved, without
+  // re-fetching order status from the exchange just to check.
+  profitLockSyncedPrice: numeric('profit_lock_synced_price', { precision: 20, scale: 8 }),
   entryAt: timestamp('entry_at', { withTimezone: true }).defaultNow(),
   exitAt: timestamp('exit_at', { withTimezone: true }),
 }, (table) => [
   index('te_user_id_idx').on(table.userId),
   index('te_signal_id_idx').on(table.signalId),
   index('te_status_idx').on(table.status),
+]);
+
+// ---------------------------------------------------------------------------
+// price_watches — "notify me / act when price hits X" (chat-created watches)
+// ---------------------------------------------------------------------------
+export const priceWatches = pgTable('price_watches', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 255 }).notNull(),
+  symbol: varchar('symbol', { length: 30 }).notNull(),
+  exchange: varchar('exchange', { length: 50 }).notNull().default('binance'),
+  targetPrice: numeric('target_price', { precision: 20, scale: 8 }).notNull(),
+  // Derived server-side at creation from targetPrice vs the live price — never LLM-supplied.
+  direction: varchar('direction', { length: 10 }).notNull(), // above | below
+  marketType: varchar('market_type', { length: 10 }).notNull().default('spot'),
+  note: text('note'),
+  // notify: just alert; trade: also create (and, if tradingMode=auto, execute) a signal on trigger
+  actionType: varchar('action_type', { length: 20 }).notNull().default('notify'),
+  tradeDirection: varchar('trade_direction', { length: 10 }), // LONG | SHORT — required if actionType=trade
+  leverage: integer('leverage').default(1),
+  marginMode: varchar('margin_mode', { length: 20 }).default('cross'),
+  stopLoss: numeric('stop_loss', { precision: 20, scale: 8 }),
+  takeProfit: numeric('take_profit', { precision: 20, scale: 8 }),
+  confidence: text('confidence'), // LOW | MEDIUM | HIGH
+  reasoning: text('reasoning'),
+  strategySource: text('strategy_source'),
+  timeframe: varchar('timeframe', { length: 10 }),
+  status: varchar('status', { length: 20 }).notNull().default('active'), // active | triggered | cancelled
+  triggeredPrice: numeric('triggered_price', { precision: 20, scale: 8 }),
+  triggeredAt: timestamp('triggered_at', { withTimezone: true }),
+  // Populated when actionType=trade and a signal was actually created on trigger
+  resultSignalId: uuid('result_signal_id').references(() => tradeSignals.id),
+  resultMessage: text('result_message'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index('pw_user_id_idx').on(table.userId),
+  index('pw_status_idx').on(table.status),
+]);
+
+// ---------------------------------------------------------------------------
+// auto_trade_jobs
+//
+// Durable, priority-ordered replacement for the scheduled worker's old
+// in-memory fan-out (runTick used to call finalizeForUser directly per user,
+// inline, right after each group's shared analysis — if a tick was still
+// running when the next one fired, withGlobalTickLock's advisory lock made
+// that whole next tick a silent no-op, including every user in it). Now
+// runTick enqueues one row per (analysisRunId, user) instead of finalizing
+// inline, and a consumer batch-claims rows with `FOR UPDATE SKIP LOCKED`
+// (see src/worker/job-queue.ts) — so a skipped/overlapping tick just leaves
+// jobs 'pending' for the next tick's consumer pass, instead of losing them.
+// ---------------------------------------------------------------------------
+export const autoTradeJobs = pgTable('auto_trade_jobs', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 255 }).notNull(),
+  // Shared by every job produced from the same confluence-group analysis run.
+  analysisRunId: uuid('analysis_run_id').notNull(),
+  symbol: varchar('symbol', { length: 30 }).notNull(),
+  exchange: varchar('exchange', { length: 50 }).notNull(),
+  marketType: varchar('market_type', { length: 10 }).notNull().default('spot'),
+  // pending = queued for claim; processing = claimed by a consumer batch
+  // (should never be observed at rest — a crash mid-batch would strand rows
+  // here, but this worker is single-instance today, so that's a non-goal);
+  // done = finalizeForUser ran successfully (or intentionally skipped signal
+  // creation for this user only — e.g. rr_exceeds_structure; see lastError);
+  // failed = terminal, either a genuine error after maxAttempts retries or a
+  // stale analysis snapshot (see STALE_JOB_MAX_AGE_MS in src/worker/job-queue.ts).
+  status: varchar('status', { length: 20 }).notNull().default('pending'),
+  // Phase 5 will set this from the user's plan tier; every job defaults to 0
+  // for now, so claiming is effectively FIFO until that lands.
+  priority: integer('priority').notNull().default(0),
+  // Snapshot of the group's MarketAnalysisResult at enqueue time — the
+  // consumer finalizes against exactly this, never a fresh recompute.
+  payload: jsonb('payload').notNull(),
+  attempts: integer('attempts').notNull().default(0),
+  lastError: text('last_error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  // Matches the consumer's claim query: WHERE status = 'pending' ORDER BY
+  // priority DESC, created_at ASC.
+  index('atj_claim_idx').on(table.status, table.priority.desc(), table.createdAt.asc()),
+  index('atj_user_id_idx').on(table.userId),
+  index('atj_analysis_run_id_idx').on(table.analysisRunId),
+]);
+
+// ---------------------------------------------------------------------------
+// deterministic_data_cache
+//
+// Read-through cache for the deterministic (non-agent, non-candle) phases of
+// market analysis — indicators, SMC structures, chart patterns, order book,
+// and on-chain signals (see src/lib/analysis/analysis-cache.ts). One row per
+// `${symbol}:${exchange}:${marketType}:${source}` key. OHLCV and news reuse
+// the existing `ohlcv_cache` / `news_cache` tables instead of this one.
+// ---------------------------------------------------------------------------
+export const deterministicDataCache = pgTable('deterministic_data_cache', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  cacheKey: text('cache_key').notNull(),
+  source: text('source').notNull(), // 'market-data' | 'indicators' | 'smc' | 'patterns' | 'orderbook' | 'onchain'
+  payload: jsonb('payload').notNull(),
+  computedAt: timestamp('computed_at', { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+}, (table) => [
+  uniqueIndex('ddc_cache_key_idx').on(table.cacheKey),
+]);
+
+// ---------------------------------------------------------------------------
+// auto_trade_supported_symbols
+//
+// Allowlist gating which (symbol, exchange, marketType) combinations the
+// scheduled worker will generate automated signals for. Seeded with common
+// majors across all three exchanges (see the Phase 1 migration) — anything
+// not present here (or present with status='disabled') is silently dropped
+// from a user's own `allowedSymbols` by src/worker/eligibility.ts, which
+// notifies the user to use the chat interface (trade-analysis-workflow.ts,
+// unconstrained by this table) instead of just dropping it with no trace.
+// ---------------------------------------------------------------------------
+export const autoTradeSupportedSymbols = pgTable('auto_trade_supported_symbols', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  symbol: varchar('symbol', { length: 30 }).notNull(),
+  exchange: varchar('exchange', { length: 50 }).notNull(),
+  marketType: varchar('market_type', { length: 10 }).notNull().default('spot'),
+  status: varchar('status', { length: 20 }).notNull().default('active'), // active | disabled
+  addedAt: timestamp('added_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('atss_symbol_exchange_market_idx').on(table.symbol, table.exchange, table.marketType),
 ]);
 
 // ---------------------------------------------------------------------------
@@ -244,6 +485,20 @@ export const ohlcvCache = pgTable('ohlcv_cache', {
 ]);
 
 // ---------------------------------------------------------------------------
+// news_cache
+// ---------------------------------------------------------------------------
+export const newsCache = pgTable('news_cache', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  cacheKey: text('cache_key').notNull(), // sorted, comma-joined, uppercased currency symbols
+  items: jsonb('items').notNull(),
+  overallSentiment: text('overall_sentiment').notNull(),
+  fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+}, (table) => [
+  uniqueIndex('nc_cache_key_idx').on(table.cacheKey),
+]);
+
+// ---------------------------------------------------------------------------
 // backtest_runs
 // ---------------------------------------------------------------------------
 export const backtestRuns = pgTable('backtest_runs', {
@@ -277,6 +532,240 @@ export const trailAuditLog = pgTable('trail_audit_log', {
 }, (table) => [
   index('tal_execution_id_idx').on(table.executionId),
   index('tal_user_id_idx').on(table.userId),
+]);
+
+// ---------------------------------------------------------------------------
+// ai_providers
+// Admin-managed catalog of LLM providers available to the platform
+// (Mastra model gateway config). Feeds the ai_models allowlist below.
+// ---------------------------------------------------------------------------
+export const aiProviders = pgTable('ai_providers', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: varchar('name', { length: 100 }).notNull().unique(),
+  // Whether users can bring their own key for this provider (BYOK — built in a later phase)
+  byokEligible: boolean('byok_eligible').default(false),
+  // Whether the platform has a pooled/shared key for this provider
+  platformPooledKeyAvailable: boolean('platform_pooled_key_available').default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+});
+
+// ---------------------------------------------------------------------------
+// ai_models
+// Admin-managed allowlist of specific models available per provider, with
+// eval results (populated by the hackathon eval harness in `eval/`, wired up
+// in a later phase) and capability metadata used to gate agent features.
+// ---------------------------------------------------------------------------
+export const aiModels = pgTable('ai_models', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  providerId: uuid('provider_id').notNull().references(() => aiProviders.id),
+  // e.g. "anthropic/claude-sonnet-4-5"
+  modelId: text('model_id').notNull(),
+  status: varchar('status', { length: 20 }).notNull().default('active'), // active | beta | deprecated
+  // "models-dev" (ModelsDevGateway) or a custom gateway id
+  gateway: text('gateway').notNull(),
+  contextMax: integer('context_max'),
+  capabilities: jsonb('capabilities').$type<{
+    toolCalling: boolean;
+    structuredOutput: boolean;
+    streaming: boolean;
+  }>().default({ toolCalling: false, structuredOutput: false, streaming: false }),
+  // Populated by the hackathon eval harness (eval/) — no live integration in this phase
+  evalScore: numeric('eval_score', { precision: 6, scale: 2 }),
+  evalRunId: text('eval_run_id'),
+  byokEligible: boolean('byok_eligible').default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index('am_provider_id_idx').on(table.providerId),
+  uniqueIndex('am_provider_model_idx').on(table.providerId, table.modelId),
+]);
+
+// ---------------------------------------------------------------------------
+// user_llm_keys
+// BYOK (bring your own model key) — lets a user connect their own LLM
+// provider/model + API key for the personalized, per-user market-chat-agent
+// surface (src/mastra/agents/market-chat-agent.ts, invoked from
+// src/app/api/chat/route.ts). Optional: with no row here, the platform's
+// own configured model (src/mastra/model.ts's defaultModel) is used.
+// Deliberately NOT wired into trading-agent — that agent runs once per
+// confluence group shared across every user with no per-user context at
+// all, so a personal key has no sensible owner there (see trading-agent.ts's
+// "Phase 6 note").
+// One connected key per user (unique userId, upsert-on-connect — same
+// single-row-per-user shape as user_notifications) — connecting a new
+// provider/model replaces the previous one. The key is encrypted with the
+// same AES-256-GCM helper used for user_exchanges (src/lib/crypto.ts) and is
+// only decrypted at the point of use inside the model-resolution path.
+// ---------------------------------------------------------------------------
+export const userLlmKeys = pgTable('user_llm_keys', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 255 }).notNull().unique(),
+  providerId: uuid('provider_id').notNull().references(() => aiProviders.id),
+  modelId: uuid('model_id').notNull().references(() => aiModels.id),
+  encryptedKey: text('encrypted_key').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (table) => [
+  index('ulk_user_id_idx').on(table.userId),
+]);
+
+// ---------------------------------------------------------------------------
+// subscription_plans
+//
+// Admin-managed catalog of plan tiers ('free' | 'pro' | 'byok' or similar).
+// `active` is a soft-disable flag — a plan real subscribers reference is
+// never deleted, only deactivated (hidden from new checkout, existing
+// subscribers keep their entitlements). `jobPriority` feeds
+// auto_trade_jobs.priority at enqueue time (src/worker/tick.ts) instead of a
+// hardcoded paid-vs-free constant — higher wins the claim-query's
+// `ORDER BY priority DESC`.
+// ---------------------------------------------------------------------------
+export const subscriptionPlans = pgTable('subscription_plans', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: varchar('name', { length: 50 }).notNull().unique(),
+  autoTradeRunsPerDay: integer('auto_trade_runs_per_day').notNull().default(3),
+  chatMessagesPerDay: integer('chat_messages_per_day').notNull().default(15),
+  allowsByok: boolean('allows_byok').notNull().default(false),
+  allowsPersonalizedMemory: boolean('allows_personalized_memory').notNull().default(false),
+  jobPriority: integer('job_priority').notNull().default(0),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// ---------------------------------------------------------------------------
+// subscription_plan_prices
+//
+// One row per (plan, billing interval, currency). providerPriceId carries
+// the provider-side recurring Price/Plan object id per rail
+// (`{ stripe, paystack }`) — OxaPay has no recurring-price object, it's
+// priced inline per invoice from `price` at checkout time.
+// ---------------------------------------------------------------------------
+export const subscriptionPlanPrices = pgTable('subscription_plan_prices', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  planId: uuid('plan_id').notNull().references(() => subscriptionPlans.id),
+  billingInterval: varchar('billing_interval', { length: 20 }).notNull(), // monthly | biannual | yearly
+  price: numeric('price', { precision: 20, scale: 2 }).notNull(),
+  currency: varchar('currency', { length: 10 }).notNull().default('USD'),
+  providerPriceId: jsonb('provider_price_id').$type<{ stripe?: string; paystack?: string }>().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index('spp_plan_id_idx').on(table.planId),
+  uniqueIndex('spp_plan_interval_currency_idx').on(table.planId, table.billingInterval, table.currency),
+]);
+
+// ---------------------------------------------------------------------------
+// promo_codes
+//
+// discountScope: 'first_period' discounts only the first billing period;
+// 'recurring' discounts every renewal — both are supported (see the discount
+// application logic in the checkout/renewal routes, which is provider-
+// specific: Stripe/Paystack recurring discounts need a provider-side coupon
+// object, OxaPay just recomputes the invoice amount per period).
+// applicablePlanIds: null = all plans.
+// ---------------------------------------------------------------------------
+export const promoCodes = pgTable('promo_codes', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  code: varchar('code', { length: 50 }).notNull().unique(),
+  discountType: varchar('discount_type', { length: 10 }).notNull(), // percent | fixed
+  discountValue: numeric('discount_value', { precision: 10, scale: 2 }).notNull(),
+  discountScope: varchar('discount_scope', { length: 20 }).notNull().default('first_period'), // first_period | recurring
+  applicablePlanIds: jsonb('applicable_plan_ids').$type<string[] | null>().default(null),
+  maxRedemptions: integer('max_redemptions'),
+  redemptionsUsed: integer('redemptions_used').notNull().default(0),
+  startsAt: timestamp('starts_at', { withTimezone: true }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// ---------------------------------------------------------------------------
+// user_subscriptions
+//
+// One row per user (unique on userId — updated in place across renewals/
+// upgrades rather than a history table; subscription_payments is the
+// append-only history). providerSubscriptionId is null for OxaPay (no
+// native recurring-subscription object — see the OxaPay renewal-emulation
+// job in src/worker/oxapay-renewal-loop.ts).
+// ---------------------------------------------------------------------------
+export const userSubscriptions = pgTable('user_subscriptions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 255 }).notNull().unique(),
+  planId: uuid('plan_id').notNull().references(() => subscriptionPlans.id),
+  billingInterval: varchar('billing_interval', { length: 20 }).notNull(),
+  status: varchar('status', { length: 20 }).notNull().default('active'), // active | past_due | canceled
+  currentPeriodStart: timestamp('current_period_start', { withTimezone: true }),
+  currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
+  nextBillingAt: timestamp('next_billing_at', { withTimezone: true }),
+  paymentProvider: varchar('payment_provider', { length: 20 }).notNull(), // oxapay | stripe | paystack
+  providerCustomerId: text('provider_customer_id'),
+  providerSubscriptionId: text('provider_subscription_id'), // null for oxapay
+  promoCodeId: uuid('promo_code_id').references(() => promoCodes.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index('us_status_idx').on(table.status),
+  index('us_current_period_end_idx').on(table.currentPeriodEnd),
+]);
+
+// ---------------------------------------------------------------------------
+// usage_counters
+//
+// Two independent daily counters, reset on a calendar-day (UTC) boundary —
+// periodStart is the UTC date (YYYY-MM-DD) the counters apply to, one row
+// per (user, day). Checked/incremented from src/worker/eligibility.ts +
+// src/worker/job-queue.ts (auto-trade runs) and src/app/api/chat/route.ts
+// (chat messages) via src/lib/billing/usage.ts.
+// ---------------------------------------------------------------------------
+export const usageCounters = pgTable('usage_counters', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 255 }).notNull(),
+  periodStart: date('period_start', { mode: 'string' }).notNull(),
+  autoTradeRunsUsed: integer('auto_trade_runs_used').notNull().default(0),
+  chatMessagesUsed: integer('chat_messages_used').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('uc_user_period_idx').on(table.userId, table.periodStart),
+]);
+
+// ---------------------------------------------------------------------------
+// subscription_payments
+//
+// Append-only payment/webhook history — one row per checkout attempt or
+// renewal cycle. The row is inserted 'pending' first (so its own id can be
+// handed to the provider as order_id/client_reference_id/reference), then
+// updated with providerReference once the provider call returns it (OxaPay
+// track_id / Stripe session id / Paystack reference we generate ourselves) —
+// nullable for that brief window, and so the webhook can look the row up
+// idempotently instead of trusting provider metadata. checkoutUrl surfaces
+// the pay link for the OxaPay renewal-emulation job (no redirect flow there
+// — it's a background job, not a live checkout).
+// ---------------------------------------------------------------------------
+export const subscriptionPayments = pgTable('subscription_payments', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 255 }).notNull(),
+  planId: uuid('plan_id').references(() => subscriptionPlans.id),
+  billingInterval: varchar('billing_interval', { length: 20 }),
+  promoCodeId: uuid('promo_code_id').references(() => promoCodes.id),
+  provider: varchar('provider', { length: 20 }).notNull(), // oxapay | stripe | paystack
+  providerReference: text('provider_reference'), // track_id / session-or-invoice id / reference
+  amount: numeric('amount', { precision: 20, scale: 2 }).notNull(),
+  discountApplied: numeric('discount_applied', { precision: 20, scale: 2 }).notNull().default('0'),
+  currency: varchar('currency', { length: 10 }).notNull().default('USD'),
+  status: varchar('status', { length: 20 }).notNull().default('pending'), // pending | paid | failed | expired
+  periodCoveredStart: timestamp('period_covered_start', { withTimezone: true }),
+  periodCoveredEnd: timestamp('period_covered_end', { withTimezone: true }),
+  rawWebhookPayload: jsonb('raw_webhook_payload'),
+  checkoutUrl: text('checkout_url'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index('sp_user_id_idx').on(table.userId),
+  index('sp_status_idx').on(table.status),
+  uniqueIndex('sp_provider_reference_idx').on(table.provider, table.providerReference),
 ]);
 
 // ---------------------------------------------------------------------------

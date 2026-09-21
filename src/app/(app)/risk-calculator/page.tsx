@@ -31,7 +31,7 @@ function InputField({
   onChange: (value: string) => void;
 }) {
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 min-w-0">
       <label htmlFor={id} className="text-sm font-medium">{label}</label>
       <Input
         id={id}
@@ -39,6 +39,7 @@ function InputField({
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        className="h-11 w-full md:h-9"
       />
     </div>
   );
@@ -210,7 +211,7 @@ export default function RiskCalculatorPage() {
     switch (solveFor) {
       case "leverage":
         return (
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
             <InputField id="risk-capital" label="Risk Capital ($)" placeholder="10" value={riskCapital} onChange={setRiskCapital} />
             <InputField id="risk-percent" label="Risk Per Trade (%)" placeholder="10" value={riskPercent} onChange={setRiskPercent} />
             <InputField id="sl-percent" label="Stop Loss (%)" placeholder="1.955" value={slPercent} onChange={setSlPercent} />
@@ -220,7 +221,7 @@ export default function RiskCalculatorPage() {
         );
       case "margin":
         return (
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
             <InputField id="risk-capital" label="Risk Capital ($)" placeholder="10" value={riskCapital} onChange={setRiskCapital} />
             <InputField id="risk-percent" label="Risk Per Trade (%)" placeholder="10" value={riskPercent} onChange={setRiskPercent} />
             <InputField id="sl-percent" label="Stop Loss (%)" placeholder="1.955" value={slPercent} onChange={setSlPercent} />
@@ -230,7 +231,7 @@ export default function RiskCalculatorPage() {
         );
       case "loss":
         return (
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
             <InputField id="risk-capital" label="Risk Capital ($)" placeholder="10" value={riskCapital} onChange={setRiskCapital} />
             <InputField id="risk-percent" label="Risk Per Trade (%)" placeholder="10" value={riskPercent} onChange={setRiskPercent} />
             <InputField id="sl-percent" label="Stop Loss (%)" placeholder="1.955" value={slPercent} onChange={setSlPercent} />
@@ -240,7 +241,7 @@ export default function RiskCalculatorPage() {
         );
       case "profit":
         return (
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
             <InputField id="risk-capital" label="Risk Capital ($)" placeholder="10" value={riskCapital} onChange={setRiskCapital} />
             <InputField id="risk-percent" label="Risk Per Trade (%)" placeholder="10" value={riskPercent} onChange={setRiskPercent} />
             <InputField id="sl-percent" label="Stop Loss (%)" placeholder="1.955" value={slPercent} onChange={setSlPercent} />
@@ -250,7 +251,7 @@ export default function RiskCalculatorPage() {
         );
       case "profitLoss":
         return (
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
             <InputField id="risk-capital" label="Risk Capital ($)" placeholder="10" value={riskCapital} onChange={setRiskCapital} />
             <InputField id="risk-percent" label="Risk Per Trade (%)" placeholder="10" value={riskPercent} onChange={setRiskPercent} />
             <InputField id="sl-percent" label="Stop Loss (%)" placeholder="1.955" value={slPercent} onChange={setSlPercent} />
@@ -261,7 +262,7 @@ export default function RiskCalculatorPage() {
         );
       case "calculateLoss":
         return (
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4">
             <InputField id="sl-percent" label="Stop Loss (%)" placeholder="1.955" value={slPercent} onChange={setSlPercent} />
             <InputField id="tp-percent" label="Take Profit (%)" placeholder="9.501" value={tpPercent} onChange={setTpPercent} />
             <InputField id="margin" label="Your Margin ($)" placeholder="1" value={margin} onChange={setMargin} />
@@ -274,27 +275,27 @@ export default function RiskCalculatorPage() {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-black py-12 px-4">
-      <div className="max-w-4xl mx-auto">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 mb-2">
+    <div className="min-h-screen bg-zinc-50 dark:bg-black py-6 px-4 md:py-12">
+      <div className="max-w-4xl mx-auto w-full min-w-0">
+        <div className="text-center mb-6 md:mb-8">
+          <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50 mb-2 md:text-3xl">
             Trading Risk Calculator
           </h1>
-          <p className="text-zinc-600 dark:text-zinc-400">
+          <p className="text-sm text-zinc-600 dark:text-zinc-400 md:text-base">
             Calculate position size, leverage, and expected risk/reward
           </p>
         </div>
 
-        <Card className="mb-8">
-          <CardHeader>
+        <Card className="mb-6 md:mb-8">
+          <CardHeader className="px-4 md:px-6">
             <CardTitle>What do you want to solve for?</CardTitle>
             <CardDescription>
-              Select the value you don't know and want to calculate
+              Select the value you don&apos;t know and want to calculate
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="px-4 md:px-6">
             <Select value={solveFor} onValueChange={(v) => { setSolveFor(v as SolveFor); setResults(null); }}>
-              <SelectTrigger className="w-full md:w-80">
+              <SelectTrigger className="w-full data-[size=default]:h-11 md:w-80 md:data-[size=default]:h-9">
                 <SelectValue placeholder="Select what to solve for" />
               </SelectTrigger>
               <SelectContent>
@@ -310,7 +311,7 @@ export default function RiskCalculatorPage() {
         </Card>
 
         <Card>
-          <CardHeader>
+          <CardHeader className="px-4 md:px-6">
             <CardTitle>
               {solveFor === "leverage" && "Calculate Leverage"}
               {solveFor === "margin" && "Calculate Margin"}
@@ -328,55 +329,55 @@ export default function RiskCalculatorPage() {
               {solveFor === "calculateLoss" && "Enter your margin and leverage to calculate your potential loss"}
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="px-4 md:px-6">
             {renderInputs()}
-            <div className="flex gap-4 mt-6">
-              <Button variant="outline" onClick={reset} className="w-full">Reset</Button>
+            <div className="flex flex-col gap-3 mt-6 sm:flex-row">
+              <Button variant="outline" onClick={reset} className="h-11 w-full md:h-9">Reset</Button>
             </div>
           </CardContent>
         </Card>
 
         {results && (
-          <Card className="mt-8">
-            <CardHeader>
+          <Card className="mt-6 md:mt-8">
+            <CardHeader className="px-4 md:px-6">
               <CardTitle>Results</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                <div className="p-4 rounded-lg bg-zinc-100 dark:bg-zinc-800">
+            <CardContent className="px-4 md:px-6">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 md:gap-4 lg:grid-cols-3">
+                <div className="p-4 rounded-lg bg-zinc-100 dark:bg-zinc-800 min-w-0">
                   <p className="text-sm text-zinc-600 dark:text-zinc-400">Margin</p>
-                  <p className="text-2xl font-bold">${results.margin}</p>
+                  <p className="text-xl font-bold break-words md:text-2xl">${results.margin}</p>
                 </div>
-                <div className="p-4 rounded-lg bg-zinc-100 dark:bg-zinc-800">
+                <div className="p-4 rounded-lg bg-zinc-100 dark:bg-zinc-800 min-w-0">
                   <p className="text-sm text-zinc-600 dark:text-zinc-400">Leverage</p>
-                  <p className="text-2xl font-bold">{results.leverage}x</p>
+                  <p className="text-xl font-bold break-words md:text-2xl">{results.leverage}x</p>
                 </div>
-                <div className="p-4 rounded-lg bg-red-100 dark:bg-red-900/20">
+                <div className="p-4 rounded-lg bg-red-100 dark:bg-red-900/20 min-w-0">
                   <p className="text-sm text-red-600 dark:text-red-400">Expected Loss %</p>
-                  <p className="text-2xl font-bold text-red-600 dark:text-red-400">{results.expectedLossPercent}%</p>
+                  <p className="text-xl font-bold text-red-600 dark:text-red-400 break-words md:text-2xl">{results.expectedLossPercent}%</p>
                 </div>
-                <div className="p-4 rounded-lg bg-green-100 dark:bg-green-900/20">
+                <div className="p-4 rounded-lg bg-green-100 dark:bg-green-900/20 min-w-0">
                   <p className="text-sm text-green-600 dark:text-green-400">Expected Profit %</p>
-                  <p className="text-2xl font-bold text-green-600 dark:text-green-400">{results.expectedProfitPercent}%</p>
+                  <p className="text-xl font-bold text-green-600 dark:text-green-400 break-words md:text-2xl">{results.expectedProfitPercent}%</p>
                 </div>
-                <div className="p-4 rounded-lg bg-red-100 dark:bg-red-900/20">
+                <div className="p-4 rounded-lg bg-red-100 dark:bg-red-900/20 min-w-0">
                   <p className="text-sm text-red-600 dark:text-red-400">Loss ($)</p>
-                  <p className="text-2xl font-bold text-red-600 dark:text-red-400">${results.loss}</p>
+                  <p className="text-xl font-bold text-red-600 dark:text-red-400 break-words md:text-2xl">${results.loss}</p>
                 </div>
-                <div className="p-4 rounded-lg bg-green-100 dark:bg-green-900/20">
+                <div className="p-4 rounded-lg bg-green-100 dark:bg-green-900/20 min-w-0">
                   <p className="text-sm text-green-600 dark:text-green-400">Profit ($)</p>
-                  <p className="text-2xl font-bold text-green-600 dark:text-green-400">${results.profit}</p>
+                  <p className="text-xl font-bold text-green-600 dark:text-green-400 break-words md:text-2xl">${results.profit}</p>
                 </div>
               </div>
             </CardContent>
           </Card>
         )}
 
-        <Card className="mt-8">
-          <CardHeader>
+        <Card className="mt-6 md:mt-8">
+          <CardHeader className="px-4 md:px-6">
             <CardTitle>Formulas</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2 text-sm text-zinc-600 dark:text-zinc-400">
+          <CardContent className="px-4 md:px-6 space-y-2 text-sm text-zinc-600 dark:text-zinc-400 overflow-x-auto">
             <p><code>Loss = Leverage × Margin × SL% / 100</code></p>
             <p><code>Profit = Leverage × Margin × TP% / 100</code></p>
             <p><code>Expected Loss% = SL% × Leverage</code></p>

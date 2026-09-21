@@ -82,7 +82,7 @@ Defined with `createTool()` from `@mastra/core/tools`. Input/output schemas use 
 |------|------|---------|
 | `market-data-tool` | `src/mastra/tools/market-data-tool.ts` | OHLCV via CCXT |
 | `indicators-tool` | `src/mastra/tools/indicators-tool.ts` | RSI, EMA, MACD, BB, ADX via `technicalindicators` |
-| `news-tool` | `src/mastra/tools/news-tool.ts` | CryptoPanic + CoinGecko sentiment |
+| `news-tool` | `src/mastra/tools/news-tool.ts` | Apify CryptoPanic scraper (primary) → CryptoPanic API → CoinGecko sentiment |
 | `onchain-tool` | `src/mastra/tools/onchain-tool.ts` | Funding rates + liquidation levels (Coinglass) + netflow (Santiment) |
 | `smc-tool` | `src/mastra/tools/smc-tool.ts` | FVG, Order Blocks, BOS/ChoCH, liquidity sweeps |
 | `pattern-tool` | `src/mastra/tools/pattern-tool.ts` | H&S, double top/bottom, triangles, flags, wedges |
@@ -95,6 +95,10 @@ Defined with `createTool()` from `@mastra/core/tools`. Input/output schemas use 
 Defined with `createWorkflow()` / `createStep()` from `@mastra/core/workflows`. Steps chain via `.then()`. Each step has `inputSchema`/`outputSchema` (Zod) and `execute({ inputData, mastra })`. Workflows must call `.commit()` before export.
 
 - `trade-analysis-workflow` — 9-step pipeline: market data → indicators → SMC → patterns → order book → news + on-chain (parallel) → agent decision → risk sizing → route signal
+
+### Background worker (`src/worker/`)
+
+The confluence-group trading worker — scheduled ticks (`tick.ts`/`schedule.ts`), SL/TP position monitoring, price watches, signal expiry, and auto-execute retries — runs **in-process** inside the Next.js server via `src/instrumentation.ts`'s `register()` hook. There is no separate worker container/image; it used to be `Dockerfile.worker` + `npm run worker`, deployed as its own Dokploy service, but that meant two independent processes each racing to hit exchange APIs and each with their own in-memory state. Startup is gated by `WORKER_ENABLED` (defaults to on in production, off elsewhere) so `npm run dev` doesn't start placing trades/polling exchanges unless you opt in. `src/worker/lock.ts` still takes a Postgres advisory lock around each tick so it stays safe if this app is ever scaled to multiple replicas.
 
 ### Auth
 
@@ -118,7 +122,8 @@ CLERK_SECRET_KEY              # Clerk backend secret (required)
 CLERK_PUBLISHABLE_KEY         # Clerk frontend key (required)
 CLERK_WEBHOOK_SECRET          # Clerk webhook signature verification (required)
 EXCHANGE_KEY_ENCRYPTION_SECRET # AES-256-GCM key for encrypting exchange API keys (required)
-CRYPTOPANIC_API_TOKEN         # CryptoPanic news API (optional, falls back to CoinGecko)
+APIFY_API_TOKEN                # Apify CryptoPanic News Scraper actor (optional, primary crypto news source)
+CRYPTOPANIC_API_TOKEN         # CryptoPanic direct API (optional, fallback if Apify unset)
 COINGLASS_API_KEY             # Coinglass funding rates + liquidation data (optional)
 MASTRA_CLOUD_ACCESS_TOKEN     # Mastra Cloud trace export (optional)
 ```

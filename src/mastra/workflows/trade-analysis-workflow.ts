@@ -2,8 +2,8 @@
  * Trade Analysis Workflow — 9-Step Decision Pipeline
  *
  * Steps:
- *  1. fetchMarketData       — OHLCV for 1h, 4h, 1d
- *  2. computeIndicators     — RSI, EMA, MACD, BB, ADX (per timeframe)
+ *  1. fetchMarketData       — OHLCV for 15m, 1h, 4h, 1d
+ *  2. computeIndicators     — RSI, EMA, MACD, BB, ADX (per timeframe; 15m is LTF entry timing only)
  *  2b. deriveTopDownBias    — HTF (1d) + intermediate (4h) trend filter; blocks counter-trend entries
  *  3. detectSMCStructures   — FVG, OB, BOS/ChoCH, liquidity sweeps
  *  4. detectChartPatterns   — classical pattern detection
@@ -59,9 +59,12 @@ const step1InputSchema = z.object({
   triggeredBy: z.enum(['scheduled', 'manual', 'tradingview']),
   /** Exchange to use for all data + execution (default: binance). */
   exchange: z.enum(['binance', 'bybit', 'bingx']).default('binance'),
+  /** Market to analyze against — 'swap' = USDT-M perpetual futures (default: spot). */
+  marketType: z.enum(['spot', 'swap']).default('spot'),
 });
 
 const step1OutputSchema = step1InputSchema.extend({
+  candles15m: z.array(candleSchema),
   candles1h: z.array(candleSchema),
   candles4h: z.array(candleSchema),
   candles1d: z.array(candleSchema),
@@ -69,7 +72,7 @@ const step1OutputSchema = step1InputSchema.extend({
 
 const fetchMarketData = createStep({
   id: 'fetchMarketData',
-  description: 'Fetch OHLCV candles for 1h, 4h, and 1d timeframes via CCXT.',
+  description: 'Fetch OHLCV candles for 15m, 1h, 4h, and 1d timeframes via CCXT.',
   inputSchema: step1InputSchema,
   outputSchema: step1OutputSchema,
   execute: async ({ inputData, mastra }) => fetchMarketDataPhase(inputData, mastra),
@@ -80,6 +83,7 @@ const fetchMarketData = createStep({
 // ---------------------------------------------------------------------------
 
 const step2OutputSchema = step1OutputSchema.extend({
+  indicators15m: indicatorsResultSchema,
   indicators1h: indicatorsResultSchema,
   indicators4h: indicatorsResultSchema,
   indicators1d: indicatorsResultSchema,
@@ -94,7 +98,14 @@ const computeIndicators = createStep({
   description: 'Compute RSI, EMA, MACD, Bollinger Bands, ADX for each timeframe.',
   inputSchema: step1OutputSchema,
   outputSchema: step2OutputSchema,
-  execute: async ({ inputData, mastra }) => computeIndicatorsPhase(inputData, mastra),
+  execute: async ({ inputData, mastra }) => {
+    // fetchMarketData always populates candles15m in this pipeline, so
+    // indicators15m is always computed too — computeIndicatorsPhase's return
+    // type only marks it optional to accommodate the eval harness's older
+    // fixtures, which don't go through this workflow.
+    const result = await computeIndicatorsPhase(inputData, mastra);
+    return result as z.infer<typeof step2OutputSchema>;
+  },
 });
 
 // ---------------------------------------------------------------------------
@@ -207,9 +218,12 @@ const agentDecisionOutputSchema = z.object({
   symbol: z.string(),
   triggeredBy: z.enum(['scheduled', 'manual', 'tradingview']),
   exchange: z.enum(['binance', 'bybit', 'bingx']),
+  marketType: z.enum(['spot', 'swap']),
+  candles15m: z.array(candleSchema),
   candles1h: z.array(candleSchema),
   candles4h: z.array(candleSchema),
   candles1d: z.array(candleSchema),
+  indicators15m: indicatorsResultSchema,
   indicators1h: indicatorsResultSchema,
   indicators4h: indicatorsResultSchema,
   indicators1d: indicatorsResultSchema,
@@ -269,6 +283,7 @@ const finalizeSignalOutputSchema = z.object({
       message: z.string(),
     })
     .nullable(),
+  skippedReason: z.enum(['rr_exceeds_structure']).optional(),
 });
 
 const finalizeSignal = createStep({
@@ -281,10 +296,13 @@ const finalizeSignal = createStep({
     const analysis: MarketAnalysisResult = {
       symbol: inputData.symbol,
       exchange: inputData.exchange,
+      marketType: inputData.marketType,
       triggeredBy: inputData.triggeredBy,
+      candles15m: inputData.candles15m,
       candles1h: inputData.candles1h,
       candles4h: inputData.candles4h,
       candles1d: inputData.candles1d,
+      indicators15m: inputData.indicators15m,
       indicators1h: inputData.indicators1h,
       indicators4h: inputData.indicators4h,
       indicators1d: inputData.indicators1d,
@@ -334,6 +352,10 @@ export const tradeAnalysisWorkflow = createWorkflow({
       .enum(['binance', 'bybit', 'bingx'])
       .default('binance')
       .describe('Exchange to use for market data and execution'),
+    marketType: z
+      .enum(['spot', 'swap'])
+      .default('spot')
+      .describe("Market to analyze/execute against — 'swap' = USDT-M perpetual futures"),
   }),
   outputSchema: finalizeSignalOutputSchema,
 })

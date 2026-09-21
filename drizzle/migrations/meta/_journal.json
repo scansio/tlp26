@@ -134,6 +134,132 @@
       "when": 1785767287736,
       "tag": "0018_fast_sharon_carter",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788624672576,
+      "tag": "0019_aspiring_avengers",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1788630971839,
+      "tag": "0020_broken_naoko",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1788631692222,
+      "tag": "0021_clumsy_vindicator",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1788643536873,
+      "tag": "0022_amazing_golden_guardian",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788693887383,
+      "tag": "0023_bright_morgan_stark",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788711385979,
+      "tag": "0024_old_wonder_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788950398724,
+      "tag": "0025_low_secret_warriors",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1788963793077,
+      "tag": "0026_talented_gabe_jones",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1788967722494,
+      "tag": "0027_mixed_starfox",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1788968477022,
+      "tag": "0028_strange_gladiator",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1788970885094,
+      "tag": "0029_little_gambit",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1788979127529,
+      "tag": "0030_stale_earthquake",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1789040961200,
+      "tag": "0031_lame_vargas",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1789048110678,
+      "tag": "0032_wonderful_newton_destine",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1789051996164,
+      "tag": "0033_nice_deathstrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1789060829098,
+      "tag": "0034_wakeful_mysterio",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1789203429286,
+      "tag": "0035_seed_subscription_plans",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1789217567999,
+      "tag": "0036_seed_ngn_plan_prices",
+      "breakpoints": true
     }
   ]
 }

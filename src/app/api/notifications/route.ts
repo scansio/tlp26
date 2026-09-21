@@ -62,6 +62,12 @@ export async function PUT(req: Request) {
     userId,
     ...(body.telegramBotToken !== undefined && { telegramBotToken: body.telegramBotToken }),
     ...(body.telegramChatId !== undefined && { telegramChatId: body.telegramChatId }),
+    // Disconnecting also invalidates any still-live connect deep link so it
+    // can't silently re-link the chat within its TTL.
+    ...(body.telegramChatId === null && {
+      telegramConnectToken: null,
+      telegramConnectTokenExpiresAt: null,
+    }),
     ...(body.discordWebhookUrl !== undefined && { discordWebhookUrl: body.discordWebhookUrl }),
     ...(body.quietHoursStart !== undefined && { quietHoursStart: body.quietHoursStart }),
     ...(body.quietHoursEnd !== undefined && { quietHoursEnd: body.quietHoursEnd }),

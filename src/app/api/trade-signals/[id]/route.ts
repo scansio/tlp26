@@ -5,63 +5,64 @@
  *
  * Body: { action: 'approve' | 'reject' }
  *
- * Approve behaviour:
+ * Approve behaviour — entryPrice is a limit target, not a live snapshot, so a
+ * fill isn't guaranteed immediately (see src/lib/entry-fill.ts):
  *  - Runs circuit-breaker checks (applies to both paper and live mode).
- *  - In paper mode: simulates a fill at the signal's entry price with slippage applied,
- *    inserts a trade_execution with mode='paper', does NOT call any exchange API.
- *  - In live mode: decrypts user exchange credentials and places a market order via CCXT,
- *    inserts a trade_execution with mode='live' and the exchange order ID.
- *  - Updates signal status to 'executed' on success.
+ *  - Paper mode: fills immediately at entryPrice if the current price has
+ *    already reached it; otherwise the signal rests as 'approved'.
+ *  - Live mode: places a real limit order via execute-trade-tool. If it fills
+ *    immediately the signal becomes 'executed'; otherwise it rests as
+ *    'approved' with the exchange order id stored, and
+ *    /api/cron/reconcile-entries polls it to completion.
  *
  * DELETE /api/trade-signals/[id]
- *  - Cancels a pending signal (sets status='cancelled').
+ *  - Cancels a pending or approved signal (sets status='cancelled'), cancelling
+ *    the resting exchange order first if one exists.
  */
 
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
-import ccxt, { type Exchange } from 'ccxt';
 import { db } from '@/db';
-import { tradeSignals, tradeExecutions, userRiskProfiles } from '@/db/schema';
+import { tradeSignals, userRiskProfiles } from '@/db/schema';
 import { checkCircuitBreaker } from '@/lib/circuit-breaker';
+import { claimPendingSignal, releaseSignalClaim } from '@/lib/signal-claim';
+import { fetchLiveUsdtBalance } from '@/lib/exchange-account';
+import { resolveUserTradingContext } from '@/lib/user-trading-context';
+import { resolveAccountBalance } from '@/lib/analysis/finalize-for-user';
 import { executeTradeTool } from '@/mastra/tools/execute-trade-tool';
+import { riskTool } from '@/mastra/tools/risk-tool';
+import { type MarketType } from '@/mastra/tools/market-symbol';
 import { noopObserve } from '@mastra/core/tools';
+import {
+  fetchTickerPrice,
+  isLimitMarketable,
+  applySlippage,
+  finalizePaperFill,
+  buildExchangeClient,
+  cancelEntryOrder,
+} from '@/lib/entry-fill';
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+const fetchLivePrice = fetchTickerPrice;
 
-/**
- * Apply slippage to the simulated fill price.
- * LONG entries: price increases by slippagePct (worse fill — buying higher).
- * SHORT entries: price decreases by slippagePct (worse fill — selling lower).
- */
-function applySlippage(
-  entryPrice: number,
-  direction: string,
-  slippagePct: number,
-): number {
-  const factor = slippagePct / 100;
-  return direction === 'LONG'
-    ? entryPrice * (1 + factor)
-    : entryPrice * (1 - factor);
-}
+type RiskCalcResult = {
+  positionSizeUsdt: number;
+  positionSizeUnits: number;
+  leverage: number;
+  minOrderSizeUnits: number;
+  belowExchangeMinimum: boolean;
+  accountBalance?: number;
+};
 
-/**
- * Fetch the current public ticker price for a symbol using the exchange name
- * stored on the signal (falls back to binance if not found).
- */
-async function fetchLivePrice(symbol: string, exchangeName: string): Promise<number | null> {
-  const name = (exchangeName ?? 'binance').toLowerCase();
-  const ExchangeClass = (ccxt as unknown as Record<string, new (c: object) => Exchange>)[name];
-  if (!ExchangeClass) return null;
-  try {
-    const ex = new ExchangeClass({});
-    const ticker = await ex.fetchTicker(symbol);
-    return ticker.last ?? null;
-  } catch {
-    return null;
-  }
+async function persistRiskCalculation(signalId: string, calc: RiskCalcResult): Promise<void> {
+  await db
+    .update(tradeSignals)
+    .set({
+      riskCalculation: calc,
+      riskCapitalUsdt: calc.accountBalance != null ? String(calc.accountBalance) : null,
+      riskCalculatedAt: new Date(),
+    })
+    .where(eq(tradeSignals.id, signalId));
 }
 
 // ---------------------------------------------------------------------------
@@ -120,9 +121,9 @@ export async function PATCH(
   }
 
   const { action } = body as { action?: string };
-  if (action !== 'approve' && action !== 'reject') {
+  if (action !== 'approve' && action !== 'reject' && action !== 'recompute') {
     return NextResponse.json(
-      { error: 'action must be "approve" or "reject"' },
+      { error: 'action must be "approve", "reject", or "recompute"' },
       { status: 400 },
     );
   }
@@ -150,6 +151,84 @@ export async function PATCH(
     );
   }
 
+  // Recompute — explicit user-triggered refresh of the stored risk
+  // calculation (see risk_calculation column comment in src/db/schema.ts).
+  // Approve/auto-execute always use whatever is currently stored, never a
+  // silent recompute, so this is the only way to pick up a balance/leverage
+  // change since the signal was created.
+  if (action === 'recompute') {
+    const entryPrice = signal.entryPrice ? Number(signal.entryPrice) : null;
+    const stopLoss = signal.stopLoss ? Number(signal.stopLoss) : null;
+    const takeProfit = signal.takeProfit ? Number(signal.takeProfit) : null;
+    if (!entryPrice || !stopLoss || !takeProfit) {
+      return NextResponse.json(
+        { error: 'Cannot recompute: entry price, stop-loss, and take-profit are all required.' },
+        { status: 422 },
+      );
+    }
+
+    const context = await resolveUserTradingContext(userId);
+    const rawPayload = signal.rawPayload as Record<string, unknown> | null;
+    const exchange = ((rawPayload?.exchange as string | undefined) ?? context?.exchange ?? 'binance') as
+      | 'binance'
+      | 'bybit'
+      | 'bingx';
+    const marketType = (signal.marketType as MarketType) ?? context?.marketType ?? 'spot';
+    const riskPerTradePct = signal.riskOverridePct
+      ? Number(signal.riskOverridePct)
+      : context?.riskPerTradePct ?? 1;
+
+    const accountBalance = await resolveAccountBalance(
+      userId,
+      context?.executionMode ?? 'paper',
+      context?.paperBalanceUsd ?? null,
+      marketType,
+    );
+    if (accountBalance === null) {
+      return NextResponse.json(
+        { error: 'Could not determine account balance for position sizing.' },
+        { status: 422 },
+      );
+    }
+
+    let calc: RiskCalcResult;
+    try {
+      calc = (await riskTool.execute!(
+        {
+          exchange,
+          symbol: signal.symbol,
+          marketType,
+          accountBalance,
+          riskPerTradePct,
+          entryPrice,
+          stopLossPrice: stopLoss,
+          takeProfitPrice: takeProfit,
+          direction: signal.direction as 'LONG' | 'SHORT',
+          slippagePct: context?.slippagePct ?? 0.05,
+        },
+        { observe: noopObserve },
+      )) as unknown as RiskCalcResult;
+    } catch (err) {
+      return NextResponse.json(
+        { error: `Failed to recompute: ${err instanceof Error ? err.message : String(err)}` },
+        { status: 422 },
+      );
+    }
+
+    await db
+      .update(tradeSignals)
+      .set({
+        riskCalculation: calc,
+        riskCapitalUsdt: calc.accountBalance != null ? String(calc.accountBalance) : null,
+        riskCalculatedAt: new Date(),
+        leverage: calc.leverage,
+        updatedAt: new Date(),
+      })
+      .where(eq(tradeSignals.id, signalId));
+
+    return NextResponse.json({ signalId, riskCalculation: calc, riskCalculatedAt: new Date().toISOString() });
+  }
+
   // Block approve if SL or TP is missing — enforce the hard requirement before any execution.
   if (action === 'approve' && (!signal.stopLoss || !signal.takeProfit)) {
     return NextResponse.json(
@@ -158,17 +237,60 @@ export async function PATCH(
     );
   }
 
-  // Reject path — simple status update
+  // Reject path — atomic status update guarded on still-pending, so this
+  // can't race with the auto-retry loop claiming the signal a moment later.
   if (action === 'reject') {
-    await db
+    const [rejected] = await db
       .update(tradeSignals)
       .set({ status: 'rejected', updatedAt: new Date() })
-      .where(eq(tradeSignals.id, signalId));
+      .where(and(eq(tradeSignals.id, signalId), eq(tradeSignals.status, 'pending')))
+      .returning({ id: tradeSignals.id });
+
+    if (!rejected) {
+      return NextResponse.json(
+        { error: 'Signal is no longer pending — it may already be executing via auto-retry. Refresh and try again.' },
+        { status: 409 },
+      );
+    }
 
     return NextResponse.json({ signalId, status: 'rejected' });
   }
 
-  // Approve path — run circuit breaker first
+  // Approve path — atomically claim the signal first so this can never race
+  // with src/worker/auto-execute-retry-loop.ts (or a second concurrent
+  // Approve click) also picking up the same 'pending' signal and placing a
+  // duplicate order. Every return below this point must go through the
+  // try/finally so a failed/early-return path reliably releases the claim
+  // back to 'pending' rather than leaving the signal stuck invisible.
+  const claimed = await claimPendingSignal(signalId);
+  if (!claimed) {
+    return NextResponse.json(
+      { error: 'Signal is no longer pending — it may already be executing via auto-retry. Refresh and try again.' },
+      { status: 409 },
+    );
+  }
+
+  try {
+    return await approveSignal(signalId, userId, signal);
+  } finally {
+    // No-op once the signal has moved on to 'approved'/'executed' via
+    // finalizePaperFill/executeTradeTool's own status update — only reverts
+    // to 'pending' if still 'executing', i.e. every failure path below.
+    await releaseSignalClaim(signalId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Approve — sizing + execution, extracted so the claim/release above wraps
+// every return path uniformly instead of needing per-branch bookkeeping.
+// ---------------------------------------------------------------------------
+
+async function approveSignal(
+  signalId: string,
+  userId: string,
+  signal: typeof tradeSignals.$inferSelect,
+) {
+  // Circuit breaker
   const cb = await checkCircuitBreaker(userId, {
     signalSymbol: signal.symbol,
     signalDirection: signal.direction,
@@ -188,6 +310,7 @@ export async function PATCH(
       slippagePct: userRiskProfiles.slippagePct,
       paperBalanceUsd: userRiskProfiles.paperBalanceUsd,
       riskPerTradePct: userRiskProfiles.riskPerTradePct,
+      defaultLeverage: userRiskProfiles.defaultLeverage,
     })
     .from(userRiskProfiles)
     .where(eq(userRiskProfiles.userId, userId))
@@ -198,74 +321,111 @@ export async function PATCH(
   const slippagePct = profile?.slippagePct ? Number(profile.slippagePct) : 0.05;
 
   // -------------------------------------------------------------------------
-  // PAPER MODE: Simulate fill — no exchange API call
+  // PAPER MODE: Simulate a limit fill at entryPrice — no exchange API call.
+  // entryPrice is a target (often an SMC retest zone), not a live snapshot:
+  // only fill now if the current price has actually reached it; otherwise
+  // rest as 'approved' for /api/cron/reconcile-entries to fill later.
   // -------------------------------------------------------------------------
   if (isPaper) {
     const signalEntry = signal.entryPrice ? Number(signal.entryPrice) : null;
+    const rawPayload = signal.rawPayload as Record<string, unknown> | null;
+    const exchangeName = ((rawPayload?.exchange as string | undefined) ?? 'binance') as
+      | 'binance'
+      | 'bybit'
+      | 'bingx';
+    const signalMarketType = (signal.marketType as MarketType) ?? 'spot';
 
-    // Use signal entry price; try to fetch live price if entry not available
-    let fillPrice = signalEntry;
-    if (!fillPrice) {
-      const rawPayload = signal.rawPayload as Record<string, string> | null;
-      const exchangeName = (rawPayload?.exchange as string) ?? 'binance';
-      fillPrice = await fetchLivePrice(signal.symbol, exchangeName);
+    let fillPrice: number;
+    if (signalEntry) {
+      const currentPrice = await fetchLivePrice(signal.symbol, exchangeName, signalMarketType);
+
+      if (currentPrice !== null && !isLimitMarketable(signal.direction, signalEntry, currentPrice)) {
+        await db
+          .update(tradeSignals)
+          .set({ status: 'approved', updatedAt: new Date() })
+          .where(eq(tradeSignals.id, signalId));
+
+        return NextResponse.json({
+          signalId,
+          status: 'approved',
+          mode: 'paper',
+          message: `Paper limit order resting at $${signalEntry.toFixed(4)} (current price $${currentPrice.toFixed(4)}) — will fill once price is reached.`,
+        });
+      }
+
+      // Marketable now (or ticker unavailable — fill at entry rather than get stuck)
+      fillPrice = signalEntry;
+    } else {
+      // No entry target at all (e.g. a webhook signal without one) — this is
+      // effectively a market fill, so the slippage model applies.
+      const livePrice = await fetchLivePrice(signal.symbol, exchangeName, signalMarketType);
+      if (!livePrice) {
+        return NextResponse.json(
+          { error: 'Cannot determine fill price — entry price missing and live price unavailable.' },
+          { status: 422 },
+        );
+      }
+      fillPrice = applySlippage(livePrice, signal.direction, slippagePct);
     }
 
-    if (!fillPrice) {
-      return NextResponse.json(
-        { error: 'Cannot determine fill price — entry price missing and live price unavailable.' },
-        { status: 422 },
-      );
-    }
-
-    // Apply slippage model (same as live)
-    const simulatedFillPrice = applySlippage(fillPrice, signal.direction, slippagePct);
-
-    // Compute position size from virtual balance and risk parameters
-    // Formula: (paperBalance × riskPerTradePct%) / |fillPrice − stopLoss|
+    // Size against the exact risk calculation already shown to the user
+    // (computed once at signal-creation time, or by a previous Recompute) —
+    // never a fresh recompute here, so what was displayed is what executes.
+    // Only falls back to computing fresh (and persisting it) for a signal
+    // that legitimately has none yet — e.g. one created before this column
+    // existed, or whose creation-time riskTool call failed.
     const paperBalance = profile?.paperBalanceUsd ? Number(profile.paperBalanceUsd) : 10_000;
     const riskPct = profile?.riskPerTradePct ? Number(profile.riskPerTradePct) : 1;
     const signalStopLoss = signal.stopLoss ? Number(signal.stopLoss) : null;
     let positionSize: number | null = null;
-    if (signalStopLoss !== null && Math.abs(simulatedFillPrice - signalStopLoss) > 0) {
-      const riskAmount = paperBalance * (riskPct / 100);
-      const slDistance = Math.abs(simulatedFillPrice - signalStopLoss);
-      positionSize = riskAmount / slDistance;
+    let paperLeverage = signal.leverage ?? 1;
+    let paperCalc = signal.riskCalculation as RiskCalcResult | null;
+    if (!paperCalc && signalStopLoss !== null && Math.abs(fillPrice - signalStopLoss) > 0) {
+      try {
+        paperCalc = (await riskTool.execute!(
+          {
+            exchange: exchangeName,
+            symbol: signal.symbol,
+            marketType: signalMarketType,
+            accountBalance: paperBalance,
+            riskPerTradePct: riskPct,
+            entryPrice: fillPrice,
+            stopLossPrice: signalStopLoss,
+            takeProfitPrice: Number(signal.takeProfit),
+            direction: signal.direction as 'LONG' | 'SHORT',
+            slippagePct,
+          },
+          { observe: noopObserve },
+        )) as unknown as RiskCalcResult;
+        await persistRiskCalculation(signalId, paperCalc);
+      } catch (err) {
+        console.warn('trade-signals/[id]: riskTool failed for paper approval', err);
+      }
+    }
+    if (paperCalc) {
+      positionSize = paperCalc.positionSizeUnits;
+      paperLeverage = paperCalc.leverage;
     }
 
-    // Record paper execution in trade_executions
-    const rawPayload = signal.rawPayload as Record<string, unknown> | null;
-    const exchangeName = (rawPayload?.exchange as string | undefined) ?? 'paper';
-
-    const [execution] = await db
-      .insert(tradeExecutions)
-      .values({
-        signalId,
-        userId,
-        exchangeName,
-        symbol: signal.symbol,
-        entryPrice: String(simulatedFillPrice),
-        positionSize: positionSize !== null ? String(positionSize) : null,
-        mode: 'paper',
-        status: 'open',
-        entryAt: new Date(),
-      })
-      .returning({ id: tradeExecutions.id });
-
-    // Mark signal as executed
-    await db
-      .update(tradeSignals)
-      .set({ status: 'executed', updatedAt: new Date() })
-      .where(eq(tradeSignals.id, signalId));
+    const { executionId } = await finalizePaperFill({
+      signalId,
+      userId,
+      exchange: exchangeName,
+      symbol: signal.symbol,
+      marketType: signalMarketType,
+      fillPrice,
+      positionSizeUnits: positionSize,
+      leverage: paperLeverage,
+      marginMode: (signal.marginMode as 'cross' | 'isolated') ?? 'cross',
+    });
 
     return NextResponse.json({
       signalId,
-      executionId: execution.id,
+      executionId,
       status: 'executed',
       mode: 'paper',
-      fillPrice: simulatedFillPrice,
-      slippagePct,
-      message: `Paper trade opened at simulated fill price $${simulatedFillPrice.toFixed(4)} (slippage: ${slippagePct}%).`,
+      fillPrice,
+      message: `Paper trade filled at $${fillPrice.toFixed(4)}.`,
     });
   }
 
@@ -278,10 +438,12 @@ export async function PATCH(
     | 'bybit'
     | 'bingx';
 
+  const signalMarketType = (signal.marketType as MarketType) ?? 'spot';
+
   const signalEntry = signal.entryPrice ? Number(signal.entryPrice) : null;
   let liveEntryPrice = signalEntry;
   if (!liveEntryPrice) {
-    liveEntryPrice = await fetchLivePrice(signal.symbol, exchangeName);
+    liveEntryPrice = await fetchLivePrice(signal.symbol, exchangeName, signalMarketType);
   }
 
   if (!liveEntryPrice) {
@@ -291,16 +453,82 @@ export async function PATCH(
     );
   }
 
-  // Compute position size in USDT from risk profile
-  const paperBalance = profile?.paperBalanceUsd ? Number(profile.paperBalanceUsd) : 10_000;
+  // Size against the exact risk calculation already shown to the user
+  // (computed once at signal-creation time, or by a previous Recompute) —
+  // never a fresh recompute here, so a manual approval executes exactly
+  // what was displayed, not a number re-derived against whatever the
+  // balance happens to be right now. If the account balance has genuinely
+  // changed since, use the Recompute action first.
+  //
+  // Only falls back to computing fresh (fail-closed on an unknown live
+  // balance, same as before) for a signal that legitimately has no stored
+  // calc yet — e.g. one created before this column existed, or whose
+  // creation-time riskTool call failed.
   const riskPct = profile?.riskPerTradePct ? Number(profile.riskPerTradePct) : 1;
   const signalStopLoss = signal.stopLoss ? Number(signal.stopLoss) : null;
-  let positionSizeUsdt = 100; // fallback
-  if (signalStopLoss !== null && Math.abs(liveEntryPrice - signalStopLoss) > 0) {
-    const riskAmount = paperBalance * (riskPct / 100);
-    const slDistance = Math.abs(liveEntryPrice - signalStopLoss);
-    positionSizeUsdt = (riskAmount / slDistance) * liveEntryPrice;
+
+  let liveCalc = signal.riskCalculation as RiskCalcResult | null;
+
+  if (!liveCalc) {
+    const liveBalance = await fetchLiveUsdtBalance(userId, signalMarketType);
+    if (liveBalance === null) {
+      return NextResponse.json(
+        {
+          error: `Could not determine a valid USDT balance on ${exchangeName}. Connect your exchange or check its balance, then retry. Refusing to size a live position from an unknown balance.`,
+        },
+        { status: 422 },
+      );
+    }
+
+    if (signalStopLoss === null || Math.abs(liveEntryPrice - signalStopLoss) <= 0) {
+      return NextResponse.json(
+        { error: 'Cannot size a live position: stop-loss is missing or equal to the entry price.' },
+        { status: 422 },
+      );
+    }
+
+    try {
+      liveCalc = (await riskTool.execute!(
+        {
+          exchange: exchangeName,
+          symbol: signal.symbol,
+          marketType: signalMarketType,
+          accountBalance: liveBalance,
+          riskPerTradePct: riskPct,
+          entryPrice: liveEntryPrice,
+          stopLossPrice: signalStopLoss,
+          takeProfitPrice: Number(signal.takeProfit),
+          direction: signal.direction as 'LONG' | 'SHORT',
+          slippagePct,
+        },
+        { observe: noopObserve },
+      )) as unknown as RiskCalcResult;
+    } catch (err) {
+      return NextResponse.json(
+        { error: `Failed to size position: ${err instanceof Error ? err.message : String(err)}` },
+        { status: 422 },
+      );
+    }
+    await persistRiskCalculation(signalId, liveCalc);
   }
+
+  // Fails fast with a clear reason instead of letting CCXT's own
+  // amountToPrecision() reject it with a cryptic "amount... must be
+  // greater than minimum amount precision" error at order-placement time.
+  if (liveCalc.belowExchangeMinimum) {
+    return NextResponse.json(
+      {
+        error:
+          `Position size (${liveCalc.positionSizeUnits} units, $${liveCalc.positionSizeUsdt.toFixed(2)}) is below ` +
+          `${exchangeName}'s minimum order size (${liveCalc.minOrderSizeUnits} units) for ${signal.symbol}. Click ` +
+          `Recompute, or increase your risk-per-trade % or account balance, then retry.`,
+      },
+      { status: 422 },
+    );
+  }
+
+  const positionSizeUsdt = liveCalc.positionSizeUsdt;
+  const leverage = liveCalc.leverage;
 
   const toolResult = await executeTradeTool.execute!(
     {
@@ -315,6 +543,10 @@ export async function PATCH(
       tp: Number(signal.takeProfit),
       mode: 'live',
       slippagePct,
+      marketType: signalMarketType,
+      leverage,
+      marginMode: (signal.marginMode as 'cross' | 'isolated') ?? 'cross',
+      fallbackLeverage: profile?.defaultLeverage ?? 1,
     },
     { observe: noopObserve },
   ) as {
@@ -334,11 +566,13 @@ export async function PATCH(
     );
   }
 
+  // toolResult.signalStatus is 'executed' (filled immediately) or 'approved'
+  // (limit order resting on the exchange, awaiting fill via reconcile-entries).
   return NextResponse.json({
     signalId,
     executionId: toolResult.executionId,
     exchangeOrderId: toolResult.exchangeOrderId,
-    status: 'executed',
+    status: toolResult.signalStatus,
     mode: 'live',
     fillPrice: toolResult.fillPrice,
     message: toolResult.message,
@@ -361,7 +595,14 @@ export async function DELETE(
   const { id: signalId } = await params;
 
   const [signal] = await db
-    .select({ id: tradeSignals.id, status: tradeSignals.status })
+    .select({
+      id: tradeSignals.id,
+      status: tradeSignals.status,
+      symbol: tradeSignals.symbol,
+      marketType: tradeSignals.marketType,
+      entryOrderId: tradeSignals.entryOrderId,
+      rawPayload: tradeSignals.rawPayload,
+    })
     .from(tradeSignals)
     .where(
       and(
@@ -375,16 +616,43 @@ export async function DELETE(
     return NextResponse.json({ error: 'Signal not found' }, { status: 404 });
   }
 
-  if (signal.status === 'executed' || signal.status === 'cancelled') {
+  // 'executing' means an approve/auto-retry attempt currently holds the
+  // claim (see src/lib/signal-claim.ts) — cancelling underneath it would
+  // race with that attempt's own release-back-to-'pending', potentially
+  // resurrecting a signal the user just cancelled. Ask them to retry once
+  // the in-flight attempt (sub-few-seconds) resolves.
+  if (signal.status === 'executed' || signal.status === 'cancelled' || signal.status === 'executing') {
     return NextResponse.json(
-      { error: `Signal cannot be cancelled — current status: ${signal.status}` },
+      {
+        error:
+          signal.status === 'executing'
+            ? 'Signal is currently being processed — try cancelling again in a moment.'
+            : `Signal cannot be cancelled — current status: ${signal.status}`,
+      },
       { status: 422 },
     );
   }
 
+  // 'approved' means a real limit order may be resting on the exchange —
+  // cancel it before flipping the DB status, so it doesn't fill unexpectedly
+  // after the user thinks they've cancelled.
+  if (signal.status === 'approved' && signal.entryOrderId) {
+    const rawPayload = signal.rawPayload as Record<string, unknown> | null;
+    const exchangeName = (rawPayload?.exchange as string | undefined) ?? 'binance';
+    const client = await buildExchangeClient(userId, exchangeName);
+    if (client) {
+      await cancelEntryOrder(
+        client,
+        signal.symbol,
+        (signal.marketType as MarketType) ?? 'spot',
+        signal.entryOrderId,
+      );
+    }
+  }
+
   await db
     .update(tradeSignals)
-    .set({ status: 'cancelled', updatedAt: new Date() })
+    .set({ status: 'cancelled', updatedAt: new Date(), entryOrderId: null })
     .where(eq(tradeSignals.id, signalId));
 
   return NextResponse.json({ signalId, status: 'cancelled' });

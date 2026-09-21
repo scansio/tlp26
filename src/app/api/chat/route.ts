@@ -2,12 +2,18 @@ import { handleChatStream } from '@mastra/ai-sdk'
 import { toAISdkV5Messages } from '@mastra/ai-sdk/ui'
 import { createUIMessageStreamResponse } from 'ai'
 import { auth } from '@clerk/nextjs/server'
+import { RequestContext } from '@mastra/core/request-context'
 import ccxt, { type Exchange } from 'ccxt'
 import { and, eq } from 'drizzle-orm'
 import { mastra } from '@/mastra'
 import { db } from '@/db'
 import { userRiskProfiles, userExchanges } from '@/db/schema'
 import { decrypt } from '@/lib/crypto'
+import { configureMarketType, type MarketType } from '@/mastra/tools/market-symbol'
+import { getUserTradePerformance, getRecentSignals } from '@/lib/analysis/trade-performance'
+import { BYOK_USER_ID_CONTEXT_KEY } from '@/lib/byok/resolve-model'
+import { resolvePlanForUser } from '@/lib/billing/plan'
+import { getUsageToday, hasChatQuota, incrementChatMessageUsage } from '@/lib/billing/usage'
 import { NextResponse } from 'next/server'
 
 // ---------------------------------------------------------------------------
@@ -33,62 +39,69 @@ async function buildRiskContext(userId: string): Promise<string> {
   let balance: number | null = isPaper ? paperBalance : null;
   let balanceNote = isPaper ? '(paper mode — virtual balance)' : '';
 
-  if (!isPaper) {
+  // Look up the user's connected exchange regardless of paper/live mode — the
+  // agent needs this for every market-data/order-book/signal/watch tool call,
+  // not just live-balance display.
+  const [exchangeRow] = await db
+    .select({
+      exchangeName: userExchanges.exchangeName,
+      encryptedApiKey: userExchanges.encryptedApiKey,
+      encryptedApiSecret: userExchanges.encryptedApiSecret,
+      encryptedPassphrase: userExchanges.encryptedPassphrase,
+    })
+    .from(userExchanges)
+    .where(
+      and(
+        eq(userExchanges.userId, userId),
+        eq(userExchanges.status, 'active'),
+      ),
+    )
+    .limit(1);
+
+  const connectedExchange = exchangeRow?.exchangeName ?? null;
+
+  if (!isPaper && exchangeRow) {
     // Try fetching live balance with a 2s timeout
     try {
-      const [exchangeRow] = await db
-        .select({
-          exchangeName: userExchanges.exchangeName,
-          encryptedApiKey: userExchanges.encryptedApiKey,
-          encryptedApiSecret: userExchanges.encryptedApiSecret,
-          encryptedPassphrase: userExchanges.encryptedPassphrase,
-        })
-        .from(userExchanges)
-        .where(
-          and(
-            eq(userExchanges.userId, userId),
-            eq(userExchanges.status, 'active'),
+      const apiKey = decrypt(exchangeRow.encryptedApiKey);
+      const secret = decrypt(exchangeRow.encryptedApiSecret);
+      const password = exchangeRow.encryptedPassphrase
+        ? decrypt(exchangeRow.encryptedPassphrase)
+        : undefined;
+
+      const ExchangeClass = (ccxt as unknown as Record<string, new (c: object) => Exchange>)[
+        exchangeRow.exchangeName
+      ];
+
+      if (ExchangeClass) {
+        const client = new ExchangeClass({
+          apiKey,
+          secret,
+          ...(password ? { password } : {}),
+        });
+        configureMarketType(client, exchangeRow.exchangeName, (profile.marketType as MarketType) ?? 'spot');
+
+        // fetchBalance() on a cold client is loadMarkets() + the balance call — two
+        // network round-trips, easily over 2s. Give it near ccxt's own 10s default.
+        const fetchWithTimeout = Promise.race([
+          client.fetchBalance(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), 9000),
           ),
-        )
-        .limit(1);
+        ]);
 
-      if (exchangeRow) {
-        const apiKey = decrypt(exchangeRow.encryptedApiKey);
-        const secret = decrypt(exchangeRow.encryptedApiSecret);
-        const password = exchangeRow.encryptedPassphrase
-          ? decrypt(exchangeRow.encryptedPassphrase)
-          : undefined;
-
-        const ExchangeClass = (ccxt as unknown as Record<string, new (c: object) => Exchange>)[
-          exchangeRow.exchangeName
-        ];
-
-        if (ExchangeClass) {
-          const client = new ExchangeClass({
-            apiKey,
-            secret,
-            ...(password ? { password } : {}),
-          });
-
-          const fetchWithTimeout = Promise.race([
-            client.fetchBalance(),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('timeout')), 2000),
-            ),
-          ]);
-
-          const bal = await fetchWithTimeout;
-          const total =
-            (bal['USDT']?.total ?? 0) +
-            (bal['USDC']?.total ?? 0) +
-            (bal['USD']?.total ?? 0);
-          if (total > 0) {
-            balance = total;
-            balanceNote = `(live — ${exchangeRow.exchangeName})`;
-          }
+        const bal = await fetchWithTimeout;
+        const total =
+          (bal['USDT']?.total ?? 0) +
+          (bal['USDC']?.total ?? 0) +
+          (bal['USD']?.total ?? 0);
+        if (total > 0) {
+          balance = total;
+          balanceNote = `(live — ${exchangeRow.exchangeName})`;
         }
       }
-    } catch {
+    } catch (err) {
+      console.error('[chat/buildRiskContext] live balance fetch failed:', err);
       balanceNote = '(unavailable — exchange fetch failed; ask user to reconnect exchange)';
     }
   }
@@ -105,6 +118,7 @@ async function buildRiskContext(userId: string): Promise<string> {
     : 'all symbols';
 
   return `=== USER RISK PROFILE ===
+Connected Exchange: ${connectedExchange ?? 'none connected — default to binance for market data'}
 Account Balance: ${balanceLine}
 Risk per Trade: ${profile.riskPerTradePct}%
 Min Risk:Reward Ratio: ${profile.minRiskRewardRatio ?? '1.50'}:1
@@ -115,6 +129,96 @@ Strategies: ${strategies}
 Preferred Timeframes: ${timeframes}
 Allowed Symbols: ${symbols}
 Execution Mode: ${profile.tradingMode ?? 'manual'} (${isPaper ? 'paper' : 'live'} trading)
+Market Type: ${profile.marketType ?? 'spot'}${profile.marketType === 'swap' ? ` (leverage: ${profile.defaultLeverage ?? 1}x, margin: ${profile.marginMode ?? 'cross'})` : ''}
+===`;
+}
+
+// ---------------------------------------------------------------------------
+// Build a human-readable past-performance block injected into the agent's
+// system prompt (Phase 6 — recall of the user's own trade performance).
+// Computed on demand from trade_executions/trade_signals — no separate
+// memory store; see src/lib/analysis/trade-performance.ts.
+// ---------------------------------------------------------------------------
+
+async function buildPerformanceContext(userId: string): Promise<string> {
+  const perf = await getUserTradePerformance(userId);
+
+  if (!perf.hasEnoughData) {
+    return `=== TRADE PERFORMANCE ===
+Not enough closed trade history yet (${perf.totalClosedTrades} closed trades) to draw reliable conclusions.
+===`;
+  }
+
+  const rrLines = perf.byRRBucket
+    .filter((b) => b.trades > 0)
+    .map((b) => `- ${b.label} R:R: ${b.trades} trades, ${b.winRatePct}% win rate, expectancy ${b.expectancy >= 0 ? '+' : ''}${b.expectancy}R`)
+    .join('\n');
+
+  const strategyLines = perf.byStrategy
+    .slice(0, 5)
+    .map((s) => `- ${s.key}: ${s.trades} trades, ${s.winRatePct}% win rate`)
+    .join('\n');
+
+  const symbolLines = perf.bySymbol
+    .slice(0, 5)
+    .map((s) => `- ${s.key}: ${s.trades} trades, ${s.winRatePct}% win rate`)
+    .join('\n');
+
+  return `=== TRADE PERFORMANCE ===
+Closed trades analyzed: ${perf.totalClosedTrades}
+Overall win rate: ${perf.overallWinRatePct}%
+
+Win rate by planned Risk:Reward:
+${rrLines || '(no trades with a computable planned R:R)'}
+
+Win rate by strategy source:
+${strategyLines || '(no strategy data)'}
+
+Win rate by symbol:
+${symbolLines || '(no symbol data)'}
+${perf.suggestion ? `\nSUGGESTION: ${perf.suggestion.message}` : ''}
+===`;
+}
+
+// Shown instead of buildPerformanceContext's real block when
+// plan.allowsPersonalizedMemory is false (free tier) — keeps the agent aware
+// personalization exists as a plan perk rather than silently omitting it.
+const FREE_TIER_PERFORMANCE_STUB = `=== TRADE PERFORMANCE ===
+Personalized trade-history insights (win-rate breakdown, recent signal recall) are a Pro/BYOK feature. This account is on the free plan — do not fabricate performance stats; if asked, tell the user to upgrade for this.
+===`;
+
+// ---------------------------------------------------------------------------
+// Build a per-signal recall block (as opposed to buildPerformanceContext's
+// aggregate stats) — the most recent N *executed* signals, so the agent can
+// reference specific past trades, not just win-rate numbers. Scoped to
+// status='executed' only (see getRecentSignals) — a pending/rejected/
+// cancelled/expired signal never became a trade.
+// Paid-tier only (see plan.allowsPersonalizedMemory gating in POST below).
+// ---------------------------------------------------------------------------
+
+async function buildRecentSignalsContext(userId: string, limit: number): Promise<string> {
+  const signals = await getRecentSignals(userId, limit);
+
+  if (signals.length === 0) {
+    return `=== RECENT SIGNALS ===
+No executed trades yet.
+===`;
+  }
+
+  const lines = signals.map((s) => {
+    const rr = s.plannedRR !== null ? `${s.plannedRR.toFixed(2)}R planned` : 'R:R n/a';
+    const outcome =
+      s.realizedPnl !== null
+        ? `, closed P&L ${s.realizedPnl >= 0 ? '+' : ''}$${s.realizedPnl.toFixed(2)}`
+        : s.positionStatus === 'open'
+          ? ', still open'
+          : '';
+    const reasoning = s.reasoningExcerpt ? ` — "${s.reasoningExcerpt}"` : '';
+    return `- ${s.createdAt.toISOString().slice(0, 10)} ${s.symbol} ${s.direction} ${rr}, source=${s.source ?? 'ai'}, confidence=${s.confidence ?? 'n/a'}${outcome}${reasoning}`;
+  });
+
+  return `=== RECENT SIGNALS ===
+${lines.join('\n')}
 ===`;
 }
 
@@ -124,12 +228,51 @@ export async function POST(req: Request) {
     return new NextResponse('Unauthorized', { status: 401 });
   }
 
+  // --- Chat message quota (Phase 5 usage metering, UTC calendar day) ---
+  const plan = await resolvePlanForUser(userId)
+  const usage = await getUsageToday(userId)
+  if (!hasChatQuota(usage, plan)) {
+    return NextResponse.json(
+      {
+        error: 'Daily chat message limit reached',
+        limit: plan.chatMessagesPerDay,
+        used: usage.chatMessagesUsed,
+        plan: plan.name,
+      },
+      { status: 429 },
+    )
+  }
+
   const params = await req.json()
   const THREAD_ID = params.threadId ?? userId
   const RESOURCE_ID = `chat-${userId}`
 
-  // Build risk context — fetch profile + balance in parallel with the rest of request handling
-  const riskContext = await buildRiskContext(userId).catch(() => 'RISK PROFILE: unavailable');
+  // Counts this message as "used" now that quota is confirmed available —
+  // one POST is one message, regardless of how long the resulting stream
+  // takes or whether the client disconnects mid-stream.
+  await incrementChatMessageUsage(userId)
+
+  // --- Personalized memory (Pro/BYOK plan perk — see subscription_plans
+  // .allows_personalized_memory) ---------------------------------------------
+  // Free tier gets a stub instead of the real win-rate/recent-signals blocks:
+  // this data (trade history, reasoning, outcomes) is exactly what the
+  // pricing page advertises as a paid perk, so it must not leak to free users.
+  // BYOK gets a slightly larger recent-signals window than pro — they already
+  // have 3x the chat quota (see subscription_plans seed), so a proportionally
+  // richer context block is consistent with that tier's positioning.
+  const personalizedMemory = plan.allowsPersonalizedMemory;
+  const recentSignalsLimit = plan.name === 'byok' ? 10 : 5;
+
+  // Build risk + performance context in parallel with the rest of request handling
+  const [riskContext, performanceContext, recentSignalsContext] = await Promise.all([
+    buildRiskContext(userId).catch(() => 'RISK PROFILE: unavailable'),
+    personalizedMemory
+      ? buildPerformanceContext(userId).catch(() => 'TRADE PERFORMANCE: unavailable')
+      : Promise.resolve(FREE_TIER_PERFORMANCE_STUB),
+    personalizedMemory
+      ? buildRecentSignalsContext(userId, recentSignalsLimit).catch(() => 'RECENT SIGNALS: unavailable')
+      : Promise.resolve(''),
+  ]);
 
   const stream = await handleChatStream({
     mastra,
@@ -148,7 +291,9 @@ export async function POST(req: Request) {
       context: [
         {
           role: 'system',
-          content: `userId:${userId}\n\n${riskContext}`,
+          content:
+            `userId:${userId}\n\n${riskContext}\n\n${performanceContext}` +
+            (recentSignalsContext ? `\n\n${recentSignalsContext}` : ''),
         },
       ],
       memory: {
@@ -156,6 +301,10 @@ export async function POST(req: Request) {
         thread: THREAD_ID,
         resource: RESOURCE_ID,
       },
+      // Server-derived only — never take this from client-supplied `params`.
+      // Read by market-chat-agent's dynamic model resolver (BYOK) to look up
+      // this user's connected LLM key, if any. See src/lib/byok/resolve-model.ts.
+      requestContext: new RequestContext([[BYOK_USER_ID_CONTEXT_KEY, userId]]),
     },
   })
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

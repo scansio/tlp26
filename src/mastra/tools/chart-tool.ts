@@ -16,6 +16,10 @@ export const chartTool = createTool({
     symbol: z.string().describe('Trading pair, e.g. BTC/USDT or BTCUSDT'),
     exchange: z.string().describe('Exchange name, e.g. binance'),
     interval: z.string().describe('Timeframe, e.g. 1h, 4h, 1d'),
+    marketType: z
+      .enum(['spot', 'swap'])
+      .default('spot')
+      .describe("'swap' = USDT-M perpetual futures. Pass the same marketType used for market-data-tool."),
   }),
   outputSchema: z.object({
     tvSymbol: z.string(),
@@ -24,13 +28,16 @@ export const chartTool = createTool({
     widgetType: z.literal('tradingview'),
   }),
   execute: async (inputData) => {
-    const { symbol, exchange, interval } = inputData as {
+    const { symbol, exchange, interval, marketType } = inputData as {
       symbol: string;
       exchange: string;
       interval: string;
+      marketType?: 'spot' | 'swap';
     };
 
-    const tvSymbol = symbol.replace('/', '').toUpperCase();
+    // TradingView's perpetual-futures listings use a '.P' symbol suffix
+    // (e.g. BINGX:TOADUSDT.P) — distinct from CCXT's ':USDT' swap suffix.
+    const tvSymbol = symbol.replace('/', '').toUpperCase() + (marketType === 'swap' ? '.P' : '');
     const tvExchange = exchange.toUpperCase();
     const tvInterval = TV_INTERVAL_MAP[interval.toLowerCase()] ?? interval;
 

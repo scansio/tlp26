@@ -53,25 +53,25 @@ const INDICATORS = [
 
 export default function StrategyPage() {
   return (
-    <article>
+    <article className="w-full min-w-0">
       <p className="text-xs font-semibold uppercase tracking-widest text-emerald-500 mb-2">Strategy</p>
-      <h1 className="text-3xl font-bold text-white mb-3">The edge behind the signals</h1>
-      <p className="text-zinc-400 text-lg mb-4">
+      <h1 className="text-2xl md:text-3xl font-bold text-white mb-3">The edge behind the signals</h1>
+      <p className="text-zinc-400 text-base md:text-lg mb-4">
         Trading Hub&apos;s AI agent combines Smart Money Concepts (SMC) with classical technical indicators. Neither approach alone is sufficient — the agent looks for confluence between structural and momentum signals.
       </p>
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-5 py-4 mb-12 text-sm text-zinc-400 leading-relaxed">
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-4 py-4 md:px-5 mb-8 md:mb-12 text-sm text-zinc-400 leading-relaxed">
         <strong className="text-white">Confluence first.</strong> The agent never enters on a single signal. A bullish FVG alone is not a trade. A bullish FVG at the level of a bullish Order Block, with RSI recovering from oversold, positive news sentiment, and a neutral-to-positive funding rate — that is a trade.
       </div>
 
       {/* SMC */}
-      <div className="mb-14">
-        <h2 className="text-lg font-semibold text-white mb-5 flex items-center gap-2">
-          <span className="w-1 h-5 rounded-full bg-emerald-500 inline-block" />
+      <div className="mb-10 md:mb-14">
+        <h2 className="text-base md:text-lg font-semibold text-white mb-4 md:mb-5 flex items-center gap-2">
+          <span className="w-1 h-5 rounded-full bg-emerald-500 inline-block shrink-0" />
           Smart Money Concepts
         </h2>
-        <div className="space-y-5">
+        <div className="space-y-4 md:space-y-5">
           {SMC_CONCEPTS.map(({ term, definition }) => (
-            <div key={term} className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-5">
+            <div key={term} className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 md:p-5">
               <h3 className="text-sm font-semibold text-white mb-2">{term}</h3>
               <p className="text-sm text-zinc-400 leading-relaxed">{definition}</p>
             </div>
@@ -80,15 +80,15 @@ export default function StrategyPage() {
       </div>
 
       {/* Indicators */}
-      <div className="mb-14">
-        <h2 className="text-lg font-semibold text-white mb-5 flex items-center gap-2">
-          <span className="w-1 h-5 rounded-full bg-emerald-500 inline-block" />
+      <div className="mb-10 md:mb-14">
+        <h2 className="text-base md:text-lg font-semibold text-white mb-4 md:mb-5 flex items-center gap-2">
+          <span className="w-1 h-5 rounded-full bg-emerald-500 inline-block shrink-0" />
           Technical indicators
         </h2>
         <div className="divide-y divide-zinc-800 rounded-xl border border-zinc-800 overflow-hidden">
           {INDICATORS.map(({ name, role }) => (
-            <div key={name} className="px-5 py-4 bg-zinc-900/30">
-              <p className="text-sm font-mono font-semibold text-emerald-400 mb-1">{name}</p>
+            <div key={name} className="px-4 py-4 md:px-5 bg-zinc-900/30">
+              <p className="text-sm font-mono font-semibold text-emerald-400 mb-1 break-words">{name}</p>
               <p className="text-sm text-zinc-400 leading-relaxed">{role}</p>
             </div>
           ))}
@@ -96,17 +96,17 @@ export default function StrategyPage() {
       </div>
 
       {/* Risk */}
-      <div className="mb-16">
-        <h2 className="text-lg font-semibold text-white mb-5 flex items-center gap-2">
-          <span className="w-1 h-5 rounded-full bg-emerald-500 inline-block" />
+      <div className="mb-12 md:mb-16">
+        <h2 className="text-base md:text-lg font-semibold text-white mb-4 md:mb-5 flex items-center gap-2">
+          <span className="w-1 h-5 rounded-full bg-emerald-500 inline-block shrink-0" />
           Risk management
         </h2>
         <div className="space-y-4 text-sm text-zinc-400 leading-relaxed">
           <p>
             The agent never calculates a position size without a defined stop-loss. Every signal includes an entry, stop-loss, and take-profit level — the risk-to-reward ratio must be at least 1:1.5 for a trade to be routed.
           </p>
-          <p>
-            Position sizing uses the formula: <code className="text-emerald-400 bg-zinc-900 px-1.5 py-0.5 rounded text-xs">position_size = (account_balance × risk_%) / stop_distance</code>. Taker fees and slippage are subtracted from the expected P&amp;L before the trade is accepted.
+          <p className="break-words">
+            Position sizing uses the formula: <code className="text-emerald-400 bg-zinc-900 px-1.5 py-0.5 rounded text-xs break-words whitespace-normal">position_size = (account_balance × risk_%) / stop_distance</code>. Taker fees and slippage are subtracted from the expected P&amp;L before the trade is accepted.
           </p>
           <p>
             Circuit breakers run independently: the Kill Switch halts all new trades if your daily loss limit or max drawdown threshold is hit. These rules apply in both paper and live mode.
@@ -114,14 +114,14 @@ export default function StrategyPage() {
         </div>
       </div>
 
-      <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800 p-8 text-center">
-        <p className="text-2xl font-bold text-white mb-2">Validate before you risk capital</p>
-        <p className="text-zinc-400 mb-6">Run the full SMC + indicator pipeline on live data in paper mode — free, no credit card.</p>
+      <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800 p-5 md:p-8 text-center">
+        <p className="text-xl md:text-2xl font-bold text-white mb-2">Validate before you risk capital</p>
+        <p className="text-zinc-400 mb-6 text-sm md:text-base">Run the full SMC + indicator pipeline on live data in paper mode — free, no credit card.</p>
         <Link
           href="/sign-up"
-          className="inline-flex items-center gap-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-8 py-3 transition-colors"
+          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-8 min-h-11 py-3 transition-colors"
         >
-          Start paper trading <ArrowRight className="h-4 w-4" />
+          Start paper trading <ArrowRight className="h-4 w-4 shrink-0" />
         </Link>
       </div>
     </article>

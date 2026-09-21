@@ -20,6 +20,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { and, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
 import { db } from '@/db';
 import { tradeExecutions, tradeSignals, publisherEarnings } from '@/db/schema';
+import { computeLeveragedPnlPct } from '@/lib/pnl';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -33,17 +34,18 @@ const PAGE_SIZE = 25;
 
 interface RawPayload {
   indicators1h?: {
-    rsi?: number | null;
-    ema20?: number | null;
-    ema50?: number | null;
-    ema200?: number | null;
-    macdLine?: number | null;
-    macdSignal?: number | null;
-    macdHistogram?: number | null;
-    adx?: number | null;
-    atrPct?: number | null;
-    bbWidth?: number | null;
-    emaAlignment?: string | null;
+    rsi?: { value: number | null } | null;
+    ema?: {
+      ema20?: number | null;
+      ema50?: number | null;
+      ema200?: number | null;
+      direction?: string | null;
+    } | null;
+    macd?: {
+      macdLine?: number | null;
+      signalLine?: number | null;
+      histogram?: number | null;
+    } | null;
     [key: string]: unknown;
   };
   smcStructures?: unknown;
@@ -145,6 +147,7 @@ export async function GET(req: NextRequest) {
         status: tradeExecutions.status,
         mode: tradeExecutions.mode,
         fillType: tradeExecutions.fillType,
+        leverage: tradeExecutions.leverage,
         entryAt: tradeExecutions.entryAt,
         exitAt: tradeExecutions.exitAt,
         // From signal (nullable)
@@ -302,6 +305,10 @@ export async function GET(req: NextRequest) {
       positionSize,
       realizedPnl,
       realizedPnlPct,
+      // ROI on margin (% of notional × leverage) — matches the headline
+      // percentage exchanges show, vs. realizedPnlPct above (% of notional).
+      realizedPnlPctLeveraged: computeLeveragedPnlPct(realizedPnlPct, r.leverage),
+      leverage: r.leverage ?? 1,
       // Expose the fee deduction so the UI can display it separately
       performanceFeeDeducted,
       status: r.status,
@@ -312,14 +319,14 @@ export async function GET(req: NextRequest) {
       confidence: r.confidence ?? null,
       indicators: ind
         ? {
-            rsi: ind.rsi ?? null,
-            ema20: ind.ema20 ?? null,
-            ema50: ind.ema50 ?? null,
-            ema200: ind.ema200 ?? null,
-            emaAlignment: ind.emaAlignment ?? null,
-            macdLine: ind.macdLine ?? null,
-            macdSignal: ind.macdSignal ?? null,
-            macdHistogram: ind.macdHistogram ?? null,
+            rsi: ind.rsi?.value ?? null,
+            ema20: ind.ema?.ema20 ?? null,
+            ema50: ind.ema?.ema50 ?? null,
+            ema200: ind.ema?.ema200 ?? null,
+            emaAlignment: ind.ema?.direction ?? null,
+            macdLine: ind.macd?.macdLine ?? null,
+            macdSignal: ind.macd?.signalLine ?? null,
+            macdHistogram: ind.macd?.histogram ?? null,
           }
         : null,
       newsSentiment: r.newsSentiment ?? null,

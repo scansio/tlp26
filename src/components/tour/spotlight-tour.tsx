@@ -86,10 +86,11 @@ function getRect(selector: string): Rect | null {
 function computeTooltipPos(
   rect: Rect,
   side: TourStep['side'],
-): { top: number; left: number } {
+): { top: number; left: number; width: number } {
   const GAP = 14;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
+  const width = Math.min(TOOLTIP_W, vw - 16);
   let top: number, left: number;
 
   switch (side) {
@@ -99,21 +100,22 @@ function computeTooltipPos(
       break;
     case 'left':
       top = rect.top + rect.height / 2 - TOOLTIP_H_EST / 2;
-      left = rect.left - TOOLTIP_W - GAP;
+      left = rect.left - width - GAP;
       break;
     case 'top':
       top = rect.top - TOOLTIP_H_EST - GAP;
-      left = rect.left + rect.width / 2 - TOOLTIP_W / 2;
+      left = rect.left + rect.width / 2 - width / 2;
       break;
     default:
       top = rect.top + rect.height + GAP;
-      left = rect.left + rect.width / 2 - TOOLTIP_W / 2;
+      left = rect.left + rect.width / 2 - width / 2;
       break;
   }
 
   return {
     top: Math.max(8, Math.min(top, vh - TOOLTIP_H_EST - 8)),
-    left: Math.max(8, Math.min(left, vw - TOOLTIP_W - 8)),
+    left: Math.max(8, Math.min(left, vw - width - 8)),
+    width,
   };
 }
 
@@ -125,7 +127,8 @@ export function SpotlightTour() {
 
   useEffect(() => {
     setMounted(true);
-    if (!localStorage.getItem(TOUR_KEY)) {
+    const isDesktop = window.matchMedia('(min-width: 768px)').matches;
+    if (isDesktop && !localStorage.getItem(TOUR_KEY)) {
       const id = setTimeout(() => setActive(true), 700);
       return () => clearTimeout(id);
     }
@@ -192,7 +195,7 @@ export function SpotlightTour() {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -6 }}
           transition={{ duration: 0.18 }}
-          style={{ position: 'fixed', top: tip.top, left: tip.left, width: TOOLTIP_W, zIndex: 9995 }}
+          style={{ position: 'fixed', top: tip.top, left: tip.left, width: tip.width, zIndex: 9995 }}
           className="rounded-xl border border-border bg-background p-4 shadow-2xl"
         >
           {/* Progress + close */}

@@ -129,17 +129,13 @@ export async function propagatePublisherSignal(
       ? Number(pubProfile.riskPerTradePct)
       : null;
 
-    // Publisher position size stored in rawPayload by the workflow/webhook.
-    // Falls back to 0 so scaling degrades gracefully (subscriber gets 0 → skipped).
+    // Publisher position size stored on the signal's own riskCalculation
+    // column (computed once at creation time — see risk_calculation comment
+    // in src/db/schema.ts). Falls back to 0 so scaling degrades gracefully
+    // (subscriber gets 0 → skipped).
     const publisherPositionSize: number =
-      (pubSignal.rawPayload as Record<string, unknown> | null)
-        ?.riskCalculation != null
-        ? Number(
-            (
-              (pubSignal.rawPayload as Record<string, unknown>)
-                .riskCalculation as Record<string, unknown>
-            ).positionSizeUsdt ?? 0,
-          )
+      pubSignal.riskCalculation != null
+        ? Number((pubSignal.riskCalculation as Record<string, unknown>).positionSizeUsdt ?? 0)
         : 0;
 
     // --- 4. Fetch all active subscriptions for this publisher ---

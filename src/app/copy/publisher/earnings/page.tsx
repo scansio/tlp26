@@ -208,14 +208,14 @@ export default function PublisherEarningsPage() {
 
   if (error || data === null) {
     return (
-      <div className="max-w-2xl mx-auto py-10 px-4 space-y-4">
-        <div className="flex items-center gap-4">
+      <div className="max-w-2xl mx-auto py-6 md:py-10 px-4 space-y-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
           <Link href="/copy/publisher">
-            <Button variant="outline" size="sm">Back to Profile</Button>
+            <Button variant="outline" size="sm" className="h-11 md:h-8 w-full sm:w-auto">Back to Profile</Button>
           </Link>
-          <h1 className="text-2xl font-bold">Publisher Earnings</h1>
+          <h1 className="text-xl md:text-2xl font-bold">Publisher Earnings</h1>
         </div>
-        <Card className="p-6 border-destructive">
+        <Card className="p-4 md:p-6 border-destructive">
           <p className="text-destructive">{error ?? 'Unknown error'}</p>
           {!data && (
             <p className="text-sm text-muted-foreground mt-2">
@@ -231,15 +231,15 @@ export default function PublisherEarningsPage() {
   const { totals, bySubscriber, byMonth, recentEarnings, feePercent } = data;
 
   return (
-    <div className="max-w-4xl mx-auto py-10 px-4 space-y-8">
+    <div className="max-w-4xl mx-auto py-6 md:py-10 px-4 space-y-6 md:space-y-8">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
             <Link href="/copy/publisher">
-              <Button variant="outline" size="sm">Back to Profile</Button>
+              <Button variant="outline" size="sm" className="h-11 md:h-8 w-full sm:w-auto">Back to Profile</Button>
             </Link>
-            <h1 className="text-2xl font-bold">Publisher Earnings</h1>
+            <h1 className="text-xl md:text-2xl font-bold">Publisher Earnings</h1>
           </div>
           <p className="text-muted-foreground mt-1 text-sm">
             Performance fees accrued from subscriber profits.
@@ -254,7 +254,7 @@ export default function PublisherEarningsPage() {
       </div>
 
       {/* Summary stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard
           label="Net Earnings (You Keep)"
           value={`$${fmt(totals.totalPublisherNet)}`}
@@ -280,7 +280,7 @@ export default function PublisherEarningsPage() {
       </div>
 
       {/* Monthly chart */}
-      <Card className="p-6 space-y-4">
+      <Card className="p-4 md:p-6 space-y-4">
         <div>
           <h2 className="text-lg font-semibold">Monthly Earnings (Net)</h2>
           <p className="text-sm text-muted-foreground">
@@ -289,35 +289,53 @@ export default function PublisherEarningsPage() {
         </div>
         <MonthlyChart data={byMonth} />
         {byMonth.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left pb-2 text-muted-foreground font-medium">Month</th>
-                  <th className="text-right pb-2 text-muted-foreground font-medium">Trades</th>
-                  <th className="text-right pb-2 text-muted-foreground font-medium">Gross Fee</th>
-                  <th className="text-right pb-2 text-muted-foreground font-medium">Net Earnings</th>
-                </tr>
-              </thead>
-              <tbody>
-                {byMonth.map((m) => (
-                  <tr key={m.period ?? 'none'} className="border-b last:border-0">
-                    <td className="py-2">{m.period ?? '—'}</td>
-                    <td className="py-2 text-right">{m.tradeCount}</td>
-                    <td className="py-2 text-right">${fmt(m.totalFee)}</td>
-                    <td className="py-2 text-right text-green-600 dark:text-green-400 font-medium">
+          <>
+            <div className="md:hidden divide-y divide-border rounded-md border">
+              {byMonth.map((m) => (
+                <div key={m.period ?? 'none'} className="p-3 space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium min-w-0 truncate">{m.period ?? '—'}</span>
+                    <span className="text-green-600 dark:text-green-400 font-medium shrink-0">
                       ${fmt(m.totalNet)}
-                    </td>
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>{m.tradeCount} trades</span>
+                    <span>Gross ${fmt(m.totalFee)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left pb-2 text-muted-foreground font-medium">Month</th>
+                    <th className="text-right pb-2 text-muted-foreground font-medium">Trades</th>
+                    <th className="text-right pb-2 text-muted-foreground font-medium">Gross Fee</th>
+                    <th className="text-right pb-2 text-muted-foreground font-medium">Net Earnings</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {byMonth.map((m) => (
+                    <tr key={m.period ?? 'none'} className="border-b last:border-0">
+                      <td className="py-2">{m.period ?? '—'}</td>
+                      <td className="py-2 text-right">{m.tradeCount}</td>
+                      <td className="py-2 text-right">${fmt(m.totalFee)}</td>
+                      <td className="py-2 text-right text-green-600 dark:text-green-400 font-medium">
+                        ${fmt(m.totalNet)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </Card>
 
       {/* Per-subscriber breakdown */}
-      <Card className="p-6 space-y-4">
+      <Card className="p-4 md:p-6 space-y-4">
         <div>
           <h2 className="text-lg font-semibold">Per-Subscriber Breakdown</h2>
           <p className="text-sm text-muted-foreground">
@@ -327,37 +345,65 @@ export default function PublisherEarningsPage() {
         {bySubscriber.length === 0 ? (
           <p className="text-muted-foreground text-sm py-4">No earnings yet.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left pb-2 text-muted-foreground font-medium">Subscriber</th>
-                  <th className="text-right pb-2 text-muted-foreground font-medium">Trades</th>
-                  <th className="text-right pb-2 text-muted-foreground font-medium">Subscriber Profit</th>
-                  <th className="text-right pb-2 text-muted-foreground font-medium">Gross Fee</th>
-                  <th className="text-right pb-2 text-muted-foreground font-medium">Net to You</th>
-                </tr>
-              </thead>
-              <tbody>
-                {bySubscriber.map((s) => (
-                  <tr key={s.subscriberId} className="border-b last:border-0">
-                    <td className="py-2 font-mono text-xs">{fmtShort(s.subscriberId)}</td>
-                    <td className="py-2 text-right">{s.tradeCount}</td>
-                    <td className="py-2 text-right">${fmt(s.totalProfit)}</td>
-                    <td className="py-2 text-right">${fmt(s.totalFee)}</td>
-                    <td className="py-2 text-right text-green-600 dark:text-green-400 font-medium">
-                      ${fmt(s.totalNet)}
-                    </td>
+          <>
+            <div className="md:hidden space-y-3">
+              {bySubscriber.map((s) => (
+                <div key={s.subscriberId} className="rounded-md border p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-xs min-w-0 truncate">{fmtShort(s.subscriberId)}</span>
+                    <Badge variant="secondary" className="shrink-0">{s.tradeCount} trades</Badge>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div className="min-w-0">
+                      <p className="text-muted-foreground">Profit</p>
+                      <p className="truncate">${fmt(s.totalProfit)}</p>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-muted-foreground">Gross Fee</p>
+                      <p className="truncate">${fmt(s.totalFee)}</p>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-muted-foreground">Net</p>
+                      <p className="truncate text-green-600 dark:text-green-400 font-medium">
+                        ${fmt(s.totalNet)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left pb-2 text-muted-foreground font-medium">Subscriber</th>
+                    <th className="text-right pb-2 text-muted-foreground font-medium">Trades</th>
+                    <th className="text-right pb-2 text-muted-foreground font-medium">Subscriber Profit</th>
+                    <th className="text-right pb-2 text-muted-foreground font-medium">Gross Fee</th>
+                    <th className="text-right pb-2 text-muted-foreground font-medium">Net to You</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {bySubscriber.map((s) => (
+                    <tr key={s.subscriberId} className="border-b last:border-0">
+                      <td className="py-2 font-mono text-xs">{fmtShort(s.subscriberId)}</td>
+                      <td className="py-2 text-right">{s.tradeCount}</td>
+                      <td className="py-2 text-right">${fmt(s.totalProfit)}</td>
+                      <td className="py-2 text-right">${fmt(s.totalFee)}</td>
+                      <td className="py-2 text-right text-green-600 dark:text-green-400 font-medium">
+                        ${fmt(s.totalNet)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </Card>
 
       {/* Recent individual earnings */}
-      <Card className="p-6 space-y-4">
+      <Card className="p-4 md:p-6 space-y-4">
         <div>
           <h2 className="text-lg font-semibold">Recent Earning Records</h2>
           <p className="text-sm text-muted-foreground">
@@ -367,34 +413,62 @@ export default function PublisherEarningsPage() {
         {recentEarnings.length === 0 ? (
           <p className="text-muted-foreground text-sm py-4">No earnings yet. Fees accrue when subscribers close profitable copied trades.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left pb-2 text-muted-foreground font-medium">Date</th>
-                  <th className="text-left pb-2 text-muted-foreground font-medium">Period</th>
-                  <th className="text-left pb-2 text-muted-foreground font-medium">Subscriber</th>
-                  <th className="text-right pb-2 text-muted-foreground font-medium">Profit</th>
-                  <th className="text-right pb-2 text-muted-foreground font-medium">Fee</th>
-                  <th className="text-right pb-2 text-muted-foreground font-medium">Net</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentEarnings.map((e) => (
-                  <tr key={e.id} className="border-b last:border-0">
-                    <td className="py-2 whitespace-nowrap">{formatDate(e.createdAt)}</td>
-                    <td className="py-2">{e.period ?? '—'}</td>
-                    <td className="py-2 font-mono text-xs">{fmtShort(e.subscriberId)}</td>
-                    <td className="py-2 text-right">${fmt(e.profitAmount)}</td>
-                    <td className="py-2 text-right">${fmt(e.feeAmount)}</td>
-                    <td className="py-2 text-right text-green-600 dark:text-green-400 font-medium">
+          <>
+            <div className="md:hidden space-y-3">
+              {recentEarnings.map((e) => (
+                <div key={e.id} className="rounded-md border p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span className="whitespace-nowrap">{formatDate(e.createdAt)}</span>
+                    <span className="min-w-0 truncate">{e.period ?? '—'}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-xs min-w-0 truncate">{fmtShort(e.subscriberId)}</span>
+                    <span className="text-green-600 dark:text-green-400 font-medium shrink-0">
                       ${fmt(e.publisherNetAmount)}
-                    </td>
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="min-w-0">
+                      <p className="text-muted-foreground">Profit</p>
+                      <p className="truncate">${fmt(e.profitAmount)}</p>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-muted-foreground">Fee</p>
+                      <p className="truncate">${fmt(e.feeAmount)}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left pb-2 text-muted-foreground font-medium">Date</th>
+                    <th className="text-left pb-2 text-muted-foreground font-medium">Period</th>
+                    <th className="text-left pb-2 text-muted-foreground font-medium">Subscriber</th>
+                    <th className="text-right pb-2 text-muted-foreground font-medium">Profit</th>
+                    <th className="text-right pb-2 text-muted-foreground font-medium">Fee</th>
+                    <th className="text-right pb-2 text-muted-foreground font-medium">Net</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {recentEarnings.map((e) => (
+                    <tr key={e.id} className="border-b last:border-0">
+                      <td className="py-2 whitespace-nowrap">{formatDate(e.createdAt)}</td>
+                      <td className="py-2">{e.period ?? '—'}</td>
+                      <td className="py-2 font-mono text-xs">{fmtShort(e.subscriberId)}</td>
+                      <td className="py-2 text-right">${fmt(e.profitAmount)}</td>
+                      <td className="py-2 text-right">${fmt(e.feeAmount)}</td>
+                      <td className="py-2 text-right text-green-600 dark:text-green-400 font-medium">
+                        ${fmt(e.publisherNetAmount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </Card>
     </div>

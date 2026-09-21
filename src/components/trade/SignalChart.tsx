@@ -29,6 +29,8 @@ interface Props {
   takeProfit?: number | null;
   direction?: string | null;
   smcLevels?: SmcLevelInput[] | null;
+  exchange?: string | null;
+  marketType?: string | null;
 }
 
 type SmcType = 'ChoCH' | 'BOS' | 'FVG' | 'OB' | 'Sweep' | 'POI';
@@ -116,6 +118,7 @@ function pct(a: number, b: number) {
 
 export function SignalChart({
   symbol, timeframe, entry, stopLoss, takeProfit, direction, smcLevels: smcLevelsProp,
+  exchange, marketType,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus]     = useState<'loading' | 'error' | 'ready'>('loading');
@@ -144,8 +147,11 @@ export function SignalChart({
 
     async function init() {
       try {
+        const params = new URLSearchParams({ symbol, timeframe: tf, limit: '300' });
+        if (exchange) params.set('exchange', exchange);
+        if (marketType) params.set('marketType', marketType);
         const res = await fetch(
-          `/api/ohlcv?symbol=${encodeURIComponent(symbol)}&timeframe=${tf}&limit=300`,
+          `/api/ohlcv?${params.toString()}`,
           { signal: controller.signal },
         );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -261,7 +267,7 @@ export function SignalChart({
     void init();
     return () => { controller.abort(); observer?.disconnect(); chart?.remove(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, timeframe, entry, stopLoss, takeProfit, direction, smcKey]);
+  }, [symbol, timeframe, entry, stopLoss, takeProfit, direction, smcKey, exchange, marketType]);
 
   return (
     <div className="relative w-full h-full" style={{ background: '#131722' }}>

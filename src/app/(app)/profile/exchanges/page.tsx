@@ -12,6 +12,7 @@ import {
   WifiOff,
   Loader2,
   AlertTriangle,
+  Server,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -29,6 +30,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { NotificationsSection } from './_components/notifications-section';
+import { LlmKeySection } from './_components/llm-key-section';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -125,6 +127,11 @@ export default function ExchangesPage() {
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState('');
 
+  // Server IP (for exchanges that require IP-whitelisting an API key)
+  const [serverIp, setServerIp] = useState<string | null>(null);
+  const [serverIpError, setServerIpError] = useState(false);
+  const [ipCopied, setIpCopied] = useState(false);
+
   const fetchData = useCallback(async () => {
     try {
       const res = await fetch('/api/exchanges');
@@ -142,6 +149,23 @@ export default function ExchangesPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    fetch('/api/exchanges/server-ip')
+      .then(async (res) => {
+        if (!res.ok) throw new Error();
+        const json: { ip: string } = await res.json();
+        setServerIp(json.ip);
+      })
+      .catch(() => setServerIpError(true));
+  }, []);
+
+  async function handleCopyIp() {
+    if (!serverIp) return;
+    await navigator.clipboard.writeText(serverIp);
+    setIpCopied(true);
+    setTimeout(() => setIpCopied(false), 2000);
+  }
 
   // ------------------------------------------------------------------
   // Add exchange
@@ -281,7 +305,7 @@ export default function ExchangesPage() {
   // ------------------------------------------------------------------
 
   return (
-    <div className="max-w-2xl mx-auto py-10 px-4 space-y-8">
+    <div className="max-w-2xl mx-auto py-6 px-4 space-y-6 md:py-10 md:space-y-8">
       <div>
         <h1 className="text-2xl font-bold">Exchange Connections</h1>
         <p className="text-muted-foreground mt-1">
@@ -300,7 +324,7 @@ export default function ExchangesPage() {
       {/* ------------------------------------------------------------------ */}
       {/* Connected exchanges list                                             */}
       {/* ------------------------------------------------------------------ */}
-      <Card className="p-6 space-y-4">
+      <Card className="p-4 md:p-6 space-y-4">
         <div>
           <h2 className="text-lg font-semibold">Connected Exchanges</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
@@ -347,7 +371,7 @@ export default function ExchangesPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0"
+                      className="text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0 size-11 sm:h-8 sm:w-auto"
                       onClick={() => setRemoveTarget(ex)}
                     >
                       <Trash2 className="w-4 h-4" />
@@ -377,7 +401,7 @@ export default function ExchangesPage() {
 
                     <DialogFooter>
                       <DialogClose asChild>
-                        <Button variant="outline" disabled={removing}>
+                        <Button variant="outline" disabled={removing} className="w-full sm:w-auto h-11 sm:h-9">
                           Cancel
                         </Button>
                       </DialogClose>
@@ -385,6 +409,7 @@ export default function ExchangesPage() {
                         variant="destructive"
                         disabled={removing}
                         onClick={handleRemove}
+                        className="w-full sm:w-auto h-11 sm:h-9"
                       >
                         {removing ? (
                           <>
@@ -405,9 +430,40 @@ export default function ExchangesPage() {
       </Card>
 
       {/* ------------------------------------------------------------------ */}
+      {/* Server IP — needed if your exchange requires IP-whitelisting a key   */}
+      {/* ------------------------------------------------------------------ */}
+      <Card className="p-4 md:p-6 space-y-3">
+        <div className="flex items-center gap-2">
+          <Server className="w-4 h-4 text-muted-foreground" />
+          <h2 className="text-lg font-semibold">Server IP Address</h2>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Some exchanges require whitelisting an IP address on the API key. If prompted, add
+          this address to the key&apos;s IP whitelist.
+        </p>
+        <div className="flex items-center gap-2">
+          <Input
+            readOnly
+            value={serverIpError ? 'Unable to determine server IP' : serverIp ?? 'Loading…'}
+            className="font-mono text-xs bg-muted"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCopyIp}
+            disabled={!serverIp}
+            aria-label="Copy server IP"
+            className="size-11 sm:h-8 sm:w-auto shrink-0"
+          >
+            {ipCopied ? <CheckCircle className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+          </Button>
+        </div>
+      </Card>
+
+      {/* ------------------------------------------------------------------ */}
       {/* Add exchange form                                                    */}
       {/* ------------------------------------------------------------------ */}
-      <Card className="p-6 space-y-5">
+      <Card className="p-4 md:p-6 space-y-5">
         <div>
           <h2 className="text-lg font-semibold">Add Exchange</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
@@ -419,7 +475,7 @@ export default function ExchangesPage() {
         <div className="space-y-2">
           <label className="text-sm font-medium">Exchange</label>
           <select
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="flex h-11 sm:h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             value={addForm.exchangeName}
             onChange={(e) =>
               setAddForm((f) => ({ ...f, exchangeName: e.target.value }))
@@ -443,11 +499,11 @@ export default function ExchangesPage() {
               onChange={(e) =>
                 setAddForm((f) => ({ ...f, apiKey: e.target.value }))
               }
-              className="pr-10"
+              className="pr-10 h-11 sm:h-9"
             />
             <button
               type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-3.5 sm:p-0"
               onClick={() => setShowApiKey((v) => !v)}
               aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
             >
@@ -471,11 +527,11 @@ export default function ExchangesPage() {
               onChange={(e) =>
                 setAddForm((f) => ({ ...f, apiSecret: e.target.value }))
               }
-              className="pr-10"
+              className="pr-10 h-11 sm:h-9"
             />
             <button
               type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-3.5 sm:p-0"
               onClick={() => setShowApiSecret((v) => !v)}
               aria-label={showApiSecret ? 'Hide API secret' : 'Show API secret'}
             >
@@ -509,6 +565,7 @@ export default function ExchangesPage() {
             onChange={(e) =>
               setAddForm((f) => ({ ...f, passphrase: e.target.value }))
             }
+            className="h-11 sm:h-9"
           />
         </div>
 
@@ -534,7 +591,7 @@ export default function ExchangesPage() {
             !addForm.apiKey ||
             !addForm.apiSecret
           }
-          className="w-full sm:w-auto"
+          className="w-full sm:w-auto h-11 sm:h-9"
         >
           {connecting ? (
             <>
@@ -552,7 +609,7 @@ export default function ExchangesPage() {
       {/* ------------------------------------------------------------------ */}
       {/* TradingView Webhook section                                          */}
       {/* ------------------------------------------------------------------ */}
-      <Card className="p-6 space-y-5">
+      <Card className="p-4 md:p-6 space-y-5">
         <div>
           <h2 className="text-lg font-semibold">TradingView Webhook</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
@@ -574,6 +631,7 @@ export default function ExchangesPage() {
               size="sm"
               onClick={handleCopyUrl}
               aria-label="Copy webhook URL"
+              className="size-11 sm:h-8 sm:w-auto shrink-0"
             >
               {copied ? <CheckCircle className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
             </Button>
@@ -595,6 +653,7 @@ export default function ExchangesPage() {
               size="sm"
               onClick={() => setShowToken((v) => !v)}
               aria-label={showToken ? 'Hide token' : 'Show token'}
+              className="size-11 sm:h-8 sm:w-auto shrink-0"
             >
               {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
             </Button>
@@ -603,6 +662,7 @@ export default function ExchangesPage() {
               size="sm"
               onClick={handleCopyToken}
               aria-label="Copy secret token"
+              className="size-11 sm:h-8 sm:w-auto shrink-0"
             >
               {copied ? <CheckCircle className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
             </Button>
@@ -612,7 +672,7 @@ export default function ExchangesPage() {
         {/* Regenerate token */}
         <Dialog open={regenerateOpen} onOpenChange={setRegenerateOpen}>
           <DialogTrigger asChild>
-            <Button variant="outline" size="sm">
+            <Button variant="outline" size="sm" className="w-full sm:w-auto h-11 sm:h-8">
               <RefreshCw className="w-4 h-4 mr-2" />
               Regenerate Token
             </Button>
@@ -627,7 +687,7 @@ export default function ExchangesPage() {
             </DialogHeader>
             <DialogFooter>
               <DialogClose asChild>
-                <Button variant="outline" disabled={regenerating}>
+                <Button variant="outline" disabled={regenerating} className="w-full sm:w-auto h-11 sm:h-9">
                   Cancel
                 </Button>
               </DialogClose>
@@ -635,6 +695,7 @@ export default function ExchangesPage() {
                 variant="destructive"
                 disabled={regenerating}
                 onClick={handleRegenerate}
+                className="w-full sm:w-auto h-11 sm:h-9"
               >
                 {regenerating ? (
                   <>
@@ -669,6 +730,13 @@ export default function ExchangesPage() {
       {/* Notifications section                                               */}
       {/* ------------------------------------------------------------------ */}
       <NotificationsSection />
+
+      <Separator />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* BYOK (bring your own model key) section                             */}
+      {/* ------------------------------------------------------------------ */}
+      <LlmKeySection />
     </div>
   );
 }

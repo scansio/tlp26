@@ -34,6 +34,7 @@ interface OpenPosition {
   entryPrice: number | null;
   currentPrice: number | null;
   positionSize: number | null;
+  leverage?: number | null;
   unrealizedPnlUsd: number | null;
   unrealizedPnlPct: number | null;
   stopLoss: number | null;
@@ -114,7 +115,7 @@ function StatCard({
       : 'text-muted-foreground';
 
   return (
-    <Card className="p-5 gap-0">
+    <Card className="p-4 md:p-5 gap-0">
       <div className="flex items-start justify-between">
         <div className="space-y-1.5 flex-1 min-w-0">
           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider truncate">{title}</p>
@@ -136,8 +137,59 @@ function StatCard({
 }
 
 // ---------------------------------------------------------------------------
-// Position row
+// Position row / card
 // ---------------------------------------------------------------------------
+
+function PositionCard({ pos, onOpen }: { pos: OpenPosition; onOpen: () => void }) {
+  const pnlPositive = pos.unrealizedPnlUsd !== null && pos.unrealizedPnlUsd >= 0;
+
+  return (
+    <Card
+      className="p-4 gap-3 cursor-pointer active:bg-accent/50 transition-colors"
+      onClick={onOpen}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="font-semibold text-sm truncate">{pos.symbol}</span>
+          <Badge
+            variant={pos.direction === 'LONG' ? 'default' : 'destructive'}
+            className="text-xs font-semibold shrink-0"
+          >
+            {pos.direction === 'LONG' ? '↑ LONG' : '↓ SHORT'}
+          </Badge>
+        </div>
+        <div className="text-right shrink-0">
+          <div className={pos.unrealizedPnlUsd === null ? 'text-sm text-muted-foreground' : pnlPositive ? 'text-sm font-semibold text-green-600 dark:text-green-400' : 'text-sm font-semibold text-red-600 dark:text-red-400'}>
+            {pos.unrealizedPnlUsd === null ? '—' : formatCurrency(pos.unrealizedPnlUsd)}
+          </div>
+          {pos.unrealizedPnlPct !== null && (
+            <div className={pos.unrealizedPnlPct >= 0 ? 'text-xs text-green-600 dark:text-green-400' : 'text-xs text-red-600 dark:text-red-400'}>
+              {formatPct(pos.unrealizedPnlPct)}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">Entry</span>
+          <span className="tabular-nums text-muted-foreground">{formatPrice(pos.entryPrice)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">Current</span>
+          <span className="tabular-nums">{pos.currentPrice !== null ? formatPrice(pos.currentPrice) : '—'}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">Stop Loss</span>
+          <span className="tabular-nums text-red-400">{pos.stopLoss !== null ? formatPrice(pos.stopLoss) : '—'}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">Take Profit</span>
+          <span className="tabular-nums text-green-400">{pos.takeProfit !== null ? formatPrice(pos.takeProfit) : '—'}</span>
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 function PositionRow({ pos, onOpen }: { pos: OpenPosition; onOpen: () => void }) {
   const pnlPositive = pos.unrealizedPnlUsd !== null && pos.unrealizedPnlUsd >= 0;
@@ -241,7 +293,7 @@ export default function DashboardPage() {
               <p className="font-semibold">Failed to load dashboard</p>
             </div>
             <p className="text-sm text-muted-foreground">{error}</p>
-            <Button variant="outline" size="sm" onClick={() => void fetchData()}>Retry</Button>
+            <Button variant="outline" size="sm" className="h-11 md:h-8 w-full sm:w-auto" onClick={() => void fetchData()}>Retry</Button>
           </CardContent>
         </Card>
       </div>
@@ -304,10 +356,10 @@ export default function DashboardPage() {
             Portfolio overview{lastRefreshed && <> · Updated {lastRefreshed.toLocaleTimeString()}</>}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
           {pendingSignalsCount > 0 && (
-            <Link href="/signals">
-              <Button variant="outline" size="sm" className="gap-2">
+            <Link href="/signals" className="flex-1 sm:flex-none">
+              <Button variant="outline" size="sm" className="gap-2 h-11 md:h-8 w-full sm:w-auto">
                 <Zap className="size-3.5" />
                 Signals
                 <Badge className="h-5 min-w-5 rounded-full px-1.5 text-xs font-bold">
@@ -321,7 +373,7 @@ export default function DashboardPage() {
             size="sm"
             onClick={() => void fetchData(true)}
             disabled={refreshing}
-            className="gap-2"
+            className="gap-2 h-11 md:h-8 flex-1 sm:flex-none"
           >
             <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
             Refresh
@@ -338,7 +390,7 @@ export default function DashboardPage() {
       )}
 
       {/* Stat cards */}
-      <div data-tour="stat-cards" className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div data-tour="stat-cards" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Account Equity"
           icon={DollarSign}
@@ -403,24 +455,31 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
         ) : (
-          <Card className="overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-muted/30">
-                    {['Symbol', 'Side', 'Entry', 'Current', 'P&L ($)', 'P&L (%)', 'SL', 'TP'].map((h) => (
-                      <th key={h} className="py-3 px-4 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {openPositions.map((pos) => (
-                    <PositionRow key={pos.id} pos={pos} onOpen={() => setSelectedPosition(pos)} />
-                  ))}
-                </tbody>
-              </table>
+          <>
+            <div className="md:hidden space-y-3">
+              {openPositions.map((pos) => (
+                <PositionCard key={pos.id} pos={pos} onOpen={() => setSelectedPosition(pos)} />
+              ))}
             </div>
-          </Card>
+            <Card className="hidden md:block overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/30">
+                      {['Symbol', 'Side', 'Entry', 'Current', 'P&L ($)', 'P&L (%)', 'SL', 'TP'].map((h) => (
+                        <th key={h} className="py-3 px-4 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {openPositions.map((pos) => (
+                      <PositionRow key={pos.id} pos={pos} onOpen={() => setSelectedPosition(pos)} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </>
         )}
       </div>
 
@@ -447,15 +506,15 @@ export default function DashboardPage() {
                 <p className="text-sm text-muted-foreground">No pending signals</p>
               </div>
             ) : (
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div>
                   <p className="text-2xl font-bold tabular-nums">{pendingSignalsCount}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     signal{pendingSignalsCount !== 1 ? 's' : ''} awaiting review
                   </p>
                 </div>
-                <Link href="/signals">
-                  <Button size="sm" className="gap-1.5">
+                <Link href="/signals" className="w-full sm:w-auto">
+                  <Button size="sm" className="gap-1.5 h-11 md:h-8 w-full sm:w-auto">
                     View Signals
                     <ArrowUpRight className="size-3.5" />
                   </Button>

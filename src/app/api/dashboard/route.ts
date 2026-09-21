@@ -18,14 +18,14 @@ import { and, count, eq, gte, sql } from 'drizzle-orm';
 import ccxt, { type Exchange } from 'ccxt';
 import { db } from '@/db';
 import {
-  userExchanges,
   userRiskProfiles,
   tradeExecutions,
   tradeSignals,
 } from '@/db/schema';
-import { decrypt } from '@/lib/crypto';
 import { getCircuitBreakerState } from '@/lib/circuit-breaker';
 import { computePnlUsd, computePnlPct } from '@/lib/pnl';
+import { getUserActiveExchangeClient, extractUsdtBalance } from '@/lib/exchange-account';
+import { toExchangeSymbol, configureMarketType, type MarketType } from '@/mastra/tools/market-symbol';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -36,49 +36,6 @@ function startOfUtcDay(): Date {
   return new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0),
   );
-}
-
-async function getExchangeClient(userId: string): Promise<Exchange | null> {
-  const rows = await db
-    .select({
-      exchangeName: userExchanges.exchangeName,
-      encryptedApiKey: userExchanges.encryptedApiKey,
-      encryptedApiSecret: userExchanges.encryptedApiSecret,
-      encryptedPassphrase: userExchanges.encryptedPassphrase,
-    })
-    .from(userExchanges)
-    .where(
-      and(
-        eq(userExchanges.userId, userId),
-        eq(userExchanges.status, 'active'),
-      ),
-    )
-    .limit(1);
-
-  if (!rows[0]) return null;
-
-  const { exchangeName, encryptedApiKey, encryptedApiSecret, encryptedPassphrase } = rows[0];
-
-  let apiKey: string;
-  let secret: string;
-  let password: string | undefined;
-
-  try {
-    apiKey = decrypt(encryptedApiKey);
-    secret = decrypt(encryptedApiSecret);
-    password = encryptedPassphrase ? decrypt(encryptedPassphrase) : undefined;
-  } catch {
-    return null;
-  }
-
-  const ExchangeClass = (ccxt as unknown as Record<string, new (config: object) => Exchange>)[exchangeName];
-  if (!ExchangeClass) return null;
-
-  return new ExchangeClass({
-    apiKey,
-    secret,
-    ...(password ? { password } : {}),
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -113,10 +70,12 @@ export async function GET() {
           positionSize: tradeExecutions.positionSize,
           mode: tradeExecutions.mode,
           exchangeName: tradeExecutions.exchangeName,
+          marketType: tradeExecutions.marketType,
           direction: tradeSignals.direction,
           stopLoss: tradeSignals.stopLoss,
           takeProfit: tradeSignals.takeProfit,
           entryAt: tradeExecutions.entryAt,
+          leverage: tradeExecutions.leverage,
         })
         .from(tradeExecutions)
         .leftJoin(tradeSignals, eq(tradeExecutions.signalId, tradeSignals.id))
@@ -188,21 +147,46 @@ export async function GET() {
   let equity: number | null = null;
   let unrealizedPnl = 0;
 
-  // Deduplicate symbols for batch ticker fetch
-  const uniqueSymbols = [...new Set(openPositionRows.map((p) => p.symbol).filter(Boolean))];
-  const tickerMap = new Map<string, number>(); // symbol -> last price
+  // Group open positions by (marketType, symbol) — a symbol can be open as
+  // both spot and swap if the user changed their market-type setting between
+  // trades — for batch ticker fetch.
+  const uniquePairs = [
+    ...new Map(
+      openPositionRows
+        .filter((p) => p.symbol)
+        .map((p) => {
+          const marketType = (p.marketType as MarketType) ?? 'spot';
+          return [`${marketType}::${p.symbol}`, { marketType, symbol: p.symbol }] as const;
+        }),
+    ).values(),
+  ];
+  const tickerMap = new Map<string, number>(); // "marketType::symbol" -> last price
 
-  if (uniqueSymbols.length > 0) {
-    // For live mode: try authenticated client first; fall back to public on error.
-    // For paper mode: always use public (unauthenticated) client.
-    let exchangeClient: Exchange | null = null;
+  const profileMarketType = (riskProfile?.marketType as MarketType) ?? 'spot';
 
-    if (!isPaper) {
-      exchangeClient = await getExchangeClient(userId).catch(() => null);
+  // Live-mode balance fetch must not depend on having open positions — a
+  // freshly-connected live exchange with zero positions should still show
+  // its real balance instead of "N/A".
+  let exchangeClient: Exchange | null = null;
+  if (!isPaper) {
+    const resolved = await getUserActiveExchangeClient(userId).catch(() => null);
+    if (resolved) {
+      exchangeClient = resolved.client;
+      configureMarketType(exchangeClient, resolved.exchangeName, profileMarketType);
+      try {
+        const balance = await exchangeClient.fetchBalance();
+        const usdtTotal = extractUsdtBalance(balance);
+        if (usdtTotal !== null) equity = usdtTotal;
+      } catch {
+        // Exchange fetch failed — leave equity as null
+      }
     }
+  }
 
-    // If we still have no client (paper mode or credentials missing), use first open
-    // position's exchange with no auth for public ticker data
+  if (uniquePairs.length > 0) {
+    // For live mode: reuse the authenticated client above.
+    // For paper mode (or missing/invalid live credentials): use a public
+    // (unauthenticated) client so ticker data is still available.
     const firstExchange = openPositionRows[0]?.exchangeName;
     const publicExchange =
       firstExchange
@@ -217,30 +201,15 @@ export async function GET() {
     if (client) {
       // Fetch tickers in parallel; skip any that fail
       await Promise.allSettled(
-        uniqueSymbols.map(async (symbol) => {
+        uniquePairs.map(async (pair) => {
           try {
-            const ticker = await client.fetchTicker(symbol);
-            if (ticker.last) tickerMap.set(symbol, ticker.last);
+            const ticker = await client.fetchTicker(toExchangeSymbol(pair.symbol, pair.marketType));
+            if (ticker.last) tickerMap.set(`${pair.marketType}::${pair.symbol}`, ticker.last);
           } catch {
             // individual symbol failure — skip silently
           }
         }),
       );
-
-      // Fetch balance for live mode equity
-      if (!isPaper && exchangeClient) {
-        try {
-          const balance = await exchangeClient.fetchBalance();
-          // Total equity = total USDT/USDC free + used (including margin)
-          const usdtTotal =
-            (balance['USDT']?.total ?? 0) +
-            (balance['USDC']?.total ?? 0) +
-            (balance['USD']?.total ?? 0);
-          if (usdtTotal > 0) equity = usdtTotal;
-        } catch {
-          // Exchange fetch failed — leave equity as null
-        }
-      }
     }
   }
 
@@ -248,7 +217,8 @@ export async function GET() {
   const openPositions = openPositionRows.map((pos) => {
     const entryPrice = pos.entryPrice ? parseFloat(pos.entryPrice) : null;
     const positionSize = pos.positionSize ? parseFloat(pos.positionSize) : null;
-    const currentPrice = pos.symbol ? (tickerMap.get(pos.symbol) ?? null) : null;
+    const posMarketType = (pos.marketType as MarketType) ?? 'spot';
+    const currentPrice = pos.symbol ? (tickerMap.get(`${posMarketType}::${pos.symbol}`) ?? null) : null;
     const direction = (pos.direction ?? 'LONG') as 'LONG' | 'SHORT';
 
     let unrealizedPnlUsd: number | null = null;
@@ -268,6 +238,7 @@ export async function GET() {
       entryPrice,
       currentPrice,
       positionSize,
+      leverage: pos.leverage ?? 1,
       unrealizedPnlUsd,
       unrealizedPnlPct,
       stopLoss: pos.stopLoss ? parseFloat(pos.stopLoss) : null,

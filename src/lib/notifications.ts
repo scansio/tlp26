@@ -27,7 +27,9 @@ export type NotificationEvent =
   | 'liquidation'         // Position liquidated by exchange
   | 'monitor_disconnected' // WebSocket disconnected after max retries — alert
   | 'daily_limit'         // Daily trade limit reached
-  | 'daily_loss_limit';   // Daily loss limit — kill switch activated
+  | 'daily_loss_limit'    // Daily loss limit — kill switch activated
+  | 'price_watch_triggered' // A user-created price watch hit its target
+  | 'exit_order_failed';  // SL/TP/trailing exit triggered but the live close order failed — position still open
 
 export interface NotificationPayload {
   event: NotificationEvent;
@@ -44,6 +46,9 @@ export interface NotificationPayload {
   reason?: string;
   tradesUsed?: number;
   tradesLimit?: number;
+  targetPrice?: string;
+  triggeredPrice?: string;
+  actionSummary?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,6 +61,10 @@ const CRITICAL_EVENTS: Set<NotificationEvent> = new Set([
   'monitor_disconnected',
   'daily_loss_limit',
   'signal_rejected',
+  // User explicitly asked to be told the moment this level hits — quiet hours
+  // are for routine chatter, not a request the user set up themselves.
+  'price_watch_triggered',
+  'exit_order_failed',
 ]);
 
 function isCritical(event: NotificationEvent): boolean {
@@ -114,6 +123,14 @@ function formatMessage(payload: NotificationPayload): string {
       return truncate(
         `🛑 Max daily loss reached. Kill switch activated.`
       );
+    case 'price_watch_triggered':
+      return truncate(
+        `👁️ Price Watch Hit: ${payload.symbol ?? '?'} reached ${payload.triggeredPrice ?? '?'} (target ${payload.targetPrice ?? '?'}). ${payload.actionSummary ?? ''}`.trim()
+      );
+    case 'exit_order_failed':
+      return truncate(
+        `⚠️ EXIT FAILED: ${payload.symbol ?? '?'} hit its exit level at ${payload.exitPrice ?? '?'} but the live close order failed (${payload.reason ?? 'unknown error'}). Position is still OPEN — check it manually.`
+      );
     default:
       return truncate(`📢 Trade notification event: ${event}`);
   }
@@ -168,10 +185,25 @@ function isInQuietHours(
 }
 
 // ---------------------------------------------------------------------------
+// Telegram bot token resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Prefer a user-supplied bot token (advanced/self-hosted bot) if one is on
+ * file, otherwise fall back to the shared platform bot used by the one-click
+ * "Connect Telegram" flow.
+ */
+export function resolveTelegramBotToken(
+  config: Pick<typeof userNotifications.$inferSelect, 'telegramBotToken'> | undefined
+): string | undefined {
+  return config?.telegramBotToken ?? process.env.TELEGRAM_BOT_TOKEN;
+}
+
+// ---------------------------------------------------------------------------
 // Low-level channel senders
 // ---------------------------------------------------------------------------
 
-async function sendTelegram(
+export async function sendTelegram(
   botToken: string,
   chatId: string,
   text: string
@@ -239,9 +271,10 @@ export async function sendNotification(
 
   const sends: Promise<void>[] = [];
 
-  if (config.telegramBotToken && config.telegramChatId) {
+  const telegramBotToken = resolveTelegramBotToken(config);
+  if (telegramBotToken && config.telegramChatId) {
     sends.push(
-      sendTelegram(config.telegramBotToken, config.telegramChatId, message).catch(
+      sendTelegram(telegramBotToken, config.telegramChatId, message).catch(
         (err) => console.error('[notifications] Telegram send failed:', err)
       )
     );
@@ -287,10 +320,11 @@ export async function sendTestNotification(
 
   try {
     if (channel === 'telegram') {
-      if (!config.telegramBotToken || !config.telegramChatId) {
-        return { ok: false, error: 'Telegram Bot Token and Chat ID are required' };
+      const telegramBotToken = resolveTelegramBotToken(config);
+      if (!telegramBotToken || !config.telegramChatId) {
+        return { ok: false, error: 'Connect Telegram first — no linked chat found.' };
       }
-      await sendTelegram(config.telegramBotToken, config.telegramChatId, message);
+      await sendTelegram(telegramBotToken, config.telegramChatId, message);
     } else {
       if (!config.discordWebhookUrl) {
         return { ok: false, error: 'Discord Webhook URL is required' };

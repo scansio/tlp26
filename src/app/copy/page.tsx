@@ -30,10 +30,10 @@ interface Publisher {
 
 function PublisherCard({ publisher }: { publisher: Publisher }) {
   return (
-    <Card className="p-5 space-y-3 hover:border-primary/60 transition-colors">
+    <Card className="p-4 md:p-5 space-y-3 hover:border-primary/60 transition-colors">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="font-semibold">
+        <div className="min-w-0 flex-1">
+          <h3 className="font-semibold break-words">
             {publisher.displayName ?? 'Anonymous Publisher'}
           </h3>
           {publisher.strategyDescription && (
@@ -49,7 +49,7 @@ function PublisherCard({ publisher }: { publisher: Publisher }) {
         )}
       </div>
 
-      <div className="grid grid-cols-4 gap-2 text-sm pt-2 border-t border-border">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-y-3 gap-x-2 text-sm pt-2 border-t border-border">
         <div className="text-center">
           <p className="font-semibold">
             {publisher.winRate != null
@@ -75,7 +75,7 @@ function PublisherCard({ publisher }: { publisher: Publisher }) {
       </div>
 
       <Link href={`/copy/${publisher.id}`} className="block">
-        <Button variant="outline" size="sm" className="w-full mt-1">
+        <Button variant="outline" size="sm" className="w-full mt-1 h-11 md:h-9">
           View Profile &amp; Subscribe
         </Button>
       </Link>
@@ -123,23 +123,23 @@ export default function CopyTradingPage() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto py-10 px-4 space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
+    <div className="max-w-2xl mx-auto w-full py-6 md:py-10 px-4 space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold">Signal Publishers</h1>
           <p className="text-muted-foreground text-sm mt-1">
             Follow expert traders and auto-copy their signals to your account.
           </p>
         </div>
-        <Link href="/copy/subscriptions">
-          <Button variant="outline" size="sm">
+        <Link href="/copy/subscriptions" className="block">
+          <Button variant="outline" size="sm" className="w-full sm:w-auto h-11 md:h-9">
             My Subscriptions
           </Button>
         </Link>
       </div>
 
       {publishers.length === 0 ? (
-        <Card className="p-8 text-center">
+        <Card className="p-6 md:p-8 text-center">
           <p className="text-muted-foreground">
             No public signal publishers available yet.
           </p>

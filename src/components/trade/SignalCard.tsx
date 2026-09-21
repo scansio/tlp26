@@ -85,11 +85,11 @@ export function SignalCard({ signal }: { signal: TradeSignal }) {
 
   return (
     <Card className="w-full">
-      <CardHeader className="pb-2">
+      <CardHeader className="px-4 md:px-6 pb-2">
         {/* Top row: symbol / direction / confidence / status */}
         <div className="flex items-center justify-between gap-2 flex-wrap">
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-lg">{signal.symbol}</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-bold text-base md:text-lg">{signal.symbol}</span>
             <span className="text-muted-foreground text-sm">{signal.timeframe}</span>
             <span
               className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${directionColor(signal.direction)}`}
@@ -136,22 +136,22 @@ export function SignalCard({ signal }: { signal: TradeSignal }) {
         )}
       </CardHeader>
 
-      <CardContent className="space-y-4">
+      <CardContent className="px-4 md:px-6 space-y-4">
         {/* Price levels */}
-        <div className="grid grid-cols-3 gap-3 text-sm">
-          <div>
+        <div className="grid grid-cols-3 gap-2 md:gap-3 text-sm">
+          <div className="min-w-0">
             <p className="text-muted-foreground text-xs">Entry</p>
-            <p className="font-medium">${fmt(signal.entryPrice)}</p>
+            <p className="font-medium truncate">${fmt(signal.entryPrice)}</p>
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-muted-foreground text-xs">Stop Loss</p>
-            <p className="font-medium text-red-600 dark:text-red-400">
+            <p className="font-medium text-red-600 dark:text-red-400 truncate">
               ${fmt(signal.stopLoss)}
             </p>
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-muted-foreground text-xs">Take Profit</p>
-            <p className="font-medium text-green-600 dark:text-green-400">
+            <p className="font-medium text-green-600 dark:text-green-400 truncate">
               ${fmt(signal.takeProfit)}
             </p>
           </div>
@@ -163,7 +163,7 @@ export function SignalCard({ signal }: { signal: TradeSignal }) {
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
               Expected P&amp;L
             </p>
-            <div className="grid grid-cols-2 gap-3 text-sm">
+            <div className="grid grid-cols-2 gap-2 md:gap-3 text-sm">
               {/* Profit */}
               <div>
                 <p className="text-muted-foreground text-xs">Gross Profit</p>
@@ -217,7 +217,7 @@ export function SignalCard({ signal }: { signal: TradeSignal }) {
         {/* Reasoning */}
         {signal.reasoning && (
           <details className="text-xs text-muted-foreground">
-            <summary className="cursor-pointer hover:text-foreground transition-colors">
+            <summary className="cursor-pointer hover:text-foreground transition-colors py-3 -my-3">
               AI reasoning
             </summary>
             <p className="mt-2 leading-relaxed">{signal.reasoning}</p>

@@ -21,6 +21,10 @@ const detectedPatternSchema = z.object({
   targetPrice: z.number().describe('Measured move projection from pattern'),
   invalidationLevel: z.number().describe('Price level that would invalidate the pattern'),
   confidenceScore: z.number().min(0).max(1).describe('Confidence score 0.0–1.0'),
+  timeframe: z
+    .string()
+    .optional()
+    .describe('Source candle timeframe (e.g. "1h", "4h", "1d"), set when the caller passes `timeframe` in the input'),
 });
 
 export type DetectedPattern = z.infer<typeof detectedPatternSchema>;
@@ -37,6 +41,10 @@ export const patternTool = createTool({
       .max(0.5)
       .default(0.05)
       .describe('ZigZag sensitivity as a fraction of price (default 0.05 = 5%)'),
+    timeframe: z
+      .string()
+      .optional()
+      .describe('Timeframe label for the candles passed in (e.g. "1h", "4h", "1d") — stamped onto every detected pattern when provided'),
   }),
   outputSchema: z.object({
     patterns: z.array(detectedPatternSchema).describe(
@@ -44,9 +52,10 @@ export const patternTool = createTool({
     ),
   }),
   execute: async (inputData) => {
-    const { candles, sensitivity } = inputData as {
+    const { candles, sensitivity, timeframe } = inputData as {
       candles: z.infer<typeof candleSchema>[];
       sensitivity: number;
+      timeframe?: string;
     };
 
     if (!candles || candles.length < 10) {
@@ -69,7 +78,8 @@ export const patternTool = createTool({
 
     const patterns = raw
       .filter((p) => p.confidenceScore >= 0.6)
-      .sort((a, b) => b.confidenceScore - a.confidenceScore);
+      .sort((a, b) => b.confidenceScore - a.confidenceScore)
+      .map((p) => (timeframe ? { ...p, timeframe } : p));
 
     return { patterns };
   },

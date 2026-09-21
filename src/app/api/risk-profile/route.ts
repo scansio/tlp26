@@ -1,57 +1,10 @@
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { db } from '@/db';
 import { userRiskProfiles } from '@/db/schema';
-
-// ---------------------------------------------------------------------------
-// Validation schema
-// ---------------------------------------------------------------------------
-const riskProfileSchema = z.object({
-  strategies: z
-    .array(z.string())
-    .min(1, 'At least one strategy is required'),
-  maxTradesPerDay: z
-    .number()
-    .int()
-    .min(1)
-    .max(20, 'maxTradesPerDay cannot exceed 20'),
-  riskPerTradePct: z
-    .number()
-    .positive()
-    .max(10, 'riskPerTradePct cannot exceed 10%'),
-  maxDailyLossPct: z
-    .number()
-    .positive()
-    .max(20, 'maxDailyLossPct cannot exceed 20%'),
-  executionMode: z.enum(['auto', 'manual']),
-  preferredTimeframes: z.array(z.string()).optional().default([]),
-  allowedSymbols: z.array(z.string()).optional().default([]),
-  // Slippage estimate as a percentage of notional (default 0.05%)
-  slippagePct: z
-    .number()
-    .min(0)
-    .max(1, 'slippagePct cannot exceed 1%')
-    .optional()
-    .default(0.05),
-  // Virtual paper balance (user-configurable starting equity, default $10,000)
-  paperBalanceUsd: z
-    .number()
-    .positive()
-    .max(10_000_000, 'paperBalanceUsd cannot exceed $10M')
-    .optional()
-    .default(10_000),
-  // Minimum R:R ratio required to take a trade (default 1.5)
-  minRiskRewardRatio: z
-    .number()
-    .min(1, 'minRiskRewardRatio must be at least 1')
-    .max(10, 'minRiskRewardRatio cannot exceed 10')
-    .optional()
-    .default(1.5),
-});
-
-type RiskProfileInput = z.infer<typeof riskProfileSchema>;
+import { normalizeSymbolList } from '@/lib/symbols';
+import { riskProfileSchema, toResponse, type RiskProfileInput } from './shared';
 
 // ---------------------------------------------------------------------------
 // GET /api/risk-profile
@@ -106,6 +59,26 @@ export async function POST(req: Request) {
 
   const data: RiskProfileInput = parsed.data;
 
+  // Several fields below default when omitted (see schema) — fine for a fresh
+  // insert, but this route is a full upsert and at least one caller (the
+  // onboarding SetupChat fallback, which POSTs a parsed profile JSON straight
+  // from a chat message) only ever sends the 8 fields that flow collect —
+  // never these settings-page-only ones. On conflict, only overwrite a field
+  // when the caller actually sent it — otherwise a value set from the
+  // risk-profile page gets silently reset to its default the next time
+  // onboarding chat re-saves the profile.
+  const bodyKeys = new Set(
+    typeof body === 'object' && body !== null ? Object.keys(body) : [],
+  );
+  const provided = (key: string) => bodyKeys.has(key);
+  // Phase 5 stretch goal (deferred — not enforced here): the free plan is
+  // meant to cap allowedSymbols to 1 entry. That's a UI/API-level policy,
+  // not a DB constraint — the hook point is here, gated on
+  // `(await resolvePlanForUser(userId)).name === 'free'` (see
+  // src/lib/billing/plan.ts), truncating/rejecting `data.allowedSymbols`
+  // beyond the cap before normalizeSymbolList runs.
+  const allowedSymbols = normalizeSymbolList(data.allowedSymbols);
+
   const [upserted] = await db
     .insert(userRiskProfiles)
     .values({
@@ -117,10 +90,18 @@ export async function POST(req: Request) {
       // executionMode in schema stores paper/live; tradingMode stores auto/manual
       tradingMode: data.executionMode,
       preferredTimeframes: data.preferredTimeframes,
-      allowedSymbols: data.allowedSymbols,
+      allowedSymbols,
       slippagePct: String(data.slippagePct),
       paperBalanceUsd: String(data.paperBalanceUsd),
       minRiskRewardRatio: String(data.minRiskRewardRatio),
+      marketType: data.marketType,
+      defaultLeverage: data.defaultLeverage,
+      marginMode: data.marginMode,
+      profitLockEnabled: data.profitLockEnabled,
+      exitMode: data.exitMode,
+      trailSlPct: String(data.trailSlPct),
+      trailTpPct: String(data.trailTpPct),
+      trailActivationPct: String(data.trailActivationPct),
       isActive: true,
       updatedAt: new Date(),
     })
@@ -133,10 +114,18 @@ export async function POST(req: Request) {
         maxDailyLossPct: String(data.maxDailyLossPct),
         tradingMode: data.executionMode,
         preferredTimeframes: data.preferredTimeframes,
-        allowedSymbols: data.allowedSymbols,
+        allowedSymbols,
         slippagePct: String(data.slippagePct),
         paperBalanceUsd: String(data.paperBalanceUsd),
         minRiskRewardRatio: String(data.minRiskRewardRatio),
+        ...(provided('marketType') ? { marketType: data.marketType } : {}),
+        ...(provided('defaultLeverage') ? { defaultLeverage: data.defaultLeverage } : {}),
+        ...(provided('marginMode') ? { marginMode: data.marginMode } : {}),
+        ...(provided('profitLockEnabled') ? { profitLockEnabled: data.profitLockEnabled } : {}),
+        ...(provided('exitMode') ? { exitMode: data.exitMode } : {}),
+        ...(provided('trailSlPct') ? { trailSlPct: String(data.trailSlPct) } : {}),
+        ...(provided('trailTpPct') ? { trailTpPct: String(data.trailTpPct) } : {}),
+        ...(provided('trailActivationPct') ? { trailActivationPct: String(data.trailActivationPct) } : {}),
         isActive: true,
         updatedAt: new Date(),
       },
@@ -181,28 +170,3 @@ export async function DELETE() {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-type ProfileRow = typeof userRiskProfiles.$inferSelect;
-
-function toResponse(profile: ProfileRow) {
-  return {
-    id: profile.id,
-    userId: profile.userId,
-    strategies: profile.strategies,
-    maxTradesPerDay: profile.maxTradesPerDay,
-    riskPerTradePct: Number(profile.riskPerTradePct),
-    maxDailyLossPct: Number(profile.maxDailyLossPct),
-    executionMode: profile.tradingMode, // auto | manual
-    preferredTimeframes: profile.preferredTimeframes,
-    allowedSymbols: profile.allowedSymbols,
-    slippagePct: Number(profile.slippagePct ?? '0.05'),
-    minRiskRewardRatio: Number(profile.minRiskRewardRatio ?? '1.50'),
-    // Paper trading mode fields
-    paperMode: (profile.executionMode ?? 'paper') === 'paper', // true = paper, false = live
-    paperBalanceUsd: Number(profile.paperBalanceUsd ?? '10000.00'),
-    isActive: profile.isActive,
-    updatedAt: profile.updatedAt,
-  };
-}

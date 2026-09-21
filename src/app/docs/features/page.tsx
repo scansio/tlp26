@@ -69,39 +69,42 @@ export default function FeaturesPage() {
   return (
     <article>
       <p className="text-xs font-semibold uppercase tracking-widest text-emerald-500 mb-2">Features</p>
-      <h1 className="text-3xl font-bold text-white mb-3">Everything in one place</h1>
-      <p className="text-zinc-400 text-lg mb-12">
+      <h1 className="text-2xl md:text-3xl font-bold text-white mb-3">Everything in one place</h1>
+      <p className="text-zinc-400 text-base md:text-lg mb-8 md:mb-12">
         Trading Hub combines AI-generated signals, manual analysis tools, social copy trading, and airtight risk controls — all in a single platform.
       </p>
 
       <div className="space-y-6">
         {FEATURES.map(({ icon: Icon, title, href, desc, tag }) => (
-          <div key={title} className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-6 hover:border-zinc-700 transition-colors">
-            <div className="flex items-start justify-between mb-3">
-              <div className="flex items-center gap-3">
+          <div key={title} className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 md:p-6 hover:border-zinc-700 transition-colors">
+            <div className="flex items-start justify-between gap-2 mb-3">
+              <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0">
                   <Icon className="h-4.5 w-4.5 text-zinc-300" />
                 </div>
                 <h2 className="text-base font-semibold text-white">{title}</h2>
               </div>
-              <span className={`text-xs font-medium px-2 py-0.5 rounded border ${TAG_COLORS[tag]}`}>
+              <span className={`text-xs font-medium px-2 py-0.5 rounded border shrink-0 ${TAG_COLORS[tag]}`}>
                 {tag}
               </span>
             </div>
             <p className="text-zinc-400 text-sm leading-relaxed mb-3">{desc}</p>
-            <Link href={href} className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors">
+            <Link
+              href={href}
+              className="inline-flex items-center min-h-11 md:min-h-0 text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
+            >
               Open in app →
             </Link>
           </div>
         ))}
       </div>
 
-      <div className="mt-16 rounded-2xl bg-zinc-900/60 border border-zinc-800 p-8 text-center">
-        <p className="text-2xl font-bold text-white mb-2">Explore it yourself</p>
+      <div className="mt-10 md:mt-16 rounded-2xl bg-zinc-900/60 border border-zinc-800 p-6 md:p-8 text-center">
+        <p className="text-xl md:text-2xl font-bold text-white mb-2">Explore it yourself</p>
         <p className="text-zinc-400 mb-6">Paper trading unlocks every feature — no credit card required.</p>
         <Link
           href="/sign-up"
-          className="inline-flex items-center gap-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-8 py-3 transition-colors"
+          className="inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-8 py-3 transition-colors"
         >
           Get started free <ArrowRight className="h-4 w-4" />
         </Link>

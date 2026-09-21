@@ -19,7 +19,13 @@ function createPool(): Pool {
     connectionString: process.env.DATABASE_URL,
     max: 10,
     idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 5_000,
+    // 15s, not the pg default 5s — at boot, the worker's several loops each
+    // open a fresh connection within the same instant as Mastra's storage
+    // init, and a brief burst of simultaneous new connections (plus whatever
+    // else is running on the host) can push a handful of them past a tight
+    // ceiling, surfacing as MASTRA_STORAGE_PG_INIT_FAILED even though the DB
+    // itself is healthy.
+    connectionTimeoutMillis: 15_000,
   });
 }
 

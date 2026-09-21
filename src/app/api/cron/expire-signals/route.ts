@@ -1,9 +1,10 @@
 /**
  * GET /api/cron/expire-signals
  *
- * Marks pending signals as 'expired' when:
- *   (a) expiresAt is set and is in the past, OR
- *   (b) createdAt is more than 1 hour ago and status is still 'pending'
+ * Marks pending or approved signals as 'expired' — see src/lib/expire-signals.ts
+ * for the shared logic. Also driven in-process every 5 minutes by
+ * src/worker/signal-expiry-loop.ts, so this route mainly exists for an
+ * external scheduler to trigger it on deployments that don't run the worker.
  *
  * Authentication: Bearer token via CRON_SECRET environment variable.
  * The middleware excludes /api/cron/* from Clerk auth.
@@ -13,9 +14,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { sql, and, eq, or, lt, isNull } from 'drizzle-orm';
-import { db } from '@/db';
-import { tradeSignals } from '@/db/schema';
+import { expireStaleSignals } from '@/lib/expire-signals';
 
 export async function GET(req: Request) {
   const cronSecret = process.env.CRON_SECRET;
@@ -33,38 +32,7 @@ export async function GET(req: Request) {
     return new NextResponse('Unauthorized', { status: 401 });
   }
 
-  const now = new Date();
-  // 1 hour ago
-  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1_000);
+  const { expired, expiredIds } = await expireStaleSignals();
 
-  // Expire signals where:
-  // - status = 'pending' AND
-  // - (expiresAt <= now) OR (expiresAt IS NULL AND createdAt <= oneHourAgo)
-  const updated = await db
-    .update(tradeSignals)
-    .set({ status: 'expired', updatedAt: now })
-    .where(
-      and(
-        eq(tradeSignals.status, 'pending'),
-        or(
-          // explicit expiry date set and elapsed
-          and(
-            sql`${tradeSignals.expiresAt} IS NOT NULL`,
-            lt(tradeSignals.expiresAt, now),
-          ),
-          // no explicit expiry — use 1-hour default
-          and(
-            isNull(tradeSignals.expiresAt),
-            lt(tradeSignals.createdAt, oneHourAgo),
-          ),
-        ),
-      ),
-    )
-    .returning({ id: tradeSignals.id });
-
-  return NextResponse.json({
-    ok: true,
-    expired: updated.length,
-    expiredIds: updated.map((r) => r.id),
-  });
+  return NextResponse.json({ ok: true, expired, expiredIds });
 }

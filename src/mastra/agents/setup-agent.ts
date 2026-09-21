@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { defaultModel } from '../model';
 import { db } from '@/db';
 import { userRiskProfiles } from '@/db/schema';
+import { normalizeSymbolList } from '@/lib/symbols';
 
 // ---------------------------------------------------------------------------
 // saveRiskProfileTool — called by the agent only after user confirmation.
@@ -38,6 +39,8 @@ const saveRiskProfileTool = createTool({
       return { success: false, message: 'Authentication required — userId not found in request context.' };
     }
 
+    const allowedSymbols = normalizeSymbolList(inputData.allowedSymbols);
+
     try {
       await db
         .insert(userRiskProfiles)
@@ -50,7 +53,7 @@ const saveRiskProfileTool = createTool({
           minRiskRewardRatio: String(inputData.minRiskRewardRatio),
           tradingMode: inputData.executionMode, // executionMode (auto|manual) maps to tradingMode column
           preferredTimeframes: inputData.preferredTimeframes,
-          allowedSymbols: inputData.allowedSymbols,
+          allowedSymbols,
           isActive: true,
           updatedAt: new Date(),
         })
@@ -64,7 +67,7 @@ const saveRiskProfileTool = createTool({
             minRiskRewardRatio: String(inputData.minRiskRewardRatio),
             tradingMode: inputData.executionMode,
             preferredTimeframes: inputData.preferredTimeframes,
-            allowedSymbols: inputData.allowedSymbols,
+            allowedSymbols,
             isActive: true,
             updatedAt: new Date(),
           },
@@ -147,7 +150,7 @@ Execution mode — map natural language:
 
 Timeframes — accept standard formats: 1m, 5m, 15m, 30m, 1h, 2h, 4h, 8h, 1d, 3d, 1w, 1M.
 
-Symbols — normalise to PAIR/USDT format when possible (e.g. "BTC" → "BTC/USDT", "Bitcoin" → "BTC/USDT").
+Symbols — normalise to PAIR/USDT format when possible (e.g. "BTC" → "BTC/USDT", "Bitcoin" → "BTC/USDT"). If the user lists several symbols (e.g. "BTC, SOL, ETH"), pass allowedSymbols as one array element per symbol — never a single comma-joined string.
 
 ═══════════════════════════════════════════════════════
 VALIDATION RULES
